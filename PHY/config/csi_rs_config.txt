@@ -1,0 +1,37 @@
+# CSI-RS Channel Estimation Simulation Config
+# TS 38.211 Section 7.4.1.5
+
+# Bandwidth / Resource
+BANDWIDTH_MHZ = 20
+SCS_KHZ = 30
+NUM_RB = 51
+
+# Physical channel
+PHYSICAL_CHANNEL = CSIRS
+
+# CSI-RS mapping row (TS 38.211 Table 7.4.1.5.3-1):
+#   1 = density 3 RE/RB, 1 port  (k ∈ {0,4,8} per RB)
+#   2 = density 1 RE/RB, 1 port  (k = k_0 per RB)
+#   3 = density 1 RE/RB, 2 ports (k ∈ {k_0, k_0+2} per RB)
+#   4 = density 1 RE/RB, 4 ports (k ∈ {k_0..k_0+6} per RB)
+CSIRS_ROW = 1
+
+# Scrambling ID N_ID^CSI-RS (0..1023)
+CSIRS_SCRAM_ID = 0
+
+# OFDM symbol index l_0 (0..13)
+CSIRS_SYMBOL = 4
+
+# Subcarrier offset k_0 within RB (0..11, used for rows 2-4)
+CSIRS_K0 = 0
+
+# Channel model: AWGN or FLAT_FADING
+CHANNEL_MODEL = AWGN
+
+# SNR range
+SNR_START = -10
+SNR_END = 30
+SNR_STEP = 5
+
+# Trials per SNR point
+NUM_TRIALS = 500

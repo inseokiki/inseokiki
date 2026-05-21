@@ -1,0 +1,43 @@
+# SRS Channel Sounding Simulation Config
+# TS 38.211 Section 6.4.1.4
+
+# Bandwidth / Resource
+BANDWIDTH_MHZ = 20
+SCS_KHZ = 30
+NUM_RB = 51
+
+# Physical channel
+PHYSICAL_CHANNEL = SRS
+
+# SRS bandwidth in RBs (mSRS_b, must be <= NUM_RB)
+# Typical values: 4, 8, 12, 16, 24, 36, 48
+SRS_BW_RB = 16
+
+# Comb size K_TC: 2 or 4
+#   Comb-2: 50% overhead (6 RE/RB), better estimation
+#   Comb-4: 25% overhead (3 RE/RB), lower overhead
+SRS_COMB = 2
+
+# Comb offset k_bar_TC (0..K_TC-1)
+SRS_COMB_OFFSET = 0
+
+# Cyclic shift n_CS (0..7 for comb-2, 0..11 for comb-4)
+# Different shifts give orthogonal SRS for multiple UEs
+SRS_CYCLIC_SHIFT = 0
+
+# ZC sequence group u (0..29)
+SRS_SEQ_GROUP = 0
+
+# ZC sequence number v (0 or 1)
+SRS_SEQ_NUM = 0
+
+# Channel model: AWGN or FLAT_FADING
+CHANNEL_MODEL = AWGN
+
+# SNR range
+SNR_START = -10
+SNR_END = 30
+SNR_STEP = 5
+
+# Trials per SNR point
+NUM_TRIALS = 500
