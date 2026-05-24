@@ -1,59 +1,68 @@
 #include "ofdm.h"
 #include <cmath>
+#include <algorithm>
 
 OFDM::OFDM(int nfft, int cpLen) : nfft_(nfft), cpLen_(cpLen) {}
 
 ComplexVec OFDM::modulate(const ComplexVec& freqSymbols) {
-    // IFFT
     ComplexVec timeSignal = ifft(freqSymbols);
 
-    // Add cyclic prefix
     ComplexVec output(cpLen_ + nfft_);
-    for (int i = 0; i < cpLen_; i++) {
+    for (int i = 0; i < cpLen_; i++)
         output[i] = timeSignal[nfft_ - cpLen_ + i];
-    }
-    for (int i = 0; i < nfft_; i++) {
+    for (int i = 0; i < nfft_; i++)
         output[cpLen_ + i] = timeSignal[i];
-    }
     return output;
 }
 
 ComplexVec OFDM::demodulate(const ComplexVec& timeSignal) {
-    // Remove cyclic prefix
     ComplexVec noCp(nfft_);
-    for (int i = 0; i < nfft_; i++) {
+    for (int i = 0; i < nfft_; i++)
         noCp[i] = timeSignal[cpLen_ + i];
-    }
-    // FFT
     return fft(noCp);
 }
 
-ComplexVec OFDM::ifft(const ComplexVec& input) {
-    int N = nfft_;
-    ComplexVec output(N);
+// In-place Radix-2 Cooley-Tukey FFT
+// sign = -1 : forward FFT (DFT)
+// sign = +1 : inverse FFT (before 1/N scaling)
+static void radix2(ComplexVec& x, int sign) {
+    int N = static_cast<int>(x.size());
 
-    for (int n = 0; n < N; n++) {
-        Complex sum(0.0, 0.0);
-        for (int k = 0; k < N; k++) {
-            double angle = 2.0 * PI * k * n / N;
-            sum += input[k] * Complex(std::cos(angle), std::sin(angle));
-        }
-        output[n] = sum / static_cast<double>(N);
+    // Bit-reversal permutation
+    for (int i = 1, j = 0; i < N; i++) {
+        int bit = N >> 1;
+        for (; j & bit; bit >>= 1) j ^= bit;
+        j ^= bit;
+        if (i < j) std::swap(x[i], x[j]);
     }
-    return output;
+
+    // Butterfly stages
+    for (int len = 2; len <= N; len <<= 1) {
+        double angle = sign * 2.0 * PI / len;
+        Complex wlen(std::cos(angle), std::sin(angle));
+        for (int i = 0; i < N; i += len) {
+            Complex w(1.0, 0.0);
+            for (int j = 0; j < len / 2; j++) {
+                Complex u = x[i + j];
+                Complex v = x[i + j + len / 2] * w;
+                x[i + j]             = u + v;
+                x[i + j + len / 2]   = u - v;
+                w *= wlen;
+            }
+        }
+    }
 }
 
 ComplexVec OFDM::fft(const ComplexVec& input) {
-    int N = nfft_;
-    ComplexVec output(N);
+    ComplexVec x = input;
+    radix2(x, -1);   // forward: e^{-j2π/N}
+    return x;
+}
 
-    for (int k = 0; k < N; k++) {
-        Complex sum(0.0, 0.0);
-        for (int n = 0; n < N; n++) {
-            double angle = -2.0 * PI * k * n / N;
-            sum += input[n] * Complex(std::cos(angle), std::sin(angle));
-        }
-        output[k] = sum;
-    }
-    return output;
+ComplexVec OFDM::ifft(const ComplexVec& input) {
+    ComplexVec x = input;
+    radix2(x, +1);   // inverse: e^{+j2π/N}
+    double invN = 1.0 / x.size();
+    for (auto& s : x) s *= invN;
+    return x;
 }

@@ -9,6 +9,7 @@
 #include "utils.h"
 #include <iostream>
 #include <iomanip>
+#include <fstream>
 #include <cmath>
 #include <algorithm>
 
@@ -82,10 +83,25 @@ void runPdschSimulation(const L1Config& cfg) {
               << std::setw(15) << "BLER" << std::endl;
     std::cout << std::string(42, '-') << std::endl;
 
+    // IQ dump setup
+    std::ofstream iqFile;
+    bool doDump = cfg.iqDumpEnable;
+    int dumpTrialsLeft = (cfg.iqDumpTrials > 0) ? cfg.iqDumpTrials : cfg.numTrials;
+
     for (double snr : snrRange) {
         int totalBitErrors = 0;
         int totalInfoBits = 0;
         int blockErrors = 0;
+
+        bool dumpThisSnr = doDump && (std::abs(snr - cfg.iqDumpSnr) < 0.001);
+        if (dumpThisSnr && !iqFile.is_open()) {
+            iqFile.open(cfg.iqDumpFile);
+            if (iqFile.is_open()) {
+                iqFile << "# MOD=" << mod << " SNR=" << snr << "\n";
+                iqFile << "# tx_real  tx_imag  rx_real  rx_imag\n";
+            }
+            dumpTrialsLeft = (cfg.iqDumpTrials > 0) ? cfg.iqDumpTrials : cfg.numTrials;
+        }
 
         for (int trial = 0; trial < cfg.numTrials; trial++) {
             // TX: Generate random TB
@@ -106,12 +122,28 @@ void runPdschSimulation(const L1Config& cfg) {
             // QAM modulation
             ComplexVec modSymbols = qamModulate(txBits, mod);
 
-            // AWGN channel (non-OFDM mode)
-            AWGNChannel channel(snr);
-            ComplexVec rxSymbols = channel.addNoise(modSymbols, 0);
+            // Channel
+            ComplexVec rxSymbols;
+            if (cfg.channelModel == "NONE") {
+                rxSymbols = modSymbols;
+            } else {
+                AWGNChannel channel(snr);
+                rxSymbols = channel.addNoise(modSymbols, 0);
+            }
+
+            // Write IQ dump for this trial
+            if (dumpThisSnr && iqFile.is_open() && dumpTrialsLeft > 0) {
+                for (size_t i = 0; i < modSymbols.size(); i++) {
+                    iqFile << std::fixed << std::setprecision(6)
+                           << modSymbols[i].real() << " " << modSymbols[i].imag() << " "
+                           << rxSymbols[i].real()  << " " << rxSymbols[i].imag()  << "\n";
+                }
+                --dumpTrialsLeft;
+            }
 
             // Soft demodulation
-            double noiseVar = 1.0 / std::pow(10.0, snr / 10.0);
+            double noiseVar = (cfg.channelModel == "NONE") ? 1e-10 :
+                              1.0 / std::pow(10.0, snr / 10.0);
             std::vector<double> allLLR = qamDemapLLR(rxSymbols, mod, noiseVar);
 
             // Truncate LLR to actual coded size
@@ -144,6 +176,11 @@ void runPdschSimulation(const L1Config& cfg) {
                   << std::setw(15) << std::scientific << std::setprecision(4) << ber
                   << std::setw(15) << std::fixed << std::setprecision(4) << bler
                   << std::endl;
+
+        if (dumpThisSnr && iqFile.is_open()) {
+            iqFile.close();
+            std::cout << "IQ dump written to: " << cfg.iqDumpFile << std::endl;
+        }
     }
 
     std::cout << std::endl << "PDSCH simulation complete." << std::endl;

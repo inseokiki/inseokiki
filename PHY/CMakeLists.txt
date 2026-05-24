@@ -25,3 +25,12 @@ add_executable(lls_sim
 )
 
 target_include_directories(lls_sim PRIVATE include)
+
+add_executable(ber_sim
+    src/ber_sim.cpp
+    src/utils.cpp
+    src/modulation.cpp
+    src/channel.cpp
+    src/config_parser.cpp
+)
+target_include_directories(ber_sim PRIVATE include)

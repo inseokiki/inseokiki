@@ -34,6 +34,7 @@ void ConfigParser::applyDefaults() {
     config_.mcsTableType = "TABLE1";
     config_.tbSize = 0;
     config_.numTrials = 1000;
+    config_.numBits   = 0;
     config_.useDmrs = false;
     config_.equalizer = "ZF";
 
@@ -42,6 +43,12 @@ void ConfigParser::applyDefaults() {
     config_.csirsScramID = 0;
     config_.csirsSymbol  = 4;
     config_.csirsK0      = 0;
+
+    // IQ Dump defaults
+    config_.iqDumpEnable = false;
+    config_.iqDumpSnr    = 0.0;
+    config_.iqDumpFile   = "iq_dump.txt";
+    config_.iqDumpTrials = 100;
 
     // SRS defaults
     config_.srsBandwidthRB = 16;
@@ -88,6 +95,7 @@ bool ConfigParser::loadConfig(const std::string& filename) {
     config_.mcsTableType = getString("MCS_TABLE", "TABLE1");
     config_.tbSize = getInt("TB_SIZE", 0);
     config_.numTrials = getInt("NUM_TRIALS", 1000);
+    config_.numBits   = getInt("NUM_BITS", 0);
     config_.useDmrs   = (getInt("USE_DMRS", 0) != 0);
     config_.equalizer = getString("EQUALIZER", "ZF");
 
@@ -96,6 +104,12 @@ bool ConfigParser::loadConfig(const std::string& filename) {
     config_.csirsScramID = getInt("CSIRS_SCRAM_ID", 0);
     config_.csirsSymbol  = getInt("CSIRS_SYMBOL",   4);
     config_.csirsK0      = getInt("CSIRS_K0",        0);
+
+    // IQ Dump
+    config_.iqDumpEnable = (getInt("IQ_DUMP", 0) != 0);
+    config_.iqDumpSnr    = getDouble("IQ_DUMP_SNR", 0.0);
+    config_.iqDumpFile   = getString("IQ_DUMP_FILE", "iq_dump.txt");
+    config_.iqDumpTrials = getInt("IQ_DUMP_TRIALS", 100);
 
     // SRS
     config_.srsBandwidthRB = getInt("SRS_BW_RB",    16);

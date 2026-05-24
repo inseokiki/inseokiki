@@ -40,6 +40,7 @@ struct L1Config {
     std::string mcsTableType;      // TABLE1 or TABLE2
     int tbSize;                    // Transport block size (0=auto)
     int numTrials;                 // Number of simulation trials
+    int numBits;                   // Total bits per SNR point (ber_sim; 0 = use numTrials)
 
     // DMRS / channel estimation
     bool useDmrs;                  // Enable DMRS + channel estimation mode
@@ -58,6 +59,12 @@ struct L1Config {
     int srsCyclicShift;            // n_CS: cyclic shift
     int srsSeqGroupU;              // Sequence group u (0..29)
     int srsSeqNumV;                // Sequence number v (0 or 1)
+
+    // IQ Dump
+    bool iqDumpEnable;
+    double iqDumpSnr;
+    std::string iqDumpFile;
+    int iqDumpTrials;   // number of trials to dump (0 = all)
 
     // Derived parameters (calculated after loading)
     int numSubcarriers;

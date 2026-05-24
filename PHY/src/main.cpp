@@ -14,6 +14,69 @@
 #include "csi_rs.h"
 #include "srs.h"
 
+// Pure QAM BER simulation — no OFDM, uses numTrials, block-level BLER
+static void runBerSimulation(const L1Config& cfg) {
+    int bitsPerSymbol = getBitsPerSymbol(cfg.modulation);
+    const int blockSize = 1000;
+    int paddedSize = ((blockSize + bitsPerSymbol - 1) / bitsPerSymbol) * bitsPerSymbol;
+
+    std::vector<double> snrRange;
+    for (double snr = cfg.snrStart; snr <= cfg.snrEnd + 0.001; snr += cfg.snrStep)
+        snrRange.push_back(snr);
+
+    std::cout << "=== BER Simulation (uncoded, no OFDM) ===" << std::endl;
+    std::cout << "Modulation   : " << cfg.modulation << std::endl;
+    std::cout << "Channel      : " << cfg.channelModel << std::endl;
+    std::cout << "Block Size   : " << blockSize << " bits" << std::endl;
+    std::cout << "Trials/SNR   : " << cfg.numTrials << std::endl;
+    std::cout << std::endl;
+
+    std::cout << std::setw(12) << "SNR (dB)"
+              << std::setw(15) << "BER"
+              << std::setw(15) << "BLER" << std::endl;
+    std::cout << std::string(42, '-') << std::endl;
+
+    for (double snr : snrRange) {
+        int totalBitErrors = 0;
+        int blockErrors    = 0;
+
+        for (int trial = 0; trial < cfg.numTrials; trial++) {
+            std::vector<int> infoBits = generateRandomBits(blockSize);
+            std::vector<int> txBits   = infoBits;
+            txBits.resize(paddedSize, 0);
+
+            ComplexVec modSymbols = qamModulate(txBits, cfg.modulation);
+
+            ComplexVec rxSymbols;
+            if (cfg.channelModel == "NONE") {
+                rxSymbols = modSymbols;
+            } else {
+                AWGNChannel channel(snr);
+                rxSymbols = channel.addNoise(modSymbols, 0);
+            }
+
+            std::vector<int> rxBits = qamDemodulate(rxSymbols, cfg.modulation);
+
+            int bitErrors = 0;
+            for (int i = 0; i < blockSize; i++) {
+                if (infoBits[i] != rxBits[i]) bitErrors++;
+            }
+            totalBitErrors += bitErrors;
+            if (bitErrors > 0) blockErrors++;
+        }
+
+        double ber  = static_cast<double>(totalBitErrors) / (cfg.numTrials * blockSize);
+        double bler = static_cast<double>(blockErrors)    /  cfg.numTrials;
+
+        std::cout << std::setw(12) << snr
+                  << std::setw(15) << std::scientific << std::setprecision(4) << ber
+                  << std::setw(15) << std::fixed      << std::setprecision(4) << bler
+                  << std::endl;
+    }
+
+    std::cout << std::endl << "Simulation complete." << std::endl;
+}
+
 // Legacy simulation mode (original behavior when PHYSICAL_CHANNEL = NONE)
 static void runLegacySimulation(const L1Config& cfg) {
     // Modulation parameters
@@ -46,6 +109,12 @@ static void runLegacySimulation(const L1Config& cfg) {
     for (double snr = cfg.snrStart; snr <= cfg.snrEnd; snr += cfg.snrStep) {
         snrRange.push_back(snr);
     }
+
+    std::cout << "=== Legacy Simulation (OFDM-based) ===" << std::endl;
+    std::cout << "Modulation   : " << cfg.modulation << std::endl;
+    std::cout << "Channel      : " << cfg.channelModel << std::endl;
+    std::cout << "Block Size   : " << infoBlockSize << " bits" << std::endl;
+    std::cout << std::endl;
 
     std::cout << std::setw(10) << "SNR (dB)" << std::setw(15) << "BER"
               << std::setw(15) << "BLER" << std::endl;
@@ -176,6 +245,8 @@ int main(int argc, char* argv[]) {
         runCsirsSimulation(cfg);
     } else if (cfg.physicalChannel == "SRS") {
         runSrsSimulation(cfg);
+    } else if (cfg.physicalChannel == "BER") {
+        runBerSimulation(cfg);
     } else {
         // NONE or unrecognized: run legacy simulation
         runLegacySimulation(cfg);
