@@ -1,41 +1,33 @@
 #ifndef LDPC_H
 #define LDPC_H
 
-#include "utils.h"
-#include <vector>
+typedef struct { int check_idx; int pos_in_check; } VarLink;
 
-// Simplified LDPC Encoder/Decoder for 5G NR
-// Base graph 1 (BG1) for large block sizes
-// Base graph 2 (BG2) for small block sizes
+typedef struct {
+    int    info_size;
+    int    coded_size;
+    double code_rate;
+    int    num_parity;
 
-class LDPCCodec {
-public:
-    // code_rate: 1/3, 1/2, 2/3, 3/4, 5/6
-    LDPCCodec(int blockSize, double codeRate);
+    /* H in CSR (check -> variable) */
+    int *H_row_ptr;   /* length: num_parity+1 */
+    int *H_col;       /* variable indices */
+    int  H_nnz;
 
-    // Encode information bits
-    std::vector<int> encode(const std::vector<int>& infoBits);
+    /* Ht in CSR (variable -> check) */
+    int     *Ht_row_ptr;  /* length: coded_size+1 */
+    VarLink *Ht_links;
+    int      Ht_nnz;
+} LDPCCodec;
 
-    // Decode using belief propagation (soft decision)
-    std::vector<int> decode(const std::vector<double>& llr, int maxIter = 25);
+void ldpc_init(LDPCCodec *ldpc, int block_size, double code_rate);
+void ldpc_free(LDPCCodec *ldpc);
 
-    int getCodedSize() const { return codedSize_; }
-    int getInfoSize() const { return infoSize_; }
+/* encode: info_bits[info_size] -> coded[coded_size] */
+void ldpc_encode(const LDPCCodec *ldpc, const int *info, int *coded);
 
-private:
-    int infoSize_;
-    int codedSize_;
-    double codeRate_;
-    int numParityBits_;
-
-    // H in check-node view: H_[c] = list of variable indices connected to check c
-    std::vector<std::vector<int>> H_;
-
-    // H in variable-node view: Ht_[v] = list of (checkIdx, posInCheck) pairs
-    struct VarLink { int checkIdx; int posInCheck; };
-    std::vector<std::vector<VarLink>> Ht_;
-
-    void buildParityCheckMatrix();
-};
+/* decode: llr[coded_size] -> decoded[info_size].  Returns 0 on success. */
+int  ldpc_decode(const LDPCCodec *ldpc, const double *llr,
+                 int max_iter, int *decoded);
 
 #endif

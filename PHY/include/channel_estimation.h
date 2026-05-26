@@ -2,26 +2,22 @@
 #define CHANNEL_ESTIMATION_H
 
 #include "utils.h"
-#include <vector>
 
-// Least-squares channel estimate at pilot positions.
-// h_LS[k] = rxPilots[k] / txPilots[k]
-ComplexVec lsEstimate(const ComplexVec& rxPilots, const ComplexVec& txPilots);
+/* LS estimate: h_out[n] = rx_pilots[n] / tx_pilots[n] */
+void ls_estimate(const cx_t *rx, const cx_t *tx, int n, cx_t *h_out);
 
-// Linear frequency-domain interpolation from pilot estimates to all active subcarriers.
-// pilotPositions must be sorted in ascending order.
-ComplexVec interpolateChannel(const ComplexVec& hPilots,
-                               const std::vector<int>& pilotPositions,
-                               int numActiveSubcarriers);
+/* Linear freq-domain interpolation.  pilot_pos[] sorted ascending.
+   h_out[num_active_sc] must be pre-allocated. */
+void interpolate_channel(const cx_t *h_pilots, int num_pilots,
+                         const int *pilot_pos,
+                         int num_active_sc, cx_t *h_out);
 
-// Zero-forcing equalization: y_eq[k] = rx[k] / h[k]
-// Small |h| values are clamped to avoid noise amplification.
-ComplexVec zfEqualize(const ComplexVec& rxData, const ComplexVec& hData);
+/* ZF equalization: eq[n] = rx[n] / h[n] */
+void zf_equalize(const cx_t *rx, const cx_t *h, int n, cx_t *eq);
 
-// MMSE equalization: w[k] = h*[k] / (|h[k]|^2 + N0)
-// Returns biased output y_eq[k] = w[k] * rx[k]  (NOT divided by alpha).
-// If alphaOut is non-null, writes per-subcarrier bias alpha[k] = |h[k]|^2/(|h[k]|^2+N0).
-ComplexVec mmseEqualize(const ComplexVec& rxData, const ComplexVec& hData,
-                         double N0, std::vector<double>* alphaOut = nullptr);
+/* MMSE equalization: w[k]=h*[k]/(|h|^2+N0), eq[n]=w[n]*rx[n].
+   If alpha_out != NULL, writes per-SC bias alpha[n]=|h|^2/(|h|^2+N0). */
+void mmse_equalize(const cx_t *rx, const cx_t *h, int n,
+                   double N0, cx_t *eq, double *alpha_out);
 
 #endif

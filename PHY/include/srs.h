@@ -3,30 +3,24 @@
 
 #include "utils.h"
 #include "config_parser.h"
-#include <vector>
 
-// SRS configuration (TS 38.211 §6.4.1.4)
-struct SRSParams {
-    int mSRS_b;        // SRS bandwidth in RBs (e.g., 4,8,12,16,24,36,48,96...)
-    int combSize;      // K_TC: comb size — 2 or 4
-    int combOffset;    // k_bar_TC: comb offset 0..K_TC-1
-    int cyclicShift;   // n_CS: cyclic shift (0..7 for comb-2, 0..11 for comb-4)
-    int seqGroupU;     // u: low-PAPR sequence group (0..29)
-    int seqNumV;       // v: sequence number within group (0 or 1)
-};
+typedef struct {
+    int mSRS_b;
+    int combSize;
+    int combOffset;
+    int cyclicShift;
+    int seqGroupU;
+    int seqNumV;
+} SRSParams;
 
-// ZC-based SRS low-PAPR type-1 sequence per TS 38.211 §5.2.2 + §6.4.1.4.2
-// Sequence length M = mSRS_b * 12 / combSize
-// Cyclic shift alpha = 2pi * n_CS / N_ap (N_ap=8 for comb-2, 12 for comb-4)
-ComplexVec srsSequence(const SRSParams& p);
+/* ZC-based SRS sequence.  out must have (mSRS_b*12/combSize) elements. */
+void srs_sequence(const SRSParams *p, cx_t *out);
 
-// SRS comb subcarrier positions within [0, numActiveSubcarriers)
-// Maps n' = 0..M-1 to k = startSC + k_bar_TC + K_TC * n'
-// SRS occupies the first mSRS_b*12 subcarriers of active bandwidth.
-std::vector<int> srsSubcarrierIndices(int numActiveSubcarriers,
-                                      int mSRS_b, int combSize, int combOffset);
+/* Comb subcarrier positions, returns count.  out[] must be large enough. */
+int srs_subcarrier_indices(int num_active_sc,
+                           int mSRS_b, int comb_size, int comb_offset,
+                           int *out);
 
-// Run SRS channel sounding NMSE vs SNR simulation
-void runSrsSimulation(const L1Config& cfg);
+void run_srs_simulation(const L1Config *cfg);
 
 #endif

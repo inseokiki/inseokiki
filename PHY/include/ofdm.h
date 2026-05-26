@@ -3,23 +3,20 @@
 
 #include "utils.h"
 
-class OFDM {
-public:
-    OFDM(int nfft, int cpLen);
+typedef struct {
+    int nfft;
+    int cp_len;
+} OFDMCtx;
 
-    // Modulator: frequency domain -> time domain + CP
-    ComplexVec modulate(const ComplexVec& freqSymbols);
+void ofdm_init(OFDMCtx *ctx, int nfft, int cp_len);
 
-    // Demodulator: remove CP + time domain -> frequency domain
-    ComplexVec demodulate(const ComplexVec& timeSignal);
+/* freq_syms[nfft] -> time_out[cp_len+nfft] */
+void ofdm_modulate(const OFDMCtx *ctx, const cx_t *freq_syms, cx_t *time_out);
 
-private:
-    int nfft_;    // FFT size
-    int cpLen_;   // Cyclic prefix length
+/* time_in[cp_len+nfft] -> freq_out[nfft] */
+void ofdm_demodulate(const OFDMCtx *ctx, const cx_t *time_in, cx_t *freq_out);
 
-    // Simple DFT/IDFT (no external library)
-    ComplexVec ifft(const ComplexVec& input);
-    ComplexVec fft(const ComplexVec& input);
-};
+/* In-place FFT/IFFT on x[n].  sign=-1 forward, sign=+1 inverse. */
+void radix2_fft(cx_t *x, int n, int sign);
 
 #endif

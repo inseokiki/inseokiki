@@ -2,22 +2,20 @@
 #define DMRS_H
 
 #include "utils.h"
-#include <cstdint>
+#include <stdint.h>
 
-// Gold sequence generator per 3GPP TS 38.211 Section 5.2.1
-// Uses two degree-31 m-sequences with Nc=1600 advance
-std::vector<int> goldSequence(uint32_t cInit, int length);
+/* Gold sequence (TS 38.211 §5.2.1).  out[length] must be pre-allocated. */
+void gold_sequence(uint32_t c_init, int length, int *out);
 
-// DMRS complex-valued sequence per 3GPP TS 38.211 Section 7.4.1.1.1
-// r(n) = (1/sqrt(2)) * [(1-2c(2n)) + j*(1-2c(2n+1))]
-ComplexVec dmrsSequence(uint32_t cInit, int numPilots);
+/* DMRS complex sequence: out[num_pilots] */
+void dmrs_sequence(uint32_t c_init, int num_pilots, cx_t *out);
 
-// Pilot subcarrier indices within active subcarriers (Type 1 mapping)
-// Even subcarriers per RB: {0,2,4,6,8,10} -> 6*numRB total pilots
-std::vector<int> dmrsPilotIndices(int numRB);
+/* DMRS Type-1 pilot subcarrier indices (even within each RB).
+   out must have 6*num_rb elements. */
+void dmrs_pilot_indices(int num_rb, int *out);
 
-// Data subcarrier indices in a DMRS symbol (Type 1 mapping)
-// Odd subcarriers per RB: {1,3,5,7,9,11} -> 6*numRB total data REs
-std::vector<int> dmrsDataIndices(int numRB);
+/* DMRS data subcarrier indices (odd within each RB).
+   out must have 6*num_rb elements. */
+void dmrs_data_indices(int num_rb, int *out);
 
 #endif

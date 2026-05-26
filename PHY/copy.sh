@@ -13,6 +13,12 @@ cp plot_constellation.m "$DST/"
 cp result.txt           "$DST/" 2>/dev/null
 cp ber_result.txt       "$DST/" 2>/dev/null
 cp iq_dump.txt          "$DST/" 2>/dev/null
+cp result_QPSK.txt      "$DST/" 2>/dev/null
+cp result_16QAM.txt     "$DST/" 2>/dev/null
+cp result_64QAM.txt     "$DST/" 2>/dev/null
+cp ber_result_QPSK.txt  "$DST/" 2>/dev/null
+cp ber_result_16QAM.txt "$DST/" 2>/dev/null
+cp ber_result_64QAM.txt "$DST/" 2>/dev/null
 
 # Generate a reload helper so MATLAB picks up the latest versions
 cat > "$DST/reload_ber.m" << 'EOF'

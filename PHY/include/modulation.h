@@ -2,35 +2,25 @@
 #define MODULATION_H
 
 #include "utils.h"
-#include <string>
 
-// Get bits per symbol for given modulation scheme
-// QPSK=2, 16QAM=4, 64QAM=6, 256QAM=8
-int getBitsPerSymbol(const std::string& modulation);
+int  get_bits_per_symbol(const char *mod);
 
-// General QAM Modulation (3GPP TS 38.211 Gray-coded constellation)
-ComplexVec qamModulate(const std::vector<int>& bits, const std::string& modulation);
+/* QAM modulate bits[num_bits] -> syms[num_bits/bps].  Caller allocates syms. */
+void qam_modulate(const int *bits, int num_bits, const char *mod, cx_t *syms);
 
-// General QAM Hard Demodulation (minimum distance)
-std::vector<int> qamDemodulate(const ComplexVec& symbols, const std::string& modulation);
+/* QAM hard demodulate syms[n] -> bits[n*bps]. */
+void qam_demodulate(const cx_t *syms, int n, const char *mod, int *bits);
 
-// General QAM Soft Demodulation (max-log LLR approximation)
-std::vector<double> qamDemapLLR(const ComplexVec& symbols, const std::string& modulation, double noiseVar);
+/* Soft LLR: syms[n] -> llr[n*bps].  noise_var = N0. */
+void qam_demap_llr(const cx_t *syms, int n, const char *mod,
+                   double noise_var, double *llr);
 
-// MMSE-aware soft demodulation.
-// rxSymbols: biased MMSE output  y_eq = w*y  (NOT alpha-normalized).
-// hData:     channel estimates at each symbol.
-// N0:        noise variance per subcarrier (1/SNR_linear).
-// Accounts for MMSE bias alpha=|h|^2/(|h|^2+N0) and effective noise
-// variance sigma2_eff = N0*|h|^2/(|h|^2+N0)^2 in LLR computation.
-// Deep-fade subcarriers (|h|^2 < 1e-10) produce zero LLRs.
-std::vector<double> qamDemapLLR_mmse(const ComplexVec& rxSymbols,
-                                      const std::string& modulation,
-                                      const ComplexVec& hData,
-                                      double N0);
+/* MMSE-aware soft LLR.  h_data[n] = channel estimates at each symbol. */
+void qam_demap_llr_mmse(const cx_t *rx_syms, int n, const char *mod,
+                         const cx_t *h_data, double N0, double *llr);
 
-// Legacy QPSK functions (backward compatibility)
-ComplexVec qpskModulate(const std::vector<int>& bits);
-std::vector<int> qpskDemodulate(const ComplexVec& symbols);
+/* Legacy QPSK */
+void qpsk_modulate  (const int *bits, int n, cx_t *syms);
+void qpsk_demodulate(const cx_t *syms, int n, int *bits);
 
 #endif

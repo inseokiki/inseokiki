@@ -3,39 +3,22 @@
 
 #include "utils.h"
 
-class AWGNChannel {
-public:
-    AWGNChannel(double snrDb);
+typedef struct { double snr_db; } AWGNChannel;
+typedef struct { double snr_db; } FlatFadingChannel;
 
-    // Add AWGN noise to signal
-    // nfft: FFT size for OFDM mode. When > 0, noise is scaled so that
-    //       per-subcarrier SNR = Es/N0 (assuming unit-power QAM symbols).
-    //       When 0, noise is based on measured signal power (non-OFDM mode).
-    ComplexVec addNoise(const ComplexVec& signal, int nfft = 0);
+void awgn_init(AWGNChannel *ch, double snr_db);
+void awgn_set_snr(AWGNChannel *ch, double snr_db);
 
-    void setSnr(double snrDb);
+/* Add noise to sig[n] -> out[n].  nfft>0: OFDM per-subcarrier scaling. */
+void awgn_add_noise(AWGNChannel *ch, const cx_t *sig, int n,
+                    int nfft, cx_t *out);
 
-private:
-    double snrDb_;
-    std::mt19937 gen_;
-};
+void flat_fading_init(FlatFadingChannel *ch, double snr_db);
+void flat_fading_set_snr(FlatFadingChannel *ch, double snr_db);
 
-// Flat Rayleigh block-fading channel.
-// Each call to apply() draws a fresh CN(0,1) coefficient that is applied
-// uniformly to all subcarriers (constant over one OFDM symbol duration).
-class FlatFadingChannel {
-public:
-    explicit FlatFadingChannel(double snrDb);
-
-    // Apply h * txSymbols + AWGN.  h ~ CN(0,1), same for all symbols.
-    // If trueH is non-null, the actual channel coefficient is written to it.
-    ComplexVec apply(const ComplexVec& txSymbols, Complex* trueH = nullptr);
-
-    void setSnr(double snrDb);
-
-private:
-    double snrDb_;
-    std::mt19937 gen_;
-};
+/* Apply h*tx + AWGN.  h~CN(0,1), same for all syms.
+   If true_h != NULL, writes the drawn coefficient. */
+void flat_fading_apply(FlatFadingChannel *ch, const cx_t *tx, int n,
+                       cx_t *out, cx_t *true_h);
 
 #endif

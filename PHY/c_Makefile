@@ -1,8 +1,8 @@
 CC      = gcc
 CFLAGS  = -std=c99 -O2 -Wall -Wextra -Wno-unused-parameter
-INCLUDE = -Ic_include
-SRCDIR  = c_src
-OBJDIR  = c_build
+INCLUDE = -Iinclude
+SRCDIR  = src
+OBJDIR  = build
 
 COMMON_SRCS = utils.c config_parser.c mcs_table.c crc.c \
               polar_rate_match.c modulation.c ofdm.c \

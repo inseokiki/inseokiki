@@ -13,7 +13,9 @@ function plot_bler(varargin)
 script_dir = fileparts(mfilename('fullpath'));
 
 if nargin == 0
-    files = {fullfile(script_dir, 'result.txt')};
+    files = { fullfile(script_dir, 'result_QPSK.txt'), ...
+              fullfile(script_dir, 'result_16QAM.txt'), ...
+              fullfile(script_dir, 'result_64QAM.txt') };
 else
     files = varargin;
 end

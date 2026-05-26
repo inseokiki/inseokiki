@@ -11,81 +11,70 @@ function plot_ber(varargin)
 script_dir = fileparts(mfilename('fullpath'));
 
 if nargin == 0
-    files = {fullfile(script_dir, 'ber_result.txt')};
+    files = { fullfile(script_dir, 'ber_result_QPSK.txt'), ...
+              fullfile(script_dir, 'ber_result_16QAM.txt'), ...
+              fullfile(script_dir, 'ber_result_64QAM.txt') };
 else
     files = varargin;
 end
 
 colors  = lines(numel(files));
+markers = {'o', 's', '^'};
 
-figure('Name', 'BER vs SNR', 'NumberTitle', 'off', ...
+figure('Name', 'BER vs SNR  |  5G NR PHY LLS', 'NumberTitle', 'off', ...
        'Position', [200 200 800 550]);
 hold on;
 
 legend_entries = {};
-first_mod = '';
 
 for fi = 1:numel(files)
     fname = files{fi};
     if ~isfile(fname)
-        warning('File not found: %s  (skipping)', fname);
+        fprintf('[WARN] File not found: %s\n', fname);
         continue;
     end
 
     [snr, ber, ~, ~, mod_name] = parse_ber_output(fname);
 
     if isempty(snr)
-        warning('No data parsed from: %s', fname);
+        fprintf('[WARN] No data: %s\n', fname);
         continue;
     end
 
-    if isempty(first_mod), first_mod = mod_name; end
+    mk = markers{mod(fi-1, numel(markers)) + 1};
+    c  = colors(fi,:);
 
-    c = colors(fi,:);
-
-    % Drop BER=0 points (below measurement floor)
+    % Drop BER=0 points
     valid = ber > 0;
-    snr_v = snr(valid);
-    ber_v = ber(valid);
+    semilogy(snr(valid), ber(valid), ...
+             'Color', c, 'LineWidth', 2, ...
+             'Marker', mk, 'MarkerSize', 7, 'MarkerFaceColor', c);
+    legend_entries{end+1} = [mod_name ' (sim)'];
 
-    % Simulated BER — x marker
-    semilogy(snr_v, ber_v, '-x', ...
-             'Color', c, 'LineWidth', 1.5, 'MarkerSize', 10);
-    legend_entries{end+1} = 'Simulation';
-
-    % Theory BER overlay
-    snr_th = linspace(-2, 12, 500);
+    % Theory BER (dashed, same color)
+    snr_th = linspace(min(snr)-2, max(snr)+2, 500);
     ber_th = theory_ber(mod_name, snr_th);
     if ~isempty(ber_th)
-        semilogy(snr_th, ber_th, '-', ...
-                 'Color', [0.8 0 0], 'LineWidth', 1.5);
-        legend_entries{end+1} = 'Theory';
+        semilogy(snr_th, max(ber_th, 1e-7), '--', ...
+                 'Color', c, 'LineWidth', 1.2);
+        legend_entries{end+1} = [mod_name ' (theory)'];
     end
 end
 
 hold off;
 grid on;
-set(gca, 'GridLineStyle', ':', 'YMinorGrid', 'on', 'FontSize', 11);
-
-xlabel('Eb/No (dB)',    'FontSize', 13);
-ylabel('Bit error rate', 'FontSize', 13);
-
-if ~isempty(first_mod)
-    title([first_mod ' bit error rate'], 'FontSize', 14);
-else
-    title('Bit error rate', 'FontSize', 14);
-end
-
-set(gca, 'YScale', 'log', ...
-         'XLim', [0 10], ...
-         'YLim', [1e-6 1e-1], ...
-         'YLimMode', 'manual', ...
-         'YTick', [1e-6 1e-5 1e-4 1e-3 1e-2 1e-1], ...
-         'YTickLabel', {'10^{-6}','10^{-5}','10^{-4}','10^{-3}','10^{-2}','10^{-1}'}, ...
+set(gca, 'YScale', 'log', 'YMinorGrid', 'on', 'FontSize', 11);
+xlabel('Eb/N0 (dB)', 'FontSize', 13);
+ylabel('BER',        'FontSize', 13);
+title('BER vs SNR  —  5G NR PHY Link Level Simulation', 'FontSize', 14);
+ylim([1e-5 1]);
+set(gca, 'YTick', [1e-5 1e-4 1e-3 1e-2 1e-1 1e0], ...
+         'YTickLabel', {'10^{-5}','10^{-4}','10^{-3}','10^{-2}','10^{-1}','10^{0}'}, ...
          'TickLabelInterpreter', 'tex');
 
 if ~isempty(legend_entries)
-    legend(legend_entries, 'Location', 'southwest', 'FontSize', 10);
+    legend(legend_entries, 'Location', 'northeast', 'FontSize', 10, ...
+           'Interpreter', 'none');
 end
 
 end % function plot_ber
@@ -137,6 +126,7 @@ while ~feof(fid)
     tok = regexp(line, 'Channel\s*:\s*(\S+)', 'tokens');
     if ~isempty(tok), ch_name = tok{1}{1}; end
 
+    % 2-column format: Eb/N0  BER
     nums = sscanf(line, '%f %f');
     if numel(nums) == 2
         snr_vec(end+1) = nums(1); %#ok<AGROW>

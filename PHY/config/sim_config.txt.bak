@@ -23,7 +23,7 @@ CP_LENGTH_NORMAL = 0
 MODULATION = QPSK
 
 # Channel Coding: NONE, LDPC, POLAR
-CODING = LDPC
+CODING = NONE
 
 # Code Rate (for LDPC): 0.5, 0.67, 0.75, 0.83
 CODE_RATE = 0.5
@@ -33,15 +33,15 @@ NUM_OFDM_SYMBOLS = 50
 
 # SNR Range (dB): START, END, STEP
 SNR_START = 0
-SNR_END = 25
-SNR_STEP = 3
+SNR_END = 14
+SNR_STEP = 1
 
 # Channel Model: AWGN, FLAT_FADING
 CHANNEL_MODEL = AWGN
 
 
 # Physical Channel: NONE, PBCH, PDCCH, PDSCH
-PHYSICAL_CHANNEL = PDSCH
+PHYSICAL_CHANNEL = NONE
 
 # MCS Index (0-28 for TABLE1, 0-27 for TABLE2)
 MCS_INDEX = 10
@@ -50,7 +50,7 @@ MCS_INDEX = 10
 MCS_TABLE = TABLE1
 
 # Number of simulation trials per SNR point
-NUM_TRIALS = 1000
+NUM_TRIALS = 10000
 
 # DMRS + Channel Estimation (0=off, 1=on)
 # When enabled: DMRS Type 1 pilots inserted at even subcarriers per RB,
@@ -68,7 +68,7 @@ EQUALIZER = MMSE
 # IQ_DUMP_SNR: SNR point (dB) at which to capture symbols (must match a sim SNR)
 # IQ_DUMP_TRIALS: number of trials to dump (0 = all)
 # IQ_DUMP_FILE: output file path
-IQ_DUMP = 0
+IQ_DUMP = 1
 IQ_DUMP_SNR = 12.0
 IQ_DUMP_TRIALS = 100
 IQ_DUMP_FILE = iq_dump.txt

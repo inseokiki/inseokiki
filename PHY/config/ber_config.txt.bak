@@ -1,0 +1,17 @@
+# BER Simulation Configuration (ber_sim)
+# Used by: ./ber_sim
+# Irrelevant fields (NFFT, NUM_RB, etc.) are ignored.
+
+# Modulation: QPSK, 16QAM, 64QAM, 256QAM
+MODULATION = QPSK
+
+# Channel Model: AWGN, NONE
+CHANNEL_MODEL = AWGN
+
+# SNR Range (dB)
+SNR_START = 0
+SNR_END   = 14
+SNR_STEP  = 1
+
+# Total bits simulated per SNR point
+NUM_BITS   = 100000000

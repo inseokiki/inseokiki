@@ -1,20 +1,26 @@
 #ifndef UTILS_H
 #define UTILS_H
 
-#include <complex>
-#include <vector>
-#include <random>
+#include <complex.h>
+#include <math.h>
+#include <stddef.h>
 
-using Complex = std::complex<double>;
-using ComplexVec = std::vector<Complex>;
+typedef double complex cx_t;
 
-// Random bit generator
-std::vector<int> generateRandomBits(int numBits);
+#define PHY_PI   3.14159265358979323846
+#define CX_ZERO  (0.0 + 0.0*_Complex_I)
+#define CX_ONE   (1.0 + 0.0*_Complex_I)
+#define CX_NORM(z) (creal(z)*creal(z) + cimag(z)*cimag(z))
+#define CX_MAKE(r,i) ((double)(r) + (double)(i)*_Complex_I)
 
-// BER calculation
-double calculateBER(const std::vector<int>& txBits, const std::vector<int>& rxBits);
+/* RNG */
+void rng_seed(unsigned int seed);
+double randn(void);
 
-// Constants
-constexpr double PI = 3.14159265358979323846;
+/* Generate n random bits (0 or 1) into out[n] */
+void gen_random_bits(int *out, int n);
+
+/* BER: returns error rate, n must match */
+double calc_ber(const int *tx, const int *rx, int n);
 
 #endif

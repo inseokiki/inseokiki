@@ -1,0 +1,42 @@
+=== 5G PHY Link Level Simulator (C) ===
+=== L1 Configuration ===
+Bandwidth    : 100 MHz
+SCS          : 30 kHz
+Num RB       : 273
+Subcarriers  : 3276
+NFFT         : 4096
+CP (sym 0,7) : 320
+CP (normal)  : 288
+Sample Rate  : 122.880 MHz
+Modulation   : 16QAM
+Coding       : NONE
+Code Rate    : 0.500
+Channel      : AWGN
+SNR Range    : 5.0 to 20.0 dB (step 1.0)
+========================
+
+=== Legacy Simulation (OFDM-based) ===
+Modulation   : 16QAM
+Channel      : AWGN
+Block Size   : 128 bits
+
+  SNR (dB)            BER           BLER
+----------------------------------------
+    5.0000     1.7078e-01         1.0000
+    6.0000     1.4531e-01         1.0000
+    7.0000     1.2125e-01         1.0000
+    8.0000     9.7500e-02         1.0000
+    9.0000     7.5625e-02         1.0000
+   10.0000     6.0469e-02         1.0000
+   11.0000     4.2031e-02         1.0000
+   12.0000     2.8750e-02         1.0000
+   13.0000     1.9844e-02         0.9400
+   14.0000     9.6875e-03         0.7000
+   15.0000     3.4375e-03         0.3200
+   16.0000     1.0938e-03         0.1400
+   17.0000     7.8125e-04         0.1000
+   18.0000     3.1250e-04         0.0400
+   19.0000     0.0000e+00         0.0000
+   20.0000     0.0000e+00         0.0000
+
+Simulation complete.
