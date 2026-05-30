@@ -1,0 +1,176 @@
+# VSCode Test Theme 세팅 가이드
+
+> 커스텀 테마(`test.json`)를 WSL 및 Mac 환경에 등록하는 방법을 정리합니다.
+
+---
+
+## 공통 사전 준비
+
+`test.json` 파일 위치 확인:
+- **WSL**: `~/study/5g/inseokiki/PHY/c_src/test.json`
+- **Mac**: `/Users/kang/Desktop/study/inseokiki/PHY/src/test.json`
+
+---
+
+## WSL (Windows) 세팅
+
+### 1. Extensions 폴더 생성 및 파일 복사
+
+```bash
+mkdir -p ~/.vscode-server/extensions/test-theme-0.0.1/themes
+cp ~/study/5g/inseokiki/PHY/c_src/test.json \
+   ~/.vscode-server/extensions/test-theme-0.0.1/themes/
+```
+
+### 2. package.json 생성
+
+```bash
+cat > ~/.vscode-server/extensions/test-theme-0.0.1/package.json << 'EOF'
+{
+    "name": "test-theme",
+    "displayName": "Test Theme",
+    "version": "0.0.1",
+    "engines": { "vscode": "^1.0.0" },
+    "contributes": {
+        "themes": [{
+            "label": "Test Theme",
+            "uiTheme": "vs-dark",
+            "path": "./themes/test.json"
+        }]
+    }
+}
+EOF
+```
+
+### 3. VSCode 재시작
+
+`Ctrl+Shift+P` → **"색 테마 선택"** → **Test Theme** 선택
+
+### 4. 테마 업데이트 시
+
+```bash
+cp ~/study/5g/inseokiki/PHY/c_src/test.json \
+   ~/.vscode-server/extensions/test-theme-0.0.1/themes/test.json
+```
+
+VSCode 재시작하면 바로 반영.
+
+---
+
+## Mac 세팅
+
+### 1. Extensions 폴더 생성 및 파일 복사
+
+```bash
+mkdir -p ~/.vscode/extensions/test-theme-0.0.1/themes
+cp /Users/kang/Desktop/study/inseokiki/PHY/src/test.json \
+   ~/.vscode/extensions/test-theme-0.0.1/themes/
+```
+
+### 2. package.json 생성
+
+```bash
+cat > ~/.vscode/extensions/test-theme-0.0.1/package.json << 'EOF'
+{
+    "name": "test-theme",
+    "displayName": "Test Theme",
+    "version": "0.0.1",
+    "engines": { "vscode": "^1.0.0" },
+    "contributes": {
+        "themes": [{
+            "label": "Test Theme",
+            "uiTheme": "vs-dark",
+            "path": "./themes/test.json"
+        }]
+    }
+}
+EOF
+```
+
+### 3. extensions.json에 테마 등록 (Mac 전용)
+
+WSL과 달리 Mac은 `extensions.json`에 수동 등록 필요.
+
+```bash
+# JSON 문법 검증
+cat ~/.vscode/extensions/extensions.json | python3 -m json.tool > /dev/null
+
+# test-theme 등록
+python3 -c "
+import json
+with open('/Users/kang/.vscode/extensions/extensions.json', 'r') as f:
+    data = json.load(f)
+data.append({
+    'identifier': {'id': 'test-theme'},
+    'version': '0.0.1',
+    'location': {'\$mid': 1, 'path': '/Users/kang/.vscode/extensions/test-theme-0.0.1', 'scheme': 'file'},
+    'relativeLocation': 'test-theme-0.0.1',
+    'metadata': {'installedTimestamp': 1780133751350, 'pinned': False, 'source': 'gallery'}
+})
+with open('/Users/kang/.vscode/extensions/extensions.json', 'w') as f:
+    json.dump(data, f, indent=2)
+print('Done!')
+"
+```
+
+### 4. VSCode 완전 종료 후 재시작
+
+`Cmd+Q` → VSCode 재실행 → `Cmd+Shift+P` → **"색 테마 선택"** → **Test Theme** 선택
+
+### 5. 테마 업데이트 시
+
+```bash
+cp /Users/kang/Desktop/study/inseokiki/PHY/src/test.json \
+   ~/.vscode/extensions/test-theme-0.0.1/themes/test.json
+```
+
+`Cmd+Q` 후 재시작하면 반영.
+
+---
+
+## 문제 해결
+
+### extensions.json 파싱 에러 발생 시
+
+```bash
+# 깨진 위치 확인
+cat ~/.vscode/extensions/extensions.json | python3 -m json.tool > /dev/null
+
+# 이중 쉼표 수정
+python3 -c "
+with open('/Users/kang/.vscode/extensions/extensions.json', 'r') as f:
+    content = f.read()
+content = content.replace('}},,{', '}},{')
+with open('/Users/kang/.vscode/extensions/extensions.json', 'w') as f:
+    f.write(content)
+print('Fixed!')
+"
+```
+
+### 테마가 목록에 안 보일 때 확인 사항
+
+```bash
+# 폴더 구조 확인
+ls ~/.vscode-server/extensions/test-theme-0.0.1/          # WSL
+ls ~/.vscode/extensions/test-theme-0.0.1/                  # Mac
+
+# 파일 확인
+ls ~/.vscode-server/extensions/test-theme-0.0.1/themes/    # WSL
+ls ~/.vscode/extensions/test-theme-0.0.1/themes/           # Mac
+```
+
+**정상 구조:**
+```
+test-theme-0.0.1/
+├── package.json
+└── themes/
+    └── test.json
+```
+
+---
+
+## 업데이트 이력
+
+| 날짜 | 내용 |
+|------|------|
+| 2026-05-27 | 최초 작성 — WSL/Mac 세팅 가이드 |
