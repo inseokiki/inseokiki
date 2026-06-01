@@ -1,17 +1,27 @@
-# BER Simulation Configuration (ber_sim)
-# Used by: ./ber_sim
-# Irrelevant fields (NFFT, NUM_RB, etc.) are ignored.
+# BER Simulation Configuration (ber_sim_c)
+# Uncoded raw BER vs Eb/N0, no OFDM.
+# Modulation is derived from MCS index (code rate is irrelevant for uncoded BER).
+#
+# MCS index -> Modulation (TABLE1):
+#   0 ~ 9  : QPSK    (Qm=2)
+#   10 ~ 16: 16QAM   (Qm=4)
+#   17 ~ 28: 64QAM   (Qm=6)
+# MCS index -> Modulation (TABLE2):
+#   0 ~ 4  : QPSK    (Qm=2)
+#   5 ~ 10 : 16QAM   (Qm=4)
+#   11 ~ 19: 64QAM   (Qm=6)
+#   20 ~ 27: 256QAM  (Qm=8)
 
-# Modulation: QPSK, 16QAM, 64QAM, 256QAM
-MODULATION = QPSK
+MCS_INDEX = 0
+MCS_TABLE = TABLE1
 
 # Channel Model: AWGN, NONE
 CHANNEL_MODEL = AWGN
 
-# SNR Range (dB)
+# SNR Range (dB) -- interpreted as Eb/N0
 SNR_START = 0
 SNR_END   = 14
 SNR_STEP  = 1
 
 # Total bits simulated per SNR point
-NUM_BITS   = 100000000
+NUM_BITS = 100000000

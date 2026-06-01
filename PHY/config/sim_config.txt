@@ -14,19 +14,19 @@ NUM_RB = 273
 NFFT = 4096
 
 # Cyclic Prefix Length (0 = auto per 3GPP TS 38.211)
-# First symbol (0, 7): 160 * NFFT / 2048
-# Normal symbols (1-6, 8-13): 144 * NFFT / 2048
 CP_LENGTH_FIRST = 0
 CP_LENGTH_NORMAL = 0
 
-# Modulation: QPSK, 16QAM, 64QAM, 256QAM
-MODULATION = QPSK
+# MCS Index and Table (TS 38.214 Table 5.1.3.1-x)
+# TABLE1: 0-28 (QPSK/16QAM/64QAM)
+# TABLE2: 0-27 (QPSK/16QAM/64QAM/256QAM)
+# TABLE3: 0-28 (QPSK/16QAM/64QAM, low SE for RedCap etc.)
+# Modulation and Code Rate are derived automatically from MCS index.
+MCS_INDEX = 10
+MCS_TABLE = TABLE1
 
 # Channel Coding: NONE, LDPC, POLAR
 CODING = NONE
-
-# Code Rate (for LDPC): 0.5, 0.67, 0.75, 0.83
-CODE_RATE = 0.5
 
 # Number of OFDM Symbols per simulation
 NUM_OFDM_SYMBOLS = 50
@@ -39,35 +39,22 @@ SNR_STEP = 1
 # Channel Model: AWGN, FLAT_FADING
 CHANNEL_MODEL = AWGN
 
-
 # Physical Channel: NONE, PBCH, PDCCH, PDSCH
 PHYSICAL_CHANNEL = NONE
 
-# MCS Index (0-28 for TABLE1, 0-27 for TABLE2)
-MCS_INDEX = 10
-
-# MCS Table: TABLE1 (TS 38.214 Table 5.1.3.1-1), TABLE2 (Table 5.1.3.1-2)
-MCS_TABLE = TABLE1
+# Transport Block Size (0 = auto, max 8424 for single CB)
+TB_SIZE = 0
 
 # Number of simulation trials per SNR point
 NUM_TRIALS = 10000
 
-# DMRS + Channel Estimation (0=off, 1=on)
-# When enabled: DMRS Type 1 pilots inserted at even subcarriers per RB,
-# flat Rayleigh fading channel estimated via LS + linear interpolation,
-# equalized with ZF before soft demodulation.
+# DMRS + Channel Estimation (0=off, 1=on, only valid for PDSCH)
 USE_DMRS = 0
 
-# Equalizer type: ZF (Zero-Forcing) or MMSE (Minimum Mean Square Error)
-# MMSE avoids noise amplification in deep fades by using biased output
-# with per-subcarrier effective noise variance in LLR computation.
+# Equalizer type: ZF or MMSE
 EQUALIZER = MMSE
 
 # IQ Symbol Dump (for constellation plot and EVM)
-# IQ_DUMP = 1 to enable, 0 to disable
-# IQ_DUMP_SNR: SNR point (dB) at which to capture symbols (must match a sim SNR)
-# IQ_DUMP_TRIALS: number of trials to dump (0 = all)
-# IQ_DUMP_FILE: output file path
 IQ_DUMP = 1
 IQ_DUMP_SNR = 12.0
 IQ_DUMP_TRIALS = 100

@@ -1,0 +1,18 @@
+# BER Simulation Configuration
+# Uncoded BER vs Eb/N0 over AWGN — no OFDM, no channel coding.
+#
+# MODULATION: QPSK | 16QAM | 64QAM | 256QAM | ALL
+#   ALL  = sweep all four modulations in one run
+MODULATION  = QPSK
+
+# Eb/N0 range (dB)
+SNR_START   = 0
+SNR_END     = 14
+SNR_STEP    = 1
+
+# Total bits simulated per SNR point (more = lower BER floor)
+NUM_BITS    = 100000000
+
+# 1: print theoretical BER alongside simulated BER
+# 0: print simulated BER only
+SHOW_THEORY = 1

@@ -1,4 +1,5 @@
 #include "config_parser.h"
+#include "mcs_table.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -67,15 +68,14 @@ void config_parser_init(ConfigParser *p) {
     memset(p, 0, sizeof(ConfigParser));
     L1Config *c = &p->cfg;
     c->bandwidthMHz  = 20;  c->scsKHz = 30;
-    c->codeRate      = 0.5; c->numOfdmSymbols = 50;
+    c->numOfdmSymbols= 50;
     c->snrStart      = -6;  c->snrEnd = 10; c->snrStep = 2;
     c->dciSize       = 39;  c->rnti = 0x1234;
-    c->pdcchAL       = 4;   c->mcsIndex = 10;
+    c->pdcchAL       = 4;   c->mcsIndex = 0;
     c->numTrials     = 1000;
     c->csirsRow      = 2;   c->csirsSymbol = 4;
     c->iqDumpSnr     = 0.0; c->iqDumpTrials = 100;
     c->srsBandwidthRB= 16;  c->srsCombSize = 2;
-    strncpy(c->modulation,     "QPSK",   CFG_STR_MAX-1);
     strncpy(c->coding,         "LDPC",   CFG_STR_MAX-1);
     strncpy(c->channelModel,   "AWGN",   CFG_STR_MAX-1);
     strncpy(c->physicalChannel,"NONE",   CFG_STR_MAX-1);
@@ -83,6 +83,7 @@ void config_parser_init(ConfigParser *p) {
     strncpy(c->mcsTableType,   "TABLE1", CFG_STR_MAX-1);
     strncpy(c->equalizer,      "ZF",     CFG_STR_MAX-1);
     strncpy(c->iqDumpFile,     "iq_dump.txt", CFG_STR_MAX-1);
+    /* modulation and codeRate are set by calc_derived() via MCS table */
 }
 
 /* ---- file parsing ---- */
@@ -127,6 +128,30 @@ static void calc_derived(ConfigParser *p) {
         c->cpLengthNormal = (144 * c->nfft) / 2048;
     c->numSubcarriers = c->numRB * 12;
     c->samplingRate   = (double)c->nfft * c->scsKHz * 1000.0;
+
+    /* Per 3GPP TS 38.212: channel coding is spec-defined per physical channel type.
+     * Config file CODING/MODULATION/CODE_RATE are ignored — derived here. */
+    if (strcmp(c->physicalChannel, "PBCH") == 0 ||
+        strcmp(c->physicalChannel, "PDCCH") == 0) {
+        /* Control channels: always Polar code + QPSK (TS 38.212 Sec 7.3/7.3.3) */
+        strncpy(c->coding,     "POLAR", CFG_STR_MAX - 1);
+        strncpy(c->modulation, "QPSK",  CFG_STR_MAX - 1);
+        c->codeRate = 0.0;  /* N/A: determined by AL and DCI/payload size */
+    } else if (strcmp(c->physicalChannel, "PDSCH") == 0) {
+        /* Data channel: always LDPC (TS 38.212 Sec 7.2), modulation from MCS table */
+        strncpy(c->coding, "LDPC", CFG_STR_MAX - 1);
+        MCSTableType tbl = mcs_table_from_str(c->mcsTableType);
+        MCSEntry mcs = get_mcs_entry(c->mcsIndex, tbl);
+        strncpy(c->modulation, mcs.modulation, CFG_STR_MAX - 1);
+        c->codeRate = get_code_rate(&mcs);
+    } else {
+        /* NONE / BER / legacy: derive modulation and code rate from MCS table */
+        MCSTableType tbl = mcs_table_from_str(c->mcsTableType);
+        MCSEntry mcs = get_mcs_entry(c->mcsIndex, tbl);
+        strncpy(c->modulation, mcs.modulation, CFG_STR_MAX - 1);
+        c->codeRate = get_code_rate(&mcs);
+    }
+    c->modulation[CFG_STR_MAX - 1] = '\0';
 }
 
 int config_parser_load(ConfigParser *p, const char *filename) {
@@ -186,6 +211,13 @@ int config_parser_load(ConfigParser *p, const char *filename) {
 
 void config_parser_print(const ConfigParser *p) {
     const L1Config *c = &p->cfg;
+    MCSTableType tbl = mcs_table_from_str(c->mcsTableType);
+    MCSEntry mcs = get_mcs_entry(c->mcsIndex, tbl);
+    const char *tbl_ref =
+        (tbl == MCS_TABLE2) ? "TS 38.214 Table 5.1.3.1-2" :
+        (tbl == MCS_TABLE3) ? "TS 38.214 Table 5.1.3.1-3" :
+                              "TS 38.214 Table 5.1.3.1-1";
+
     printf("=== L1 Configuration ===\n");
     printf("Bandwidth    : %d MHz\n",  c->bandwidthMHz);
     printf("SCS          : %d kHz\n",  c->scsKHz);
@@ -195,24 +227,32 @@ void config_parser_print(const ConfigParser *p) {
     printf("CP (sym 0,7) : %d\n",      c->cpLengthFirst);
     printf("CP (normal)  : %d\n",      c->cpLengthNormal);
     printf("Sample Rate  : %.3f MHz\n",c->samplingRate / 1e6);
-    printf("Modulation   : %s\n",      c->modulation);
-    printf("Coding       : %s\n",      c->coding);
-    printf("Code Rate    : %.3f\n",    c->codeRate);
     printf("Channel      : %s\n",      c->channelModel);
     printf("SNR Range    : %.1f to %.1f dB (step %.1f)\n",
            c->snrStart, c->snrEnd, c->snrStep);
+    int is_ctrl = (strcmp(c->physicalChannel, "PBCH")  == 0 ||
+                   strcmp(c->physicalChannel, "PDCCH") == 0);
+    printf("Coding       : %s\n", c->coding);
+    if (is_ctrl) {
+        printf("Modulation   : QPSK (Qm=2) [fixed by spec]\n");
+    } else {
+        printf("MCS Table    : %s (%s)\n", c->mcsTableType, tbl_ref);
+        printf("MCS Index    : %d\n",      c->mcsIndex);
+        printf("Modulation   : %s (Qm=%d)\n", mcs.modulation, mcs.modulationOrder);
+        printf("Code Rate    : %.4f (R*1024=%d)\n",
+               get_code_rate(&mcs), (int)mcs.targetCodeRate);
+        printf("Spectral Eff : %.3f bits/RE\n", mcs.spectralEff);
+    }
     if (strcmp(c->physicalChannel, "NONE") != 0) {
         printf("Phys Channel : %s\n",  c->physicalChannel);
         printf("Num Trials   : %d\n",  c->numTrials);
         if (strcmp(c->physicalChannel, "PDCCH") == 0) {
-            printf("DCI Size     : %d\n",   c->dciSize);
-            printf("RNTI         : 0x%04x\n",c->rnti);
-            printf("Search Space : %s\n",   c->searchSpace);
-            printf("PDCCH AL     : %d\n",   c->pdcchAL);
+            printf("DCI Size     : %d\n",    c->dciSize);
+            printf("RNTI         : 0x%04x\n", c->rnti);
+            printf("Search Space : %s\n",    c->searchSpace);
+            printf("PDCCH AL     : %d\n",    c->pdcchAL);
         }
         if (strcmp(c->physicalChannel, "PDSCH") == 0) {
-            printf("MCS Index    : %d\n",  c->mcsIndex);
-            printf("MCS Table    : %s\n",  c->mcsTableType);
             if (c->tbSize > 0) printf("TB Size      : %d\n", c->tbSize);
             else               printf("TB Size      : auto\n");
         }

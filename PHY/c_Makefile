@@ -14,7 +14,7 @@ COMMON_OBJS = $(patsubst %.c,$(OBJDIR)/%.o,$(COMMON_SRCS))
 
 .PHONY: all clean
 
-all: lls_sim_c ber_sim_c
+all: lls_sim_c
 
 $(OBJDIR):
 	mkdir -p $(OBJDIR)
@@ -25,14 +25,8 @@ $(OBJDIR)/%.o: $(SRCDIR)/%.c | $(OBJDIR)
 $(OBJDIR)/main.o: $(SRCDIR)/main.c | $(OBJDIR)
 	$(CC) $(CFLAGS) $(INCLUDE) -c $< -o $@
 
-$(OBJDIR)/ber_sim.o: $(SRCDIR)/ber_sim.c | $(OBJDIR)
-	$(CC) $(CFLAGS) $(INCLUDE) -c $< -o $@
-
 lls_sim_c: $(COMMON_OBJS) $(OBJDIR)/main.o
 	$(CC) $(CFLAGS) $^ -o $@ -lm
 
-ber_sim_c: $(COMMON_OBJS) $(OBJDIR)/ber_sim.o
-	$(CC) $(CFLAGS) $^ -o $@ -lm
-
 clean:
-	rm -rf $(OBJDIR) lls_sim_c ber_sim_c
+	rm -rf $(OBJDIR) lls_sim_c

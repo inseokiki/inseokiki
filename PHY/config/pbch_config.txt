@@ -1,5 +1,7 @@
 # PBCH Simulation Configuration
 # 5G NR Physical Broadcast Channel
+# Coding: Polar code (TS 38.212 Sec 7.3.3) — auto-forced, not configurable
+# Modulation: QPSK (TS 38.212 Sec 7.3.5) — auto-forced, not configurable
 
 PHYSICAL_CHANNEL = PBCH
 
@@ -11,7 +13,6 @@ SNR_STEP = 1
 # Number of simulation trials per SNR point
 NUM_TRIALS = 1000
 
-# Below parameters are used for legacy mode only (ignored for PBCH)
 BANDWIDTH_MHZ = 20
 SCS_KHZ = 30
 CHANNEL_MODEL = AWGN
