@@ -79,12 +79,10 @@ static const double tdld_power_db[TDLD_NTAPS] = {
     -20.1, -21.9, -22.9, -27.8, -23.6, -24.8, -30.0
 };
 
-/* -----------------------------------------------------------------------
- * Helper: generate a CN(0,1) complex Gaussian sample.
- * ----------------------------------------------------------------------- */
-static cx_t cn01(void) {
-    double inv_sq2 = 1.0 / sqrt(2.0);
-    return CX_MAKE(randn() * inv_sq2, randn() * inv_sq2);
+/* Draw one sample from the CN(0,1) distribution (complex Gaussian, unit variance) */
+static cx_t complex_gaussian_01(void) {
+    double per_dim_sigma = 1.0 / sqrt(2.0);   /* split variance equally between I and Q */
+    return CX_MAKE(randn() * per_dim_sigma, randn() * per_dim_sigma);
 }
 
 /* -----------------------------------------------------------------------
@@ -100,52 +98,63 @@ void tdl_init(TDLChannel *ch, TDLModel model, double ds_rms_ns,
     ch->K_factor = 0.0;
     ch->N0      = 1.0 / pow(10.0, snr_db / 10.0);
 
-    /* Doppler AR(1) coefficient */
+    /* AR(1) Doppler correlation between consecutive OFDM symbols.
+     * rho = J0(2π·fd·Ts): 1.0 = fully correlated (static), 0.0 = IID */
     ch->rho = (fd_hz > 0.0) ? bessel_j0(2.0 * PHY_PI * fd_hz * Tsym_s) : 1.0;
 
-    /* Select tap table */
-    const double *dly_norm = NULL;
-    const double *pwr_db   = NULL;
-    int           ntaps    = 0;
+    /* Select the tap delay/power table for the requested model */
+    const double *delay_norm_table = NULL;
+    const double *power_db_table   = NULL;
+    int           num_taps         = 0;
 
     switch (model) {
         case TDL_A:
-            dly_norm = tdla_delay_norm; pwr_db = tdla_power_db; ntaps = TDLA_NTAPS;
+            delay_norm_table = tdla_delay_norm;
+            power_db_table   = tdla_power_db;
+            num_taps         = TDLA_NTAPS;
             break;
         case TDL_C:
-            dly_norm = tdlc_delay_norm; pwr_db = tdlc_power_db; ntaps = TDLC_NTAPS;
+            delay_norm_table = tdlc_delay_norm;
+            power_db_table   = tdlc_power_db;
+            num_taps         = TDLC_NTAPS;
             break;
         case TDL_D:
-            dly_norm = tdld_delay_norm; pwr_db = tdld_power_db; ntaps = TDLD_NTAPS;
-            ch->is_LOS  = 1;
-            ch->K_factor = pow(10.0, TDLD_K_DB / 10.0);
-            ch->phi_LOS  = 2.0 * PHY_PI * ((double)rand() / RAND_MAX);
+            delay_norm_table = tdld_delay_norm;
+            power_db_table   = tdld_power_db;
+            num_taps         = TDLD_NTAPS;
+            ch->is_LOS       = 1;
+            ch->K_factor     = pow(10.0, TDLD_K_DB / 10.0);
+            ch->phi_LOS      = 2.0 * PHY_PI * ((double)rand() / RAND_MAX);
             break;
     }
-    ch->num_taps = ntaps;
+    ch->num_taps = num_taps;
 
-    /* Convert powers dB → linear and normalize so sum = 1 */
-    double ds_rms_s  = ds_rms_ns * 1e-9;
-    double psum = 0.0;
-    for (int l = 0; l < ntaps; l++) {
-        ch->delays_s[l]    = dly_norm[l] * ds_rms_s;
-        ch->powers_lin[l]  = pow(10.0, pwr_db[l] / 10.0);
-        psum              += ch->powers_lin[l];
+    /* Convert normalised delays to seconds and powers from dB to linear.
+     * Then normalise powers so they sum to 1 (unit average gain). */
+    double ds_rms_s     = ds_rms_ns * 1e-9;
+    double total_power  = 0.0;
+    for (int tap = 0; tap < num_taps; tap++) {
+        ch->delays_s[tap]   = delay_norm_table[tap] * ds_rms_s;
+        ch->powers_lin[tap] = pow(10.0, power_db_table[tap] / 10.0);
+        total_power        += ch->powers_lin[tap];
     }
-    for (int l = 0; l < ntaps; l++) ch->powers_lin[l] /= psum;
+    for (int tap = 0; tap < num_taps; tap++)
+        ch->powers_lin[tap] /= total_power;
 
-    /* Initialize tap gains: fresh CN(0, P_l) realization */
-    for (int l = 0; l < ntaps; l++) {
-        double sigma = sqrt(ch->powers_lin[l]);
-        if (l == 0 && ch->is_LOS) {
-            /* Rician first tap: LOS (deterministic) + NLOS (Rayleigh) */
-            double K = ch->K_factor;
-            double los_amp  = sqrt(K / (K + 1.0)) * sigma;
-            double nlos_sig = sqrt(1.0 / (K + 1.0)) * sigma / sqrt(2.0);
-            ch->h[0] = los_amp * CX_MAKE(cos(ch->phi_LOS), sin(ch->phi_LOS))
-                     + CX_MAKE(randn() * nlos_sig, randn() * nlos_sig);
+    /* Draw the initial tap gains */
+    for (int tap = 0; tap < num_taps; tap++) {
+        double tap_sigma = sqrt(ch->powers_lin[tap]);
+
+        if (tap == 0 && ch->is_LOS) {
+            /* Rician first tap: fixed LOS phasor + random NLOS component */
+            double K            = ch->K_factor;
+            double los_amp      = sqrt(K / (K + 1.0)) * tap_sigma;
+            double nlos_sigma   = sqrt(1.0 / (K + 1.0)) * tap_sigma / sqrt(2.0);
+            cx_t   los_phasor   = los_amp * CX_MAKE(cos(ch->phi_LOS), sin(ch->phi_LOS));
+            cx_t   nlos_part    = CX_MAKE(randn() * nlos_sigma, randn() * nlos_sigma);
+            ch->h[tap] = los_phasor + nlos_part;
         } else {
-            ch->h[l] = sigma * cn01();
+            ch->h[tap] = tap_sigma * complex_gaussian_01();
         }
     }
 }
@@ -157,19 +166,25 @@ void tdl_init(TDLChannel *ch, TDLModel model, double ds_rms_ns,
  * ----------------------------------------------------------------------- */
 void tdl_next_symbol(TDLChannel *ch)
 {
-    double rho  = ch->rho;
-    double rho2 = sqrt(1.0 - rho * rho);
-    for (int l = 0; l < ch->num_taps; l++) {
-        double sigma = sqrt(ch->powers_lin[l]);
-        if (l == 0 && ch->is_LOS) {
-            double K       = ch->K_factor;
-            double los_amp = sqrt(K / (K + 1.0)) * sigma;
-            double ns      = sqrt(1.0 / (K + 1.0)) * sigma;
-            cx_t prev_nlos = ch->h[l] - los_amp * CX_MAKE(cos(ch->phi_LOS), sin(ch->phi_LOS));
-            cx_t new_nlos  = rho * prev_nlos + rho2 * ns * cn01();
-            ch->h[l] = los_amp * CX_MAKE(cos(ch->phi_LOS), sin(ch->phi_LOS)) + new_nlos;
+    double rho            = ch->rho;
+    double innovation_gain = sqrt(1.0 - rho * rho);   /* keeps per-tap variance constant */
+
+    for (int tap = 0; tap < ch->num_taps; tap++) {
+        double tap_sigma = sqrt(ch->powers_lin[tap]);
+
+        if (tap == 0 && ch->is_LOS) {
+            /* Rician tap: AR(1) on the NLOS part only; LOS phasor stays fixed */
+            double K          = ch->K_factor;
+            double los_amp    = sqrt(K / (K + 1.0)) * tap_sigma;
+            double nlos_sigma = sqrt(1.0 / (K + 1.0)) * tap_sigma;
+
+            cx_t los_phasor   = los_amp * CX_MAKE(cos(ch->phi_LOS), sin(ch->phi_LOS));
+            cx_t prev_nlos    = ch->h[tap] - los_phasor;
+            cx_t new_nlos     = rho * prev_nlos + innovation_gain * nlos_sigma * complex_gaussian_01();
+            ch->h[tap] = los_phasor + new_nlos;
         } else {
-            ch->h[l] = rho * ch->h[l] + rho2 * sigma * cn01();
+            /* NLOS tap: standard Rayleigh AR(1) */
+            ch->h[tap] = rho * ch->h[tap] + innovation_gain * tap_sigma * complex_gaussian_01();
         }
     }
 }
@@ -192,15 +207,17 @@ void tdl_new_realization(TDLChannel *ch)
  *
  * k = 0, 1, ..., num_sc-1 corresponds to active SC indices.
  * ----------------------------------------------------------------------- */
+/* H[sc] = Σ_tap  h_tap · exp(−j·2π·sc·Δf·τ_tap) */
 void tdl_get_cfr(const TDLChannel *ch, int num_sc, cx_t *h_freq)
 {
-    for (int k = 0; k < num_sc; k++) {
-        cx_t hk = CX_ZERO;
-        for (int l = 0; l < ch->num_taps; l++) {
-            double phi = -2.0 * PHY_PI * k * ch->scs_hz * ch->delays_s[l];
-            hk += ch->h[l] * CX_MAKE(cos(phi), sin(phi));
+    for (int sc = 0; sc < num_sc; sc++) {
+        cx_t channel_gain = CX_ZERO;
+        for (int tap = 0; tap < ch->num_taps; tap++) {
+            double phase_rad = -2.0 * PHY_PI * sc * ch->scs_hz * ch->delays_s[tap];
+            cx_t   phase_rot = CX_MAKE(cos(phase_rad), sin(phase_rad));
+            channel_gain += ch->h[tap] * phase_rot;
         }
-        h_freq[k] = hk;
+        h_freq[sc] = channel_gain;
     }
 }
 
@@ -209,17 +226,23 @@ void tdl_get_cfr(const TDLChannel *ch, int num_sc, cx_t *h_freq)
  *
  * rx[k] = H[k] * tx[k] + n[k],  n[k] ~ CN(0, N0)
  * ----------------------------------------------------------------------- */
+/* rx[sc] = H[sc] · tx[sc] + noise,   noise ~ CN(0, N0) */
 void tdl_apply_cfr(const TDLChannel *ch, const cx_t *tx_freq,
                    int num_sc, cx_t *rx_freq)
 {
-    double sigma_n = sqrt(ch->N0 / 2.0);   /* per real/imag component */
-    for (int k = 0; k < num_sc; k++) {
-        cx_t hk = CX_ZERO;
-        for (int l = 0; l < ch->num_taps; l++) {
-            double phi = -2.0 * PHY_PI * k * ch->scs_hz * ch->delays_s[l];
-            hk += ch->h[l] * CX_MAKE(cos(phi), sin(phi));
+    /* AWGN: total power N0 split equally between I and Q */
+    double noise_sigma = sqrt(ch->N0 / 2.0);
+
+    for (int sc = 0; sc < num_sc; sc++) {
+        /* Compute frequency-domain channel gain H[sc] */
+        cx_t channel_gain = CX_ZERO;
+        for (int tap = 0; tap < ch->num_taps; tap++) {
+            double phase_rad = -2.0 * PHY_PI * sc * ch->scs_hz * ch->delays_s[tap];
+            cx_t   phase_rot = CX_MAKE(cos(phase_rad), sin(phase_rad));
+            channel_gain += ch->h[tap] * phase_rot;
         }
-        rx_freq[k] = hk * tx_freq[k]
-                   + CX_MAKE(randn() * sigma_n, randn() * sigma_n);
+
+        cx_t noise     = CX_MAKE(randn() * noise_sigma, randn() * noise_sigma);
+        rx_freq[sc]    = channel_gain * tx_freq[sc] + noise;
     }
 }
