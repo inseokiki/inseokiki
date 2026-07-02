@@ -343,6 +343,10 @@ void run_pdsch_tdl_harq_simulation(const L1Config *cfg)
     /* MMSE(기본): per-SC 노이즈 분산 LLR  /  ZF: 평균 채널 파워 기반 flat LLR */
     int use_persc = (strcmp(cfg->equalizer, "ZF") != 0);
 
+    /* ── 채널 추정 모드 / 데이터 SC 수 ───────────────────────────────── */
+    int use_lmmse = (strcmp(cfg->channelEst, "LMMSE") == 0);
+    int nd_const  = ((E / bps) < num_data) ? (E / bps) : num_data;
+
     /* ── TDL 채널 ──────────────────────────────────────────────────────── */
     TDLModel tdl_model = TDL_A;
     if      (strcmp(cfg->tdlModel, "TDL_C") == 0) tdl_model = TDL_C;
@@ -373,8 +377,9 @@ void run_pdsch_tdl_harq_simulation(const L1Config *cfg)
     printf("Num RB       : %d  |  Data RE: %d  |  E: %d bits\n",
            num_rb, num_data, E);
     printf("TBS (38.214) : %d bits  |  N_cb: %d bits\n", tbsz, N_cb);
-    printf("MIMO         : 1x%d MRC  |  EQ: %s\n", Nrx,
-           use_persc ? "MMSE(per-SC LLR)" : "ZF(flat LLR)");
+    printf("MIMO         : 1x%d MRC  |  EQ: %s  |  CH-EST: %s\n", Nrx,
+           use_persc ? "MMSE(per-SC LLR)" : "ZF(flat LLR)",
+           use_lmmse ? "LMMSE" : "LS+interp");
     printf("Max HARQ     : %d rounds  |  Trials: %d  |  Min errors: %d\n\n",
            max_rounds, cfg->numTrials, min_block_errors);
 
@@ -432,9 +437,17 @@ void run_pdsch_tdl_harq_simulation(const L1Config *cfg)
     }
 
     /* ── SNR 루프 ──────────────────────────────────────────────────────── */
+    LMMSEFilter lmmse_f;
+    memset(&lmmse_f, 0, sizeof(lmmse_f));
+
     for (double snr = cfg->snrStart; snr <= cfg->snrEnd + 1e-9; snr += cfg->snrStep) {
 
         double N0 = 1.0 / pow(10.0, snr / 10.0);
+
+        if (use_lmmse)
+            lmmse_filter_build(&lmmse_f, pilot_pos, num_pilots,
+                               data_pos, nd_const, N0,
+                               cfg->scsKHz * 1e3, cfg->tdlDsRmsNs);
 
         /* 안테나별 TDL 채널 초기화 */
         TDLChannel ch[MIMO_MAX_RX];
@@ -476,13 +489,18 @@ void run_pdsch_tdl_harq_simulation(const L1Config *cfg)
                     for (int p = 0; p < num_pilots; p++)
                         rx_pilots[p] = rx_grid_all[m][pilot_pos[p]];
                     ls_estimate(rx_pilots, dmrs_sym, num_pilots, h_pilots);
-                    interpolate_channel(h_pilots, num_pilots, pilot_pos,
-                                        active, h_full_all[m]);
 
-                    for (int d = 0; d < nd; d++) {
-                        rx_data_all[m][d] = rx_grid_all[m][data_pos[d]];
-                        h_data_all [m][d] = h_full_all [m][data_pos[d]];
+                    if (use_lmmse) {
+                        lmmse_filter_apply(&lmmse_f, h_pilots, h_data_all[m]);
+                    } else {
+                        interpolate_channel(h_pilots, num_pilots, pilot_pos,
+                                            active, h_full_all[m]);
+                        for (int d = 0; d < nd; d++)
+                            h_data_all[m][d] = h_full_all[m][data_pos[d]];
                     }
+
+                    for (int d = 0; d < nd; d++)
+                        rx_data_all[m][d] = rx_grid_all[m][data_pos[d]];
                 }
 
                 mrc_combine(
@@ -581,6 +599,8 @@ void run_pdsch_tdl_harq_simulation(const L1Config *cfg)
         double tput_awgn = (double)tbsz * (1.0 - awgn_bler) / num_data;
         printf("  %8.4f  %6d\n", tput_awgn, total_trials);
         if (csv) fprintf(csv, ",%.6f,%d\n", tput_awgn, total_trials);
+
+        if (use_lmmse) lmmse_filter_free(&lmmse_f);
 
     } /* end SNR */
 

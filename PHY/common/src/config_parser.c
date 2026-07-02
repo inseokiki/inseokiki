@@ -77,6 +77,7 @@ void config_parser_init(ConfigParser *p) {
     c->iqDumpSnr     = 0.0; c->iqDumpTrials = 100;
     c->srsBandwidthRB= 16;  c->srsCombSize = 2;
     c->minBlockErrors = 200;
+    strncpy(c->channelEst,     "LS",     CFG_STR_MAX-1);
     strncpy(c->modulation,     "QPSK",   CFG_STR_MAX-1);
     strncpy(c->coding,         "LDPC",   CFG_STR_MAX-1);
     strncpy(c->channelModel,   "AWGN",   CFG_STR_MAX-1);
@@ -223,6 +224,9 @@ int config_parser_load(ConfigParser *p, const char *filename) {
 
     /* Monte Carlo stopping */
     c->minBlockErrors = kv_int(p, "MIN_BLOCK_ERRORS", 200);
+
+    /* Channel estimation */
+    kv_str(p, "CHANNEL_EST", "LS", c->channelEst, CFG_STR_MAX);
 
     calc_derived(p);
     return 1;

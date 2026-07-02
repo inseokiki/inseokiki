@@ -65,6 +65,9 @@ typedef struct {
 
     /* Monte Carlo stopping */
     int    minBlockErrors;         /* stop SNR point when this many block errors accumulated */
+
+    /* Channel estimation */
+    char   channelEst[CFG_STR_MAX]; /* LS / LMMSE */
 } L1Config;
 
 typedef struct {
