@@ -154,7 +154,7 @@
 			],
 			"settings": {
 				"foreground": "#3A6A7A",
-				"fontStyle": "italic"
+				"fontStyle": ""
 			}
 		},
 		{
@@ -245,7 +245,7 @@
 				"variable.language"
 			],
 			"settings": {
-				"fontStyle": "italic"
+				"fontStyle": ""
 			}
 		},
 		{
@@ -259,7 +259,7 @@
 			"scope": "entity.other.attribute-name",
 			"settings": {
 				"foreground": "#569CD6",
-				"fontStyle": "italic"
+				"fontStyle": ""
 			}
 		},
 		{
