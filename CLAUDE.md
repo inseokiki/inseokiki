@@ -343,6 +343,8 @@
 | 2026-07-14 | PHY LLS: PUSCH+TDL Turbo 등화 추가 — no-DFE/hard-DFE 모두 능가 실측, ldpc_decode_soft/qam_soft_symbol 신규 |
 | 2026-07-14 | PHY LLS: PUCCH F1/F3+TDL을 HARQ와 결합 — UCI에 CRC 없어 genie bit-match로 종료 판정, F3는 rate_matching.c 범용 circular buffer를 N=64 Polar mother code에 재사용 |
 | 2026-07-14 | PHY LLS: PRACH를 RE grid + TDL 다경로로 정교화 — 순환시프트=DFT shift 정리로 연속시간 지연과 등가임을 이용, 검출 알고리즘 무변경으로 tdl.c만 추가 |
+| 2026-07-15 | PHY LLS: 전체 소스/헤더 파일(52개, `PHY/src/*.c` + `PHY/include/*.h`)에 박스형 파일 헤더 배너 추가 (파일명 + 한 줄 설명 + `Author: Inseok Kang`) |
+| 2026-07-15 | git: `origin/develop`이 별도 세션/기기에서 `PHY/common`+`PHY/lls_sim`+`PHY/ber_sim` 구조로 재구조화된 채 갈라져 있던 것을 발견 — 기능 자체(PUCCH/PRACH/PUSCH/MIMO/HARQ 등)는 로컬 WSL 작업이 최신이라 판단해, 원격의 재구조화 히스토리는 `origin/archive/common-lls-sim-refactor` 브랜치로 보존하고 로컬 기준으로 `develop`을 force-push. 이후 세션은 이 저장소의 `PHY/src`/`PHY/include` 평면 구조가 기준임 |
 
 ---
 
