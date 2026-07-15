@@ -1,3 +1,9 @@
+/* ================================================================
+ *  ber_sim.c
+ *  Standalone uncoded BER tool entry point (independent build)
+ *
+ *  Author : Inseok Kang
+ * ================================================================ */
 #include <stdio.h>
 #include <math.h>
 #include <stdlib.h>

@@ -1,3 +1,9 @@
+/* ================================================================
+ *  dmrs.h
+ *  DMRS pilot sequence generation and RE index mapping
+ *
+ *  Author : Inseok Kang
+ * ================================================================ */
 #ifndef DMRS_H
 #define DMRS_H
 

@@ -1,3 +1,9 @@
+/* ================================================================
+ *  srs.c
+ *  SRS channel sounding simulation
+ *
+ *  Author : Inseok Kang
+ * ================================================================ */
 #include "srs.h"
 #include "channel_estimation.h"
 #include <stdio.h>

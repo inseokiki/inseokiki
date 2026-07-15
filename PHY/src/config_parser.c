@@ -1,3 +1,9 @@
+/* ================================================================
+ *  config_parser.c
+ *  Config file parser + MCS-based automatic parameter derivation
+ *
+ *  Author : Inseok Kang
+ * ================================================================ */
 #include "config_parser.h"
 #include "mcs_table.h"
 #include <stdio.h>
@@ -82,6 +88,16 @@ void config_parser_init(ConfigParser *p) {
     strncpy(c->searchSpace,    "CSS",    CFG_STR_MAX-1);
     strncpy(c->mcsTableType,   "TABLE1", CFG_STR_MAX-1);
     strncpy(c->equalizer,      "ZF",     CFG_STR_MAX-1);
+    strncpy(c->mimoMode,       "SISO",   CFG_STR_MAX-1);
+    strncpy(c->harqRvSeq,      "IR",     CFG_STR_MAX-1);
+    c->harqEnable = 0; c->harqMaxRetx = 4;
+    c->tdlDelaySpreadNs = 300.0;
+    c->transformPrecoding = 1;
+    c->puschDfeEnable = 0;
+    c->puschTurboEnable = 0; c->puschTurboIters = 3;
+    c->pucchFormat = 0; c->pucchUciBits = 1; c->pucchNumSymbols = 4; c->pucchNumPrb = 1;
+    strncpy(c->prachFormat,    "SHORT",  CFG_STR_MAX-1);
+    c->prachRootSeqIndex = 1; c->prachNumCs = 13; c->prachMaxDelaySamples = 8;
     strncpy(c->iqDumpFile,     "iq_dump.txt", CFG_STR_MAX-1);
     /* modulation and codeRate are set by calc_derived() via MCS table */
 }
@@ -197,6 +213,20 @@ int config_parser_load(ConfigParser *p, const char *filename) {
     c->srsCyclicShift= kv_int(p, "SRS_CYCLIC_SHIFT",     0);
     c->srsSeqGroupU  = kv_int(p, "SRS_SEQ_GROUP",        0);
     c->srsSeqNumV    = kv_int(p, "SRS_SEQ_NUM",          0);
+    c->harqEnable    = kv_int(p, "HARQ_ENABLE",          0);
+    c->harqMaxRetx   = kv_int(p, "HARQ_MAX_RETX",        4);
+    c->tdlDelaySpreadNs = kv_dbl(p, "TDL_DELAY_SPREAD_NS", 300.0);
+    c->transformPrecoding = kv_int(p, "TRANSFORM_PRECODING", 1);
+    c->puschDfeEnable     = kv_int(p, "PUSCH_DFE_ENABLE",     0);
+    c->puschTurboEnable  = kv_int(p, "PUSCH_TURBO_ENABLE",   0);
+    c->puschTurboIters   = kv_int(p, "PUSCH_TURBO_ITERS",    3);
+    c->pucchFormat     = kv_int(p, "PUCCH_FORMAT",       0);
+    c->pucchUciBits    = kv_int(p, "PUCCH_UCI_BITS",     1);
+    c->pucchNumSymbols = kv_int(p, "PUCCH_NUM_SYMBOLS",  4);
+    c->pucchNumPrb     = kv_int(p, "PUCCH_NUM_PRB",      1);
+    c->prachRootSeqIndex    = kv_int(p, "PRACH_ROOT_SEQ_INDEX",     1);
+    c->prachNumCs           = kv_int(p, "PRACH_NUM_CS",            13);
+    c->prachMaxDelaySamples = kv_int(p, "PRACH_MAX_DELAY_SAMPLES",  8);
     kv_str(p, "MODULATION",      "QPSK",   c->modulation,     CFG_STR_MAX);
     kv_str(p, "CODING",          "LDPC",   c->coding,         CFG_STR_MAX);
     kv_str(p, "CHANNEL_MODEL",   "AWGN",   c->channelModel,   CFG_STR_MAX);
@@ -204,6 +234,9 @@ int config_parser_load(ConfigParser *p, const char *filename) {
     kv_str(p, "SEARCH_SPACE",    "CSS",    c->searchSpace,    CFG_STR_MAX);
     kv_str(p, "MCS_TABLE",       "TABLE1", c->mcsTableType,   CFG_STR_MAX);
     kv_str(p, "EQUALIZER",       "ZF",     c->equalizer,      CFG_STR_MAX);
+    kv_str(p, "MIMO_MODE",       "SISO",   c->mimoMode,       CFG_STR_MAX);
+    kv_str(p, "HARQ_RV_SEQUENCE","IR",     c->harqRvSeq,      CFG_STR_MAX);
+    kv_str(p, "PRACH_FORMAT",    "SHORT",  c->prachFormat,    CFG_STR_MAX);
     kv_str(p, "IQ_DUMP_FILE","iq_dump.txt",c->iqDumpFile,     CFG_STR_MAX);
     calc_derived(p);
     return 1;
@@ -228,6 +261,8 @@ void config_parser_print(const ConfigParser *p) {
     printf("CP (normal)  : %d\n",      c->cpLengthNormal);
     printf("Sample Rate  : %.3f MHz\n",c->samplingRate / 1e6);
     printf("Channel      : %s\n",      c->channelModel);
+    if (strcmp(c->channelModel, "TDL") == 0)
+        printf("TDL Delay Spread : %.0f ns (approx profile)\n", c->tdlDelaySpreadNs);
     printf("SNR Range    : %.1f to %.1f dB (step %.1f)\n",
            c->snrStart, c->snrEnd, c->snrStep);
     int is_ctrl = (strcmp(c->physicalChannel, "PBCH")  == 0 ||
@@ -255,6 +290,32 @@ void config_parser_print(const ConfigParser *p) {
         if (strcmp(c->physicalChannel, "PDSCH") == 0) {
             if (c->tbSize > 0) printf("TB Size      : %d\n", c->tbSize);
             else               printf("TB Size      : auto\n");
+            if (strcmp(c->mimoMode, "SISO") != 0)
+                printf("MIMO Mode    : %s\n", c->mimoMode);
+            if (c->harqEnable) {
+                printf("HARQ         : enabled (%s, max %d tx)\n",
+                       c->harqRvSeq, c->harqMaxRetx);
+            }
+        }
+        if (strcmp(c->physicalChannel, "PUSCH") == 0) {
+            printf("Transform Precoding : %s\n",
+                   c->transformPrecoding ? "ON (DFT-s-OFDM)" : "OFF (CP-OFDM)");
+            if (c->puschTurboEnable)
+                printf("Turbo Eq     : enabled (%d iters, soft-PIC + LDPC extrinsic)\n",
+                       c->puschTurboIters);
+            else if (c->puschDfeEnable)
+                printf("DFE          : enabled (MMSE+TDL residual-ISI cancellation)\n");
+        }
+        if (strcmp(c->physicalChannel, "PUCCH") == 0) {
+            printf("PUCCH Format : %d\n", c->pucchFormat);
+            printf("UCI Bits     : %d\n", c->pucchUciBits);
+        }
+        if (strcmp(c->physicalChannel, "PRACH") == 0) {
+            printf("PRACH Format : %s (L_RA=%d)\n", c->prachFormat,
+                   strcmp(c->prachFormat, "LONG") == 0 ? 839 : 139);
+            printf("Root Seq u   : %d\n", c->prachRootSeqIndex);
+            printf("N_CS         : %d\n", c->prachNumCs);
+            printf("Max Delay    : %d samples\n", c->prachMaxDelaySamples);
         }
     }
     printf("========================\n");

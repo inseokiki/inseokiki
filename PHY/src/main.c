@@ -1,3 +1,9 @@
+/* ================================================================
+ *  main.c
+ *  Entry point -- dispatches to the per-channel simulation
+ *
+ *  Author : Inseok Kang
+ * ================================================================ */
 #include <stdio.h>
 #include <math.h>
 #include <stdlib.h>
@@ -14,6 +20,9 @@
 #include "pdsch.h"
 #include "csi_rs.h"
 #include "srs.h"
+#include "pusch.h"
+#include "pucch.h"
+#include "prach.h"
 
 static void run_ber_sim(const L1Config *cfg) {
     int bps = get_bits_per_symbol(cfg->modulation);
@@ -69,7 +78,7 @@ static void run_legacy_sim(const L1Config *cfg) {
 
     int info_blk = 128;
     LDPCCodec ldpc; ldpc_init(&ldpc, info_blk, cfg->codeRate);
-    PolarCodec polar; polar_init(&polar, 256, info_blk);
+    PolarCodec polar; polar_init(&polar, 256, info_blk, 256);
 
     int use_ldpc  = (strcmp(cfg->coding,"LDPC")==0);
     int use_polar = (strcmp(cfg->coding,"POLAR")==0);
@@ -169,11 +178,56 @@ int main(int argc, char *argv[]) {
     if      (strcmp(cfg.physicalChannel,"PBCH"  )==0) run_pbch_simulation(&cfg);
     else if (strcmp(cfg.physicalChannel,"PDCCH" )==0) run_pdcch_simulation(&cfg);
     else if (strcmp(cfg.physicalChannel,"PDSCH" )==0) {
-        if (cfg.useDmrs) run_pdsch_dmrs_simulation(&cfg);
-        else             run_pdsch_simulation(&cfg);
+        if (!cfg.useDmrs) {
+            run_pdsch_simulation(&cfg);
+        } else if (cfg.harqEnable) {
+            if (strcmp(cfg.mimoMode,"SM_2X2")==0 && strcmp(cfg.channelModel,"TDL")==0)
+                run_pdsch_sm2x2_tdl_harq_simulation(&cfg);
+            else if (strcmp(cfg.mimoMode,"SIMO_MRC")==0 && strcmp(cfg.channelModel,"TDL")==0)
+                run_pdsch_simo_mrc_tdl_harq_simulation(&cfg);
+            else
+                run_pdsch_harq_simulation(&cfg);
+        } else if (strcmp(cfg.mimoMode,"SIMO_MRC")==0) {
+            if (strcmp(cfg.channelModel,"TDL")==0) run_pdsch_simo_mrc_tdl_simulation(&cfg);
+            else                                    run_pdsch_simo_mrc_simulation(&cfg);
+        } else if (strcmp(cfg.mimoMode,"SM_2X2")==0) {
+            if (strcmp(cfg.channelModel,"TDL")==0) run_pdsch_sm2x2_tdl_simulation(&cfg);
+            else                                    run_pdsch_sm2x2_simulation(&cfg);
+        } else if (strcmp(cfg.channelModel,"TDL")==0) {
+            run_pdsch_tdl_simulation(&cfg);
+        } else {
+            run_pdsch_dmrs_simulation(&cfg);
+        }
     }
     else if (strcmp(cfg.physicalChannel,"CSIRS" )==0) run_csirs_simulation(&cfg);
     else if (strcmp(cfg.physicalChannel,"SRS"   )==0) run_srs_simulation(&cfg);
+    else if (strcmp(cfg.physicalChannel,"PUSCH" )==0) {
+        if (strcmp(cfg.channelModel,"TDL")==0) {
+            if      (cfg.puschTurboEnable) run_pusch_tdl_turbo_simulation(&cfg);
+            else if (cfg.puschDfeEnable)   run_pusch_tdl_dfe_simulation(&cfg);
+            else                           run_pusch_tdl_simulation(&cfg);
+        } else {
+            run_pusch_simulation(&cfg);
+        }
+    }
+    else if (strcmp(cfg.physicalChannel,"PUCCH" )==0) {
+        int tdl = (strcmp(cfg.channelModel,"TDL")==0);
+        if      (cfg.pucchFormat==0) run_pucch_format0_simulation(&cfg);
+        else if (cfg.pucchFormat==1) {
+            if (tdl && cfg.harqEnable)  run_pucch_format1_tdl_harq_simulation(&cfg);
+            else if (tdl)               run_pucch_format1_tdl_simulation(&cfg);
+            else                        run_pucch_format1_simulation(&cfg);
+        } else if (cfg.pucchFormat==2) run_pucch_format2_simulation(&cfg);
+        else {
+            if (tdl && cfg.harqEnable)  run_pucch_format3_tdl_harq_simulation(&cfg);
+            else if (tdl)               run_pucch_format3_tdl_simulation(&cfg);
+            else                        run_pucch_format3_simulation(&cfg);
+        }
+    }
+    else if (strcmp(cfg.physicalChannel,"PRACH" )==0) {
+        if (strcmp(cfg.channelModel,"TDL")==0) run_prach_tdl_simulation(&cfg);
+        else                                    run_prach_simulation(&cfg);
+    }
     else if (strcmp(cfg.physicalChannel,"BER"   )==0) run_ber_sim(&cfg);
     else                                               run_legacy_sim(&cfg);
 

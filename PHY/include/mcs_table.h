@@ -1,3 +1,9 @@
+/* ================================================================
+ *  mcs_table.h
+ *  TS 38.214 MCS index -> modulation/code-rate tables (3 variants)
+ *
+ *  Author : Inseok Kang
+ * ================================================================ */
 #ifndef MCS_TABLE_H
 #define MCS_TABLE_H
 

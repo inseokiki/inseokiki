@@ -1,3 +1,9 @@
+/* ================================================================
+ *  ofdm.h
+ *  OFDM modulation/demodulation (FFT/IFFT)
+ *
+ *  Author : Inseok Kang
+ * ================================================================ */
 #ifndef OFDM_H
 #define OFDM_H
 

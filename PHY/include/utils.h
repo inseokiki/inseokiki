@@ -1,3 +1,9 @@
+/* ================================================================
+ *  utils.h
+ *  Common utilities -- RNG, complex type, misc helpers
+ *
+ *  Author : Inseok Kang
+ * ================================================================ */
 #ifndef UTILS_H
 #define UTILS_H
 
@@ -19,6 +25,9 @@ double randn(void);
 
 /* Generate n random bits (0 or 1) into out[n] */
 void gen_random_bits(int *out, int n);
+
+/* Uniform random integer in [0, n) */
+int rand_uniform_int(int n);
 
 /* BER: returns error rate, n must match */
 double calc_ber(const int *tx, const int *rx, int n);

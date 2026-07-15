@@ -44,21 +44,29 @@ cd BER && make
 |------|------|
 | `config_parser.c` | 설정 파일 파싱 + MCS 기반 파라미터 자동 결정 |
 | `mcs_table.c` | 3GPP TS 38.214 MCS 테이블 3종 |
-| `modulation.c` | QAM 변조 / 복조 / LLR 계산 |
+| `modulation.c` | QAM 변조 / 복조 / LLR 계산. `qam_soft_symbol()`은 a priori 비트 LLR → 심볼별 소프트 평균/분산(turbo 등화용), `qam_demap_llr`과 같은 PAM 테이블을 재사용해 매핑 방식과 무관하게 정확 |
 | `channel.c` | AWGN / Flat Fading 채널 |
 | `channel_estimation.c` | LS 추정 + 보간 + ZF / MMSE 등화 |
+| `mimo.c` | SU-MIMO 2x2 채널(block-flat Rayleigh) + MRC / ZF / MMSE 검출. 검출 함수(`mimo_zf_detect`/`mimo_mmse_detect`/`mrc_combine`)는 RE 단위 순수 함수라 flat이든 TDL 등 frequency-selective든 그대로 재사용됨 |
+| `rate_matching.c` | Circular buffer rate matching (RV 기반 k0 오프셋) + HARQ 소프트 컴바이닝 |
+| `tdl.c` | TDL 주파수 선택적 페이딩 (근사 6탭 NLOS PDP, TS 38.901 표 근사치). `tdl_draw()`를 Tx-Rx 안테나 쌍마다 독립 호출하면 MIMO 공간축으로 그대로 확장 가능 (`pdsch.c`의 TDL+MIMO 조합 함수들 참조) |
+| `dft_precode.c` | PUSCH Transform Precoding용 유니터리 M-point DFT/IDFT (O(M²) 직접합산) |
+| `pusch.c` | PUSCH(상향) 시뮬레이션 — DFT-s-OFDM/CP-OFDM 토글, PDSCH+DMRS 체인 재사용. `run_pusch_tdl_dfe_simulation()`은 MMSE+TDL의 잔여 ISI(`alpha_d` RE별 변동)를 블록 병렬간섭제거(DFE)로 실제 제거해보는 연구용 프로토타입(PUSCH_DFE_ENABLE=1) — BLER(noDFE) vs BLER(DFE)를 같은 채널/노이즈 draw로 나란히 비교. 저SNR에서는 오류전파로 악화, 중~고SNR(약 20dB대)에서 소폭 개선, 매우 높은 SNR에서는 둘 다 무오류로 수렴(실측 확인, STRUCTURE 하단 참고). `run_pusch_tdl_turbo_simulation()`(PUSCH_TURBO_ENABLE=1)은 하드 DFE를 소프트 PIC + `ldpc_decode_soft()` extrinsic 반복교환으로 일반화 — BLER(noDFE)/BLER(hardDFE)/BLER(turbo) 3열 비교, 실측상 하드 DFE가 손해보던 SNR 구간까지 포함해 전 구간에서 turbo가 우세함을 확인 |
+| `pucch_seq.c` | PUCCH F0/F1용 저PAPR base sequence(ZC 근사) + 순환시프트 |
+| `pucch.c` | PUCCH(상향 제어) F0~F3 — F0/F1 시퀀스 검출, F2/F3 Polar 대체 코딩. F1/F3는 TDL 변형도 있음(genie-aided CSI — PUCCH는 DMRS/LS 추정 파이프라인이 없어 `tdl_channel_apply()`의 `h_out`을 그대로 완벽 채널로 사용); F0/F2는 AWGN 전용. F1/F3 TDL은 HARQ 결합 버전도 있음(재전송마다 채널 재드로우, PUCCH UCI는 스펙상 CRC가 없어 genie 정답 비트 일치를 종료 판정 기준으로 대체) — F3는 N=64 Polar mother codeword에 `rate_matching.c`의 범용 circular-buffer(원래 LDPC용)를 그대로 재사용해 IR/Chase RV 결합 |
 | `ofdm.c` | OFDM 변조 / 복조 (FFT/IFFT) |
 | `dmrs.c` | DMRS 파일럿 시퀀스 및 위치 인덱스 |
 | `crc.c` | CRC-24A / CRC-24C 생성 및 검사 |
-| `ldpc.c` | LDPC 인코더 / 디코더 (데이터 채널) |
-| `polar.c` | Polar 인코더 / 디코더 (제어 채널) |
-| `polar_rate_match.c` | Polar Rate Matching / Dematching |
+| `ldpc.c` | LDPC 인코더 / 디코더 (데이터 채널). `ldpc_decode_soft()`가 belief-propagation 변수노드 사후 LLR 전체(coded_size)를 반환 — turbo 등화의 extrinsic 계산용(`ldpc_decode()`는 이 함수의 얇은 래퍼로 리팩터링됨, 동작 동일) |
+| `polar.c` | Polar 인코더 / 디코더 (제어 채널). `polar_init(N,K,E)`가 E를 받아 rate-matching shortening 위치를 강제-frozen 처리 (TS 38.212 5.4.1.1, 2026-07-13 버그 수정 — 이전엔 shortening 위치가 info bit와 겹쳐 파괴될 수 있었음) |
+| `polar_rate_match.c` | Polar Rate Matching / Dematching. `polar_interleaver()`는 `polar.c`의 frozen-bit 계산과 공유하기 위해 공개 함수로 노출됨 |
 | `pbch.c` | PBCH 시뮬레이션 루프 |
 | `pdcch.c` | PDCCH 시뮬레이션 루프 (Blind Decoding 포함) |
 | `pdsch.c` | PDSCH 시뮬레이션 루프 (w/o DMRS, w/ DMRS) |
 | `csi_rs.c` | CSI-RS 채널 추정 시뮬레이션 |
 | `srs.c` | SRS 채널 사운딩 시뮬레이션 |
-| `utils.c` | 난수 생성 등 공통 유틸 |
+| `prach.c` | PRACH(UL 랜덤 접속) — ZC 루트시퀀스(L_RA=839/139, 둘 다 소수라 정확한 공식) + 사이클릭시프트 프리앰블 + 순환상관 스윕으로 프리앰블 검출과 TA(샘플 단위) 동시 추정. SRS/PUCCH F0처럼 OFDM 그리드 없이 시퀀스 도메인 전용, 단일 루트만 지원. TDL 변형(`run_prach_tdl_simulation()`)도 있음 — 같은 ZC 샘플을 PRACH 자체 서브캐리어 간격(Δf_RA, LONG=1.25kHz 고정/SHORT=carrier SCS 재사용)의 RE 값으로 재해석하고 `tdl.c`를 재사용해 다경로 페이딩을 추가; DFT shift 정리에 의해 기존 순환시프트가 정확히 연속시간 지연과 등가임을 이용해 검출 알고리즘 자체는 무변경 |
+| `utils.c` | 난수 생성 등 공통 유틸. `rand_uniform_int(n)`은 PRACH의 프리앰블/지연 추첨용으로 추가된 균등정수 RNG (기존 시드 상태 재사용) |
 | `main.c` | 진입점 — 채널 타입별 분기 |
 
 ### 실행 흐름
@@ -69,14 +77,48 @@ main()
        └─ calc_derived()        ← MCS 룩업 → modulation, codeRate 자동 결정
                                 ← 채널 타입별 코딩 방식 강제
   └─ 채널 타입 분기
-       ├─ PDSCH  → run_pdsch_simulation()
-       │           run_pdsch_dmrs_simulation()
+       ├─ PDSCH  → run_pdsch_simulation()                  ← USE_DMRS=0
+       │           run_pdsch_sm2x2_tdl_harq_simulation()    ← USE_DMRS=1, HARQ_ENABLE=1, MIMO_MODE=SM_2X2, CHANNEL_MODEL=TDL (2x2+TDL+IR/Chase)
+       │           run_pdsch_simo_mrc_tdl_harq_simulation() ← USE_DMRS=1, HARQ_ENABLE=1, MIMO_MODE=SIMO_MRC, CHANNEL_MODEL=TDL (1x2 MRC+TDL+IR/Chase)
+       │           run_pdsch_harq_simulation()              ← USE_DMRS=1, HARQ_ENABLE=1, 그 외 (SISO, flat 또는 TDL 무관)
+       │           run_pdsch_simo_mrc_simulation()          ← MIMO_MODE=SIMO_MRC, CHANNEL_MODEL≠TDL (1x2, MRC)
+       │           run_pdsch_simo_mrc_tdl_simulation()      ← MIMO_MODE=SIMO_MRC, CHANNEL_MODEL=TDL (1x2, MRC, 주파수선택적)
+       │           run_pdsch_sm2x2_simulation()             ← MIMO_MODE=SM_2X2, CHANNEL_MODEL≠TDL (2x2, ZF/MMSE)
+       │           run_pdsch_sm2x2_tdl_simulation()         ← MIMO_MODE=SM_2X2, CHANNEL_MODEL=TDL (2x2, ZF/MMSE, 주파수선택적)
+       │           run_pdsch_tdl_simulation()               ← MIMO_MODE=SISO, CHANNEL_MODEL=TDL
+       │           run_pdsch_dmrs_simulation()              ← MIMO_MODE=SISO, CHANNEL_MODEL≠TDL (기본)
        ├─ PBCH   → run_pbch_simulation()
        ├─ PDCCH  → run_pdcch_simulation()
        ├─ CSIRS  → run_csirs_simulation()
        ├─ SRS    → run_srs_simulation()
+       ├─ PUSCH  → run_pusch_simulation()              ← UL, CHANNEL_MODEL≠TDL, TRANSFORM_PRECODING로 DFT-s-OFDM/CP-OFDM 토글
+       │           run_pusch_tdl_simulation()          ← CHANNEL_MODEL=TDL, TURBO/DFE 둘 다 비활성 (ZF/MMSE 둘 다 지원)
+       │           run_pusch_tdl_dfe_simulation()      ← CHANNEL_MODEL=TDL, PUSCH_DFE_ENABLE=1 (MMSE+DFE 연구 프로토타입)
+       │           run_pusch_tdl_turbo_simulation()    ← CHANNEL_MODEL=TDL, PUSCH_TURBO_ENABLE=1 (DFE_ENABLE보다 우선, MMSE+turbo 연구 프로토타입)
+       ├─ PUCCH  → run_pucch_format0_simulation()      ← PUCCH_FORMAT=0 (시퀀스 검출, AWGN 전용)
+       │           run_pucch_format1_simulation()      ← PUCCH_FORMAT=1, CHANNEL_MODEL≠TDL (시퀀스+반복결합)
+       │           run_pucch_format1_tdl_simulation()  ← PUCCH_FORMAT=1, CHANNEL_MODEL=TDL (반복마다 독립 채널, genie-aided MRC)
+       │           run_pucch_format2_simulation()      ← PUCCH_FORMAT=2 (Polar, 짧음, AWGN 전용)
+       │           run_pucch_format3_simulation()      ← PUCCH_FORMAT=3, CHANNEL_MODEL≠TDL (Polar+DFT-s-OFDM, 김)
+       │           run_pucch_format3_tdl_simulation()  ← PUCCH_FORMAT=3, CHANNEL_MODEL=TDL (genie-aided ZF/MMSE)
+       │           run_pucch_format1_tdl_harq_simulation() ← PUCCH_FORMAT=1, CHANNEL_MODEL=TDL, HARQ_ENABLE=1 (재전송마다 반복 옥카전 재드로우 후 누적, 무코딩이라 IR/Chase 무의미, genie bit-match로 종료 판정)
+       │           run_pucch_format3_tdl_harq_simulation() ← PUCCH_FORMAT=3, CHANNEL_MODEL=TDL, HARQ_ENABLE=1 (N=64 Polar mother codeword + rate_matching.c 범용 circular buffer IR/Chase, genie bit-match로 종료 판정)
+       ├─ PRACH  → run_prach_simulation()               ← PRACH_FORMAT=LONG/SHORT, CHANNEL_MODEL≠TDL (프리앰블 검출+TA 추정)
+       │           run_prach_tdl_simulation()           ← PRACH_FORMAT=LONG/SHORT, CHANNEL_MODEL=TDL (RE grid + 다경로 페이딩)
        └─ NONE   → run_legacy_sim()
 ```
+
+PUSCH/PUCCH 분기는 2026-07-14까지 `main.c`에 `#include`조차 없어 이 함수들
+전부가 config로 도달 불가능했다 (PDSCH에서 있었던 것과 같은 종류의 배선 누락,
+같은 날 함께 수정).
+
+PDSCH 분기는 `main.c`에서 `USE_DMRS`/`HARQ_ENABLE`/`MIMO_MODE`/`CHANNEL_MODEL`
+값으로 실제 라우팅된다 (2026-07-13까지는 이 배선이 빠져 있어 `run_pdsch_dmrs_simulation()`
+외의 PDSCH 함수들이 config로 도달 불가능한 상태였음). `HARQ_ENABLE=1`일 때는
+`MIMO_MODE`/`CHANNEL_MODEL`이 SM_2X2+TDL이면 세 기능이 전부 결합된
+`run_pdsch_sm2x2_tdl_harq_simulation()`으로, 그 외에는 SISO `run_pdsch_harq_simulation()`
+으로 라우팅된다. MIMO_MODE=SIMO_MRC+CHANNEL_MODEL=TDL이면 `run_pdsch_simo_mrc_tdl_harq_simulation()`으로
+간다 — 이로써 SIMO_MRC/SM_2X2 두 MIMO 모드 모두 TDL+HARQ 조합까지 커버됨.
 
 ---
 

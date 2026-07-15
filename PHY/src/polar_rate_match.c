@@ -1,3 +1,9 @@
+/* ================================================================
+ *  polar_rate_match.c
+ *  Polar rate matching/dematching (shortening/puncturing/repetition)
+ *
+ *  Author : Inseok Kang
+ * ================================================================ */
 #include "polar_rate_match.h"
 #include <stdlib.h>
 #include <string.h>
@@ -10,7 +16,7 @@ static const int sub_block_pattern[32] = {
 };
 
 /* Build pi[N]: sub-block interleaver indices for size N (N must be >= 32, power of 2) */
-static void build_interleaver(int N, int *pi) {
+void polar_interleaver(int N, int *pi) {
     int ratio = N / 32;
     int idx   = 0;
     for (int i = 0; i < 32; i++) {
@@ -24,7 +30,7 @@ void polar_rate_match(const int *coded, int N, int E, int K, int *out) {
     int *interleaved = (int *)malloc(N * sizeof(int));
     if (N >= 32) {
         int *pi = (int *)malloc(N * sizeof(int));
-        build_interleaver(N, pi);
+        polar_interleaver(N, pi);
         for (int i = 0; i < N; i++) interleaved[i] = coded[pi[i]];
         free(pi);
     } else {
@@ -64,7 +70,7 @@ void polar_rate_dematch(const double *llr_in, int E, int N, int K,
 
     if (N >= 32) {
         int *pi = (int *)malloc(N * sizeof(int));
-        build_interleaver(N, pi);
+        polar_interleaver(N, pi);
         for (int i = 0; i < N; i++) llr_out[pi[i]] = deinterleaved[i];
         free(pi);
     } else {

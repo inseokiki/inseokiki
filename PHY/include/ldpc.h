@@ -1,3 +1,9 @@
+/* ================================================================
+ *  ldpc.h
+ *  LDPC encoder/decoder (data channel)
+ *
+ *  Author : Inseok Kang
+ * ================================================================ */
 #ifndef LDPC_H
 #define LDPC_H
 
@@ -29,5 +35,12 @@ void ldpc_encode(const LDPCCodec *ldpc, const int *info, int *coded);
 /* decode: llr[coded_size] -> decoded[info_size].  Returns 0 on success. */
 int  ldpc_decode(const LDPCCodec *ldpc, const double *llr,
                  int max_iter, int *decoded);
+
+/* Same as ldpc_decode(), but also writes the belief-propagation posterior
+   LLR for every coded bit (coded_size, systematic+parity) to
+   posterior_llr_out (pass NULL to skip -- ldpc_decode() does this).
+   Used for turbo equalization: extrinsic[v] = posterior_llr_out[v] - llr[v]. */
+int  ldpc_decode_soft(const LDPCCodec *ldpc, const double *llr,
+                      int max_iter, int *decoded, double *posterior_llr_out);
 
 #endif

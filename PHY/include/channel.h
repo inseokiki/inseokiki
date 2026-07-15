@@ -1,3 +1,9 @@
+/* ================================================================
+ *  channel.h
+ *  AWGN and flat-fading channel models
+ *
+ *  Author : Inseok Kang
+ * ================================================================ */
 #ifndef CHANNEL_H
 #define CHANNEL_H
 

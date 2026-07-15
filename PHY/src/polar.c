@@ -1,4 +1,11 @@
+/* ================================================================
+ *  polar.c
+ *  Polar encoder/decoder (control channel)
+ *
+ *  Author : Inseok Kang
+ * ================================================================ */
 #include "polar.h"
+#include "polar_rate_match.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -11,7 +18,7 @@ static int cmp_pair(const void *a, const void *b) {
     return (pa->val > pb->val) - (pa->val < pb->val);
 }
 
-static void generate_frozen_bits(PolarCodec *pc) {
+static void generate_frozen_bits(PolarCodec *pc, int E) {
     int N = pc->N;
     double *z = (double *)malloc(N * sizeof(double));
     z[0] = 0.5;
@@ -27,9 +34,29 @@ static void generate_frozen_bits(PolarCodec *pc) {
         free(nz);
     }
 
+    /* TS 38.212 5.4.1.1 shortening (E<N, K/E>7/16): rate matching drops
+       the interleaved tail interleaved[E..N-1] and the decoder treats
+       those original bit positions as known-zero. They must be forced
+       frozen here -- ranked as maximally unreliable -- so they're never
+       chosen as info bits (see polar.h comment on polar_init). */
+    int *forced_zero = (int *)calloc(N, sizeof(int));
+    if (E > 0 && E < N) {
+        double r = (double)pc->K / E;
+        if (r > 7.0 / 16.0) {
+            int *pi = (int *)malloc(N * sizeof(int));
+            polar_interleaver(N, pi);
+            for (int i = E; i < N; i++) forced_zero[pi[i]] = 1;
+            free(pi);
+        }
+    }
+
     PairDI *order = (PairDI *)malloc(N * sizeof(PairDI));
-    for (int i = 0; i < N; i++) { order[i].val = z[i]; order[i].idx = i; }
+    for (int i = 0; i < N; i++) {
+        order[i].idx = i;
+        order[i].val = forced_zero[i] ? 1e9 : z[i];
+    }
     qsort(order, N, sizeof(PairDI), cmp_pair);
+    free(forced_zero);
 
     for (int i = 0; i < pc->K; i++)
         pc->info_indices[i] = order[i].idx;
@@ -51,12 +78,12 @@ static void generate_frozen_bits(PolarCodec *pc) {
     free(z); free(order);
 }
 
-void polar_init(PolarCodec *pc, int N, int K) {
+void polar_init(PolarCodec *pc, int N, int K, int E) {
     pc->N           = N;
     pc->K           = K;
     pc->info_indices = (int *)malloc(K * sizeof(int));
     pc->frozen_mask  = (int *)malloc(N * sizeof(int));
-    generate_frozen_bits(pc);
+    generate_frozen_bits(pc, E);
 }
 
 void polar_free(PolarCodec *pc) {

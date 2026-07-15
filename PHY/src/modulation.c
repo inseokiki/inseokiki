@@ -1,3 +1,9 @@
+/* ================================================================
+ *  modulation.c
+ *  QAM modulation/demodulation, LLR demapping, soft symbols for turbo eq.
+ *
+ *  Author : Inseok Kang
+ * ================================================================ */
 #include "modulation.h"
 #include <math.h>
 #include <float.h>
@@ -149,6 +155,57 @@ void qam_demap_llr_mmse(const cx_t *rx, int n, const char *mod,
             llr[i*bps + 2*k]     = sc * (m1I - m0I);
             llr[i*bps + 2*k + 1] = sc * (m1Q - m0Q);
         }
+    }
+}
+
+static double stable_sigmoid(double x) {
+    if (x >= 0) { double e = exp(-x); return 1.0 / (1.0 + e); }
+    else        { double e = exp(x);  return e / (1.0 + e); }
+}
+
+/* Soft-symbol statistics from a priori bit LLRs (turbo equalization).
+ * P(bit=0) = sigmoid(LLR) (standard LLR=log(P0/P1) convention, matching
+ * qam_demap_llr's sign). Per I/Q rail, enumerate the same PAM table
+ * qam_demap_llr() uses and weight each level by the product of its bits'
+ * probabilities -- exact for this codebase's separable I/Q PAM
+ * construction, independent of whether the mapping is Gray or not. */
+void qam_soft_symbol(const double *llr_apriori, int n, const char *mod,
+                     cx_t *mean_out, double *var_out) {
+    int bps = get_bits_per_symbol(mod);
+    int bpd = bps / 2;
+    double nm = norm_factor(bps);
+    PamEntry t[16];
+    build_pam_table(t, bpd);
+    int nl = 1 << bpd;
+    double lv[16];
+    for (int j = 0; j < nl; j++) lv[j] = t[j].level * nm;
+
+    for (int i = 0; i < n; i++) {
+        int off = i * bps;
+        double p0I[4], p0Q[4];
+        for (int k = 0; k < bpd; k++) {
+            p0I[k] = stable_sigmoid(llr_apriori[off + 2*k]);
+            p0Q[k] = stable_sigmoid(llr_apriori[off + 2*k + 1]);
+        }
+        double meanI=0.0, meanQ=0.0, msqI=0.0, msqQ=0.0, sumI=0.0, sumQ=0.0;
+        for (int j = 0; j < nl; j++) {
+            double probI = 1.0, probQ = 1.0;
+            for (int k = 0; k < bpd; k++) {
+                int bv = (t[j].bits >> (bpd - 1 - k)) & 1;
+                probI *= bv ? (1.0 - p0I[k]) : p0I[k];
+                probQ *= bv ? (1.0 - p0Q[k]) : p0Q[k];
+            }
+            meanI += probI * lv[j]; sumI += probI; msqI += probI * lv[j]*lv[j];
+            meanQ += probQ * lv[j]; sumQ += probQ; msqQ += probQ * lv[j]*lv[j];
+        }
+        if (sumI < 1e-300) sumI = 1e-300;
+        if (sumQ < 1e-300) sumQ = 1e-300;
+        meanI /= sumI; msqI /= sumI;
+        meanQ /= sumQ; msqQ /= sumQ;
+        double varI = msqI - meanI*meanI; if (varI < 0.0) varI = 0.0;
+        double varQ = msqQ - meanQ*meanQ; if (varQ < 0.0) varQ = 0.0;
+        mean_out[i] = CX_MAKE(meanI, meanQ);
+        var_out[i]  = varI + varQ;
     }
 }
 

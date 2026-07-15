@@ -1,3 +1,9 @@
+/* ================================================================
+ *  ofdm.c
+ *  OFDM modulation/demodulation (FFT/IFFT)
+ *
+ *  Author : Inseok Kang
+ * ================================================================ */
 #include "ofdm.h"
 #include <math.h>
 #include <stdlib.h>

@@ -1,3 +1,9 @@
+/* ================================================================
+ *  pbch.c
+ *  PBCH simulation loop
+ *
+ *  Author : Inseok Kang
+ * ================================================================ */
 #include "pbch.h"
 #include "crc.h"
 #include "polar.h"
@@ -26,7 +32,7 @@ void run_pbch_simulation(const L1Config *cfg) {
     printf("Trials per SNR: %d\n\n", cfg->numTrials);
 
     PolarCodec polar;
-    polar_init(&polar, N, K);
+    polar_init(&polar, N, K, E);
 
     int *payload_bits   = (int *)malloc(payload * sizeof(int));
     int *with_crc       = (int *)malloc((payload + crc_bits) * sizeof(int));

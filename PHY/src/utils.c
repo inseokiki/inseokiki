@@ -1,3 +1,9 @@
+/* ================================================================
+ *  utils.c
+ *  Common utilities -- RNG, complex type, misc helpers
+ *
+ *  Author : Inseok Kang
+ * ================================================================ */
 #include "utils.h"
 #include <stdlib.h>
 #include <math.h>
@@ -40,6 +46,11 @@ double randn(void) {
 void gen_random_bits(int *out, int n) {
     for (int i = 0; i < n; i++)
         out[i] = (int)(rng_next() & 1);
+}
+
+int rand_uniform_int(int n) {
+    if (n <= 1) return 0;
+    return (int)(rng_uniform() * n);
 }
 
 double calc_ber(const int *tx, const int *rx, int n) {

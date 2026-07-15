@@ -36,10 +36,11 @@ SNR_START = 0
 SNR_END = 14
 SNR_STEP = 1
 
-# Channel Model: AWGN, FLAT_FADING
+# Channel Model: AWGN, FLAT_FADING, TDL (frequency-selective, PDSCH+DMRS only,
+# approx 6-tap NLOS profile -- see TDL_DELAY_SPREAD_NS below)
 CHANNEL_MODEL = AWGN
 
-# Physical Channel: NONE, PBCH, PDCCH, PDSCH
+# Physical Channel: NONE, PBCH, PDCCH, PDSCH, CSIRS, SRS, PUSCH, PUCCH, PRACH
 PHYSICAL_CHANNEL = NONE
 
 # Transport Block Size (0 = auto, max 8424 for single CB)
@@ -53,6 +54,71 @@ USE_DMRS = 0
 
 # Equalizer type: ZF or MMSE
 EQUALIZER = MMSE
+
+# MIMO Mode (PDSCH + USE_DMRS path only): SISO, SIMO_MRC (1x2 receive diversity),
+# SM_2X2 (2-layer spatial multiplexing, detector = EQUALIZER)
+MIMO_MODE = SISO
+
+# HARQ (PDSCH + USE_DMRS path; takes priority over MIMO_MODE if enabled)
+HARQ_ENABLE = 0
+HARQ_MAX_RETX = 4
+HARQ_RV_SEQUENCE = IR
+
+# TDL RMS delay spread (ns), only used when CHANNEL_MODEL=TDL.
+# Approximate 6-tap NLOS profile, NOT the exact TS 38.901 Table 7.7.2-x
+# coefficients (implementation-defined approximation, see STRUCTURE.md).
+TDL_DELAY_SPREAD_NS = 300
+
+# PUSCH transform precoding (DFT-s-OFDM): 1=ON (low-PAPR UL waveform,
+# spec default), 0=OFF (plain CP-OFDM, same chain as PDSCH+DMRS -- useful
+# for A/B comparison). Only affects PHYSICAL_CHANNEL=PUSCH.
+TRANSFORM_PRECODING = 1
+
+# PUSCH decision-feedback equalization (DFE) research prototype: 1=ON, only
+# takes effect when CHANNEL_MODEL=TDL (forces MMSE+DFT-s-OFDM internally,
+# ignoring EQUALIZER/TRANSFORM_PRECODING -- see STRUCTURE.md). Reports
+# BLER with vs without residual-ISI cancellation side by side.
+PUSCH_DFE_ENABLE = 0
+
+# PUSCH turbo equalization research prototype: 1=ON, only takes effect when
+# CHANNEL_MODEL=TDL (takes priority over PUSCH_DFE_ENABLE if both set;
+# forces MMSE+DFT-s-OFDM internally -- see STRUCTURE.md). Iteratively
+# exchanges soft (extrinsic) LLRs between the equalizer and LDPC decoder.
+# Reports BLER(noDFE)/BLER(hardDFE)/BLER(turbo) side by side.
+PUSCH_TURBO_ENABLE = 0
+PUSCH_TURBO_ITERS = 3
+
+# PUCCH (uplink control -- see STRUCTURE.md)
+# Format: 0=sequence ACK/NACK (<=2 UCI bits), 1=0 + symbol repetition,
+# 2=short coded UCI (>2 bits, QPSK), 3=2 + transform precoding (long)
+# CHANNEL_MODEL=TDL only affects Format 1/3 (genie-aided CSI); Format 0/2
+# remain AWGN-only regardless of CHANNEL_MODEL. HARQ_ENABLE=1 additionally
+# combines with Format 1/3 + TDL (retransmission loop, genie bit-match
+# stands in for the CRC that PUCCH UCI doesn't have in the spec).
+PUCCH_FORMAT = 0
+PUCCH_UCI_BITS = 1
+PUCCH_NUM_SYMBOLS = 4
+PUCCH_NUM_PRB = 1
+
+# PRACH (UL random access -- see STRUCTURE.md). Sequence-domain only, no
+# time-domain IFFT/CP/guard-time (implementation-defined simplification,
+# same style as SRS/PUCCH F0). L_RA is prime for both formats so the ZC
+# formula is exact (unlike PUCCH's length-12 approximation). Single root
+# sequence only. CHANNEL_MODEL=TDL maps the same ZC samples onto an RE
+# grid at PRACH's own subcarrier spacing and layers real multipath fading
+# on top of the propagation-delay model (degrades TA estimation with a
+# noise floor that doesn't vanish at high SNR, unlike the AWGN-only path).
+# Format: LONG (L_RA=839) or SHORT (L_RA=139, faster to simulate).
+PRACH_FORMAT = SHORT
+# Root sequence index u (must be coprime with L_RA; any value works since
+# L_RA is prime).
+PRACH_ROOT_SEQ_INDEX = 1
+# N_CS: cyclic-shift spacing (samples) between preambles from this root;
+# num_preambles = L_RA / N_CS.
+PRACH_NUM_CS = 13
+# Max true propagation delay (samples) drawn per trial for TA estimation;
+# must be < PRACH_NUM_CS to stay unambiguous within one preamble's zone.
+PRACH_MAX_DELAY_SAMPLES = 8
 
 # IQ Symbol Dump (for constellation plot and EVM)
 IQ_DUMP = 1

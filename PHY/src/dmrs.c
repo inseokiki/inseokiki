@@ -1,3 +1,9 @@
+/* ================================================================
+ *  dmrs.c
+ *  DMRS pilot sequence generation and RE index mapping
+ *
+ *  Author : Inseok Kang
+ * ================================================================ */
 #include "dmrs.h"
 #include <math.h>
 #include <stdlib.h>

@@ -1,3 +1,9 @@
+/* ================================================================
+ *  csi_rs.c
+ *  CSI-RS channel estimation simulation
+ *
+ *  Author : Inseok Kang
+ * ================================================================ */
 #include "csi_rs.h"
 #include "dmrs.h"
 #include "channel_estimation.h"

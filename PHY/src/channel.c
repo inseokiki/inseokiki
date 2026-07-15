@@ -1,3 +1,9 @@
+/* ================================================================
+ *  channel.c
+ *  AWGN and flat-fading channel models
+ *
+ *  Author : Inseok Kang
+ * ================================================================ */
 #include "channel.h"
 #include <math.h>
 #include <stdlib.h>

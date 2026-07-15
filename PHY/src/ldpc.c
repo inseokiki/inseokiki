@@ -1,3 +1,9 @@
+/* ================================================================
+ *  ldpc.c
+ *  LDPC encoder/decoder (data channel)
+ *
+ *  Author : Inseok Kang
+ * ================================================================ */
 #include "ldpc.h"
 #include <stdlib.h>
 #include <string.h>
@@ -94,8 +100,8 @@ void ldpc_encode(const LDPCCodec *ldpc, const int *info, int *coded) {
     }
 }
 
-int ldpc_decode(const LDPCCodec *ldpc, const double *llr,
-                int max_iter, int *decoded) {
+int ldpc_decode_soft(const LDPCCodec *ldpc, const double *llr,
+                     int max_iter, int *decoded, double *posterior_llr_out) {
     int nc = ldpc->num_parity, nv = ldpc->coded_size;
     double *v2c = (double *)malloc(nv * sizeof(double));
     double *c2v = (double *)calloc(ldpc->H_nnz, sizeof(double));
@@ -133,7 +139,14 @@ int ldpc_decode(const LDPCCodec *ldpc, const double *llr,
 
     for (int i = 0; i < ldpc->info_size; i++)
         decoded[i] = (v2c[i] < 0) ? 1 : 0;
+    if (posterior_llr_out)
+        memcpy(posterior_llr_out, v2c, nv * sizeof(double));
 
     free(v2c); free(c2v);
     return 0;
+}
+
+int ldpc_decode(const LDPCCodec *ldpc, const double *llr,
+                int max_iter, int *decoded) {
+    return ldpc_decode_soft(ldpc, llr, max_iter, decoded, NULL);
 }

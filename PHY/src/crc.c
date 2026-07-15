@@ -1,3 +1,9 @@
+/* ================================================================
+ *  crc.c
+ *  CRC-24A / CRC-24C generation and checking
+ *
+ *  Author : Inseok Kang
+ * ================================================================ */
 #include "crc.h"
 #include <stdlib.h>
 #include <string.h>

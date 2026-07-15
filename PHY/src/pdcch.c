@@ -1,3 +1,9 @@
+/* ================================================================
+ *  pdcch.c
+ *  PDCCH simulation loop (with blind decoding)
+ *
+ *  Author : Inseok Kang
+ * ================================================================ */
 #include "pdcch.h"
 #include "crc.h"
 #include "polar.h"
@@ -127,7 +133,7 @@ void run_pdcch_simulation(const L1Config *cfg) {
             attach_crc_rnti(dci, dci_size, CRC24C, rnti, dci_crc);
 
             PolarCodec polar_tx;
-            polar_init(&polar_tx, N_tx, K);
+            polar_init(&polar_tx, N_tx, K, E_tx);
             polar_encode(&polar_tx, dci_crc, coded);
             polar_free(&polar_tx);
 
@@ -164,7 +170,7 @@ void run_pdcch_simulation(const L1Config *cfg) {
                 free(rm_c);
 
                 PolarCodec polar_rx;
-                polar_init(&polar_rx, N_c, K);
+                polar_init(&polar_rx, N_c, K, E_c);
                 polar_decode(&polar_rx, dm, dec);
                 polar_free(&polar_rx);
 

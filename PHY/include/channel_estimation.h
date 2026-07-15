@@ -1,3 +1,9 @@
+/* ================================================================
+ *  channel_estimation.h
+ *  LS channel estimation, interpolation, ZF/MMSE equalization
+ *
+ *  Author : Inseok Kang
+ * ================================================================ */
 #ifndef CHANNEL_ESTIMATION_H
 #define CHANNEL_ESTIMATION_H
 

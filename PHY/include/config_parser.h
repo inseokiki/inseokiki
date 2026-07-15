@@ -1,3 +1,9 @@
+/* ================================================================
+ *  config_parser.h
+ *  Config file parser + MCS-based automatic parameter derivation
+ *
+ *  Author : Inseok Kang
+ * ================================================================ */
 #ifndef CONFIG_PARSER_H
 #define CONFIG_PARSER_H
 
@@ -33,6 +39,19 @@ typedef struct {
     int    numBits;
     int    useDmrs;
     char   equalizer[CFG_STR_MAX];
+    char   mimoMode[CFG_STR_MAX];
+    int    harqEnable;
+    int    harqMaxRetx;
+    char   harqRvSeq[CFG_STR_MAX];
+    double tdlDelaySpreadNs;
+    int    transformPrecoding;
+    int    puschDfeEnable;
+    int    puschTurboEnable;
+    int    puschTurboIters;
+    int    pucchFormat;
+    int    pucchUciBits;
+    int    pucchNumSymbols;
+    int    pucchNumPrb;
     int    csirsRow;
     int    csirsScramID;
     int    csirsSymbol;
@@ -49,6 +68,10 @@ typedef struct {
     int    iqDumpTrials;
     int    numSubcarriers;
     double samplingRate;
+    char   prachFormat[CFG_STR_MAX];
+    int    prachRootSeqIndex;
+    int    prachNumCs;
+    int    prachMaxDelaySamples;
 } L1Config;
 
 typedef struct {

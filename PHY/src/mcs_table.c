@@ -1,3 +1,9 @@
+/* ================================================================
+ *  mcs_table.c
+ *  TS 38.214 MCS index -> modulation/code-rate tables (3 variants)
+ *
+ *  Author : Inseok Kang
+ * ================================================================ */
 #include "mcs_table.h"
 #include <string.h>
 
