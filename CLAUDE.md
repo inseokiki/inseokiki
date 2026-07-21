@@ -288,6 +288,43 @@ git log --oneline develop..origin/develop   # 원격이 앞서 있으면 확인
     2번(PRACH OFDM 그리드 정교화)도 완료 — 다음 후속과제 없음, 새 항목은
     아래 진행 예정 참조
 
+- **PHY LLS — 4×4 SU-MIMO 공간 다중화 (SM_4X4) 추가 (2026-07-21)**
+  - `mimo_channel_draw/apply_4x4`, `mimo_zf/mmse_detect_4x4` 구현
+  - 4×4 Gauss-Jordan 역행렬(`inv4x4`, 부분 피벗팅) — 4×4 MMSE의 핵심
+  - MMSE de-biasing: WH = I − N₀·A⁻¹ 항등식으로 α_t를 A⁻¹ 대각만으로 계산 (W 행렬 전체 불필요)
+  - FDM 파일럿 설계: 6·num_rb 파일럿을 4 레이어에 라운드로빈 분배 (nppl = floor / 4)
+  - `run_pdsch_sm4x4_simulation()` — 레이어별 독립 코드워드, DMRS LS 채널 추정
+
+- **PHY LLS — Type I SP 4포트 CSI-RS 코드북 생성기 (2026-07-21)**
+  - 표준: TS 38.214 Sec 5.2.2.2.1 (N1=2, N2=1, Ng=2, O1=4, P=4)
+  - DFT 빔 벡터: v_l = [1, e^{jπl/4}]^T, 코피에이징: φ_n = e^{jπn/2}
+  - Rank-1 (32 코드워드): W = (1/2)[v_l; φ_n·v_l]
+  - Rank-2 변형A (16): 직교 빔쌍 (l, l+4), v_l^H v_{l+4} = 0 수학적 보장
+  - Rank-2 변형B (32): 동일빔 교차편파, 부호 반전으로 직교성 확보
+  - `codebook_type1_sp_4port_pmi_search()`: rank-1 PMI 전수탐색 (기존 4Rx 호환)
+  - 검증: 전 80 코드워드 ||W[:,j]||²=1, 직교성 <1e-10 확인
+
+- **PHY LLS — RI+PMI 동시 적응 선택 (CL_4PORT) 추가 (2026-07-22)**
+  - `codebook_type1_sp_4port_ri_pmi_select()`: 80 후보 전수탐색, adaptive/R1-best/R2-best 동시 반환
+    - Rank-1: C₁ = log₂(1 + ||H·W||²/N₀)
+    - Rank-2: C₂ = Σ_l log₂(1 + α_l/(1−α_l)), α_l = 1 − N₀·(A⁻¹)_ll (2×2 Gramian)
+  - `mrc_combine_4rx()`: 4-Rx MRC (rank-1 프리코딩 후 유효 채널에 적용)
+  - `mimo_mmse_detect_4rx2()`: 4Rx×2Layer 과결정 MMSE (2×2 Gramian으로 축소, inv2x2 재사용)
+  - `run_pdsch_cl_4port_simulation()`: adaptive/R1-fixed/R2-fixed BLER 3열 동시 출력 + 공정 비교
+    (동일 채널 H, 동일 노이즈 n, 동일 정보 비트) — iid Rayleigh 4×4에서 R1선택률=0% 검증됨
+    (iid 채널은 항상 rank-2 용량이 우세 — 공간 상관 채널에서 rank-1 선택 발생)
+
+- **PHY LLS — UL Closed-Loop Power Control (ULPC) 추가 (2026-07-22)**
+  - 표준: TS 38.213 §7.2.1 PUSCH 전력 제어
+  - 전력 공식: P_tx(i) = min(P_CMAX, P_0 + α·PL + f(i)) [dBm]
+  - TPC 명령: δ ∈ {−1, 0, +1, +3} dB (Table 7.2.1-1), 데드밴드 ±0.5dB, genie-aided
+  - f(i) = f(i-1) + δ 누산, ±30dB 클램프 (구현 정의)
+  - 출력 Part 1: 시계열 수렴 (고정 PL) — OL vs CL P_tx/SINR/f(i)/TPC 서브프레임별
+  - 출력 Part 2: PL 스윕 — OL vs CL 정상상태 비교, P_CMAX 클램핑 구간 표시
+  - 출력 Part 3: α 설계 함의 — P_CMAX 한계 PL = P_CMAX − SINR_target − N_floor
+  - α=0.8 검증: PL=100dB에서 f_ss=14dB, SINR_CL=+10.4dB (목표 10dB), 6SF만에 수렴
+  - P_CMAX=23dBm (NR Power Class 3, TS 38.101-1), 클램핑 한계 PL=124.4dB
+
 ### 🏠 사이드 프로젝트
 - **PHY Link Level Simulator (LLS) 자체 개발**
   - 개인 프로젝트로 지속 개발 중
@@ -297,12 +334,11 @@ git log --oneline develop..origin/develop   # 원격이 앞서 있으면 확인
 
 ### 🔄 진행 예정
 - **PHY LLS 후속 과제**
-  - PRACH 추가, PDSCH 내 TDL×MIMO×HARQ 조합, TDL→PUSCH/PUCCH(F1/F3) 확장,
-    MMSE+TDL+PUSCH precoding 비선형(DFE) 등화 탐색, turbo 등화 확장 모두 완료 (위 참조)
-  - 확정 순서(2026-07-14)의 두 항목 모두 완료: 1) PUCCH F1/F3+TDL을
-    SIMO_MRC+TDL+HARQ처럼 HARQ와도 결합 2) PRACH를 실제 OFDM 그리드(RE)+TDL
-    다경로 기반으로 정교화 (위 참조). 현재 후속 과제 없음 — 다음 작업은
-    새로 논의 필요
+  - PRACH, PDSCH TDL×MIMO×HARQ 조합, TDL→PUSCH/PUCCH, DFE/Turbo 등화,
+    4×4 SM, Type I SP 코드북, RI+PMI 적응 선택, UL CLPC 모두 완료 (위 참조)
+  - 현재 확정된 후속 과제 없음 — 다음 작업은 새로 논의 필요
+  - 후보 방향: 공간 상관 채널에서 CL_4PORT rank-1 선택 거동 검증,
+    UL CLPC에 채널 페이딩/이동성(시변 PL) 추가, MU-MIMO 확장
 
 - **NVIDIA Aerial SDK 연동 — 보류(사용자 명시적 결정, 2026-07-14): 연동하지 않기로 함**
 
@@ -366,6 +402,10 @@ git log --oneline develop..origin/develop   # 원격이 앞서 있으면 확인
 | 2026-07-14 | PHY LLS: PRACH를 RE grid + TDL 다경로로 정교화 — 순환시프트=DFT shift 정리로 연속시간 지연과 등가임을 이용, 검출 알고리즘 무변경으로 tdl.c만 추가 |
 | 2026-07-15 | PHY LLS: 전체 소스/헤더 파일(52개, `PHY/src/*.c` + `PHY/include/*.h`)에 박스형 파일 헤더 배너 추가 (파일명 + 한 줄 설명 + `Author: Inseok Kang`) |
 | 2026-07-15 | git: `origin/develop`이 별도 세션/기기에서 `PHY/common`+`PHY/lls_sim`+`PHY/ber_sim` 구조로 재구조화된 채 갈라져 있던 것을 발견 — 기능 자체(PUCCH/PRACH/PUSCH/MIMO/HARQ 등)는 로컬 WSL 작업이 최신이라 판단해, 원격의 재구조화 히스토리는 `origin/archive/common-lls-sim-refactor` 브랜치로 보존하고 로컬 기준으로 `develop`을 force-push. 이후 세션은 이 저장소의 `PHY/src`/`PHY/include` 평면 구조가 기준임 |
+| 2026-07-21 | PHY LLS: 4×4 SU-MIMO 공간 다중화(SM_4X4) 추가 — Gauss-Jordan 4×4 역행렬, ZF/MMSE 검출, FDM 파일럿 레이어별 분배 |
+| 2026-07-21 | PHY LLS: Type I SP 4포트 코드북 생성기 추가 — TS 38.214 Sec 5.2.2.2.1, rank-1(32) + rank-2 변형A/B(48), 전 80 코드워드 검증 |
+| 2026-07-22 | PHY LLS: RI+PMI 동시 적응 선택(CL_4PORT) 추가 — 추정 Shannon 용량 기준 80후보 전수탐색, mrc_combine_4rx / mimo_mmse_detect_4rx2 신규, adaptive/R1-fixed/R2-fixed BLER 3열 비교 출력 |
+| 2026-07-22 | PHY LLS: UL Closed-Loop Power Control(ULPC) 추가 — TS 38.213 §7.2.1, TPC {-1,0,+1,+3}dB genie-aided, 시계열 수렴 + PL 스윕 + α=0.8 설계 함의 출력, P_CMAX=23dBm (NR Power Class 3) |
 
 ---
 
