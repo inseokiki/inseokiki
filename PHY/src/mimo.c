@@ -1,6 +1,6 @@
 /* ================================================================
  *  mimo.c
- *  2x2 SU-MIMO channel model + MRC/ZF/MMSE detection
+ *  SU-MIMO channel model + MRC/ZF/MMSE detection (2x2 and 4x4)
  *
  *  Author : Inseok Kang
  * ================================================================ */
@@ -101,4 +101,137 @@ void mimo_mmse_detect(cx_t h[2][2], const cx_t y[2], double N0,
     x_hat[1] = xs1 / a1;
     noise_var[0] = (1.0 - a0) / a0;
     noise_var[1] = (1.0 - a1) / a1;
+}
+
+/* ── 4×4 헬퍼: Gauss-Jordan 역행렬 ─────────────────────────────────────────
+ *
+ * 입력 행렬 M을 변형하지 않고 [M | I] 형태의 증가 행렬에서 역행렬을 계산.
+ * 리턴 -1: 특이 행렬 (pivot 절댓값 < 1e-14).
+ *
+ * 수식: [M | I] → [I | M⁻¹]  (부분 피벗팅 적용)
+ * ─────────────────────────────────────────────────────────────────────────── */
+static int inv4x4(const cx_t M[4][4], cx_t inv[4][4]) {
+    cx_t aug[4][8];
+    for (int r = 0; r < 4; r++) {
+        for (int c = 0; c < 4; c++) aug[r][c] = M[r][c];
+        for (int c = 0; c < 4; c++) aug[r][c + 4] = (r == c) ? 1.0 : 0.0;
+    }
+
+    for (int col = 0; col < 4; col++) {
+        /* 부분 피벗: 가장 큰 원소가 있는 행을 현재 행으로 교환 */
+        int    pivot_row = col;
+        double max_abs   = cabs(aug[col][col]);
+        for (int r = col + 1; r < 4; r++) {
+            double v = cabs(aug[r][col]);
+            if (v > max_abs) { max_abs = v; pivot_row = r; }
+        }
+        if (max_abs < 1e-14) return -1;   /* 특이 행렬 */
+        if (pivot_row != col)
+            for (int c = 0; c < 8; c++) {
+                cx_t tmp = aug[col][c]; aug[col][c] = aug[pivot_row][c]; aug[pivot_row][c] = tmp;
+            }
+
+        /* pivot 행 정규화 (대각 원소를 1로) */
+        cx_t piv_inv = 1.0 / aug[col][col];
+        for (int c = 0; c < 8; c++) aug[col][c] *= piv_inv;
+
+        /* 다른 모든 행의 col 열을 0으로 소거 */
+        for (int r = 0; r < 4; r++) {
+            if (r == col) continue;
+            cx_t factor = aug[r][col];
+            for (int c = 0; c < 8; c++) aug[r][c] -= factor * aug[col][c];
+        }
+    }
+
+    for (int r = 0; r < 4; r++)
+        for (int c = 0; c < 4; c++)
+            inv[r][c] = aug[r][c + 4];
+    return 0;
+}
+
+void mimo_channel_draw_4x4(cx_t h[4][4]) {
+    double inv_sq2 = 1.0 / sqrt(2.0);
+    for (int r = 0; r < 4; r++)
+        for (int t = 0; t < 4; t++)
+            h[r][t] = CX_MAKE(randn() * inv_sq2, randn() * inv_sq2);
+}
+
+void mimo_channel_apply_4x4(const MIMOChannel *ch, cx_t h[4][4],
+                             const cx_t tx[4], cx_t y[4]) {
+    double snrlin = pow(10.0, ch->snr_db / 10.0);
+    double sigma  = sqrt(1.0 / (2.0 * snrlin));
+    for (int r = 0; r < 4; r++) {
+        cx_t s = 0;
+        for (int t = 0; t < 4; t++) s += h[r][t] * tx[t];
+        y[r] = s + CX_MAKE(randn() * sigma, randn() * sigma);
+    }
+}
+
+/* ── 4×4 ZF 검출: x_hat = H⁻¹ y ──────────────────────────────────────────
+ *
+ * noise_var[t] = N0 · Σ_r |H⁻¹[t][r]|²  (t번째 행의 노이즈 증폭)
+ * ─────────────────────────────────────────────────────────────────────────── */
+void mimo_zf_detect_4x4(cx_t h[4][4], const cx_t y[4], double N0,
+                          cx_t x_hat[4], double noise_var[4]) {
+    cx_t hinv[4][4];
+    if (inv4x4(h, hinv) < 0) {
+        for (int t = 0; t < 4; t++) { x_hat[t] = CX_ZERO; noise_var[t] = N0; }
+        return;
+    }
+    for (int t = 0; t < 4; t++) {
+        cx_t s   = 0;
+        double nv = 0;
+        for (int r = 0; r < 4; r++) {
+            s  += hinv[t][r] * y[r];
+            nv += CX_NORM(hinv[t][r]);
+        }
+        x_hat[t]    = s;
+        noise_var[t] = N0 * nv;
+    }
+}
+
+/* ── 4×4 MMSE 검출: W = (H^H H + N0 I)⁻¹ H^H ──────────────────────────────
+ *
+ * A      = H^H H + N0·I  (4×4 Gramian, 양정치 에르미트 행렬)
+ * b      = H^H y          (4×1)
+ * x_biased = A⁻¹ b       (편향 추정)
+ * WH     = A⁻¹(A - N0·I) = I - N0·A⁻¹
+ * α_t    = 1 - N0·Re{(A⁻¹)_tt}  (편향 계수)
+ * x_hat[t]      = x_biased[t] / α_t
+ * noise_var[t]  = (1 - α_t) / α_t
+ * ─────────────────────────────────────────────────────────────────────────── */
+void mimo_mmse_detect_4x4(cx_t h[4][4], const cx_t y[4], double N0,
+                            cx_t x_hat[4], double noise_var[4]) {
+    /* A = H^H H + N0·I */
+    cx_t A[4][4];
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            A[i][j] = (i == j) ? (cx_t)N0 : 0.0;
+            for (int r = 0; r < 4; r++) A[i][j] += conj(h[r][i]) * h[r][j];
+        }
+    }
+
+    /* A⁻¹ */
+    cx_t Ainv[4][4];
+    if (inv4x4(A, Ainv) < 0) {
+        for (int t = 0; t < 4; t++) { x_hat[t] = CX_ZERO; noise_var[t] = N0; }
+        return;
+    }
+
+    /* b = H^H y,  x_biased = A⁻¹ b */
+    cx_t b[4] = {0, 0, 0, 0};
+    for (int i = 0; i < 4; i++)
+        for (int r = 0; r < 4; r++) b[i] += conj(h[r][i]) * y[r];
+
+    cx_t x_biased[4] = {0, 0, 0, 0};
+    for (int i = 0; i < 4; i++)
+        for (int j = 0; j < 4; j++) x_biased[i] += Ainv[i][j] * b[j];
+
+    /* α_t = 1 - N0·Re{(A⁻¹)_tt}  (WH = I - N0·A⁻¹ 에서 대각 원소 추출) */
+    for (int t = 0; t < 4; t++) {
+        double alpha = 1.0 - N0 * creal(Ainv[t][t]);
+        if (alpha < 1e-6) alpha = 1e-6;
+        x_hat[t]     = x_biased[t] / alpha;
+        noise_var[t] = (1.0 - alpha) / alpha;
+    }
 }

@@ -1724,3 +1724,221 @@ void run_pdsch_tdl_simulation(const L1Config *cfg) {
     free(rx_data); free(h_data); free(eq_data);
     free(allllr); free(llr); free(decoded); free(taps);
 }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+ * 4×4 SU-MIMO 공간 다중화 시뮬레이션 (블록-평탄 채널)
+ *
+ * 구조: 4 Tx 레이어 × 4 Rx 안테나, 각 레이어마다 독립 코드워드/LDPC
+ *
+ * 파일럿 설계: FDM 방식으로 6*num_rb 파일럿 위치를 4개 레이어에 라운드로빈
+ *   분배. 레이어 l의 파일럿 RE에서는 레이어 l만 DMRS를 송신하고 나머지 3개
+ *   레이어는 0을 송신 → 각 H[r][t]를 독립적으로 LS 추정 가능.
+ *   nppl = floor(6*num_rb / 4) (레이어당 파일럿 수)
+ *
+ * 채널 추정: 블록-평탄 가정 → pilot RE 전체 평균 LS
+ *   H_hat[r][t] = mean_p( rx_grid[r][pilotL[t][p]] / dmrsL[t][p] )
+ *
+ * 검출: ZF (H⁻¹y) 또는 MMSE (de-biased W = (H^H H + N0·I)⁻¹ H^H)
+ *   → 4×4 Gauss-Jordan 역행렬로 구현 (mimo.c: inv4x4)
+ * ─────────────────────────────────────────────────────────────────────────── */
+void run_pdsch_sm4x4_simulation(const L1Config *cfg) {
+    const int NL = 4;   /* 레이어(= Tx 안테나 = Rx 안테나) 수 */
+
+    int num_rb = cfg->numRB;
+    int active = num_rb * 12;
+
+    MCSTableType tbl = (strcmp(cfg->mcsTableType, "TABLE2") == 0) ? MCS_TABLE2 : MCS_TABLE1;
+    MCSEntry mcs = get_mcs_entry(cfg->mcsIndex, tbl);
+    double cr  = get_code_rate(&mcs);
+    int    bps = mcs.modulationOrder;
+    int    crc_bits = 24;
+
+    /* 파일럿 / 데이터 RE 인덱스 */
+    int num_pilots = 6 * num_rb;
+    int num_data   = 6 * num_rb;
+    int *pilot_pos = (int *)malloc(num_pilots * sizeof(int));
+    int *data_pos  = (int *)malloc(num_data   * sizeof(int));
+    dmrs_pilot_indices(num_rb, pilot_pos);
+    dmrs_data_indices(num_rb, data_pos);
+
+    /* 레이어별 파일럿 위치: 라운드로빈으로 분배 */
+    int nppl = num_pilots / NL;   /* 레이어당 파일럿 수 (나머지 버림) */
+    int *pilotL[NL];
+    cx_t *dmrsL[NL];
+    uint32_t seeds[4] = { 0x12345678u, 0x1abcdef2u, 0xdeadbeef, 0xcafebabe };
+    for (int l = 0; l < NL; l++) {
+        pilotL[l] = (int   *)malloc(nppl * sizeof(int));
+        dmrsL[l]  = (cx_t *)malloc(nppl * sizeof(cx_t));
+        for (int p = 0; p < nppl; p++)
+            pilotL[l][p] = pilot_pos[NL * p + l];   /* 4-way interleave */
+        dmrs_sequence(seeds[l], nppl, dmrsL[l]);
+    }
+
+    /* 코드워드 크기 (레이어마다 동일) */
+    int max_dbits = num_data * bps;
+    int tbsz = (int)(max_dbits * cr);
+    if (tbsz < 1)    tbsz = 1;
+    if (tbsz > 8424) tbsz = 8424;
+
+    int K    = tbsz + crc_bits;
+    LDPCCodec ldpc;
+    ldpc_init(&ldpc, K, cr);
+    int acsz  = ldpc.coded_size;
+    int padsz = acsz + ((acsz % bps) ? bps - acsz % bps : 0);
+    int nsym  = padsz / bps;
+    int nd    = (nsym < num_data) ? nsym : num_data;
+
+    int use_mmse = (strcmp(cfg->equalizer, "MMSE") == 0);
+
+    printf("=== PDSCH 4x4 Spatial Multiplexing (SM_4X4) ===\n");
+    printf("MCS Index    : %d (Table %s)\n", cfg->mcsIndex, cfg->mcsTableType);
+    printf("Modulation   : %s (Qm=%d)\n", mcs.modulation, bps);
+    printf("Code Rate    : %.4f\n", cr);
+    printf("Num RB       : %d\n", num_rb);
+    printf("Layers       : 4 (independent codewords per layer)\n");
+    printf("Tx/Rx Ants   : 4 / 4\n");
+    printf("TB Size/layer: %d bits\n", tbsz);
+    printf("Pilot/layer  : %d REs  (FDM, 4-way interleave)\n", nppl);
+    printf("Detector     : %s  (4x4 Gauss-Jordan inverse)\n",
+           use_mmse ? "MMSE" : "ZF");
+    printf("Trials/SNR   : %d\n\n", cfg->numTrials);
+
+    /* 레이어별 버퍼 */
+    int   *tb[NL], *tb_crc[NL], *coded[NL], *txbits[NL], *decoded_buf[NL];
+    cx_t  *syms[NL];
+    cx_t  *tx_grid[NL], *rx_grid[NL];
+    double *allllr[NL], *llr_buf[NL];
+    double nv_sum[NL];
+    cx_t  x_hat_re[NL];
+    double nv_re[NL];
+
+    for (int l = 0; l < NL; l++) {
+        tb[l]          = (int   *)malloc(tbsz * sizeof(int));
+        tb_crc[l]      = (int   *)malloc(K    * sizeof(int));
+        coded[l]       = (int   *)malloc(acsz * sizeof(int));
+        txbits[l]      = (int   *)malloc(padsz * sizeof(int));
+        syms[l]        = (cx_t *)malloc(nsym  * sizeof(cx_t));
+        tx_grid[l]     = (cx_t *)calloc(active, sizeof(cx_t));
+        rx_grid[l]     = (cx_t *)malloc(active * sizeof(cx_t));
+        allllr[l]      = (double *)malloc(padsz * sizeof(double));
+        llr_buf[l]     = (double *)malloc(acsz  * sizeof(double));
+        decoded_buf[l] = (int   *)malloc(K      * sizeof(int));
+    }
+
+    printf("%12s%15s%15s\n", "SNR (dB)", "BER", "BLER");
+    for (int i = 0; i < 42; i++) printf("-");
+    printf("\n");
+
+    MIMOChannel mch;
+    for (double snr = cfg->snrStart; snr <= cfg->snrEnd + 1e-6; snr += cfg->snrStep) {
+        mimo_channel_init(&mch, snr);
+        double N0 = 1.0 / pow(10.0, snr / 10.0);
+
+        long total_err = 0, total_bits = 0;
+        int  blk_err   = 0;
+
+        for (int trial = 0; trial < cfg->numTrials; trial++) {
+
+            /* ① TX: 레이어별 독립 코드워드 생성 */
+            for (int l = 0; l < NL; l++) {
+                gen_random_bits(tb[l], tbsz);
+                attach_crc(tb[l], tbsz, CRC24A, tb_crc[l]);
+                ldpc_encode(&ldpc, tb_crc[l], coded[l]);
+                memcpy(txbits[l], coded[l], acsz * sizeof(int));
+                for (int i = acsz; i < padsz; i++) txbits[l][i] = 0;
+                qam_modulate(txbits[l], padsz, mcs.modulation, syms[l]);
+            }
+
+            /* ② 리소스 그리드 구성 */
+            for (int l = 0; l < NL; l++) {
+                memset(tx_grid[l], 0, active * sizeof(cx_t));
+                /* 파일럿: 레이어 l만 자신의 파일럿 위치에 DMRS 송신 */
+                for (int p = 0; p < nppl; p++)
+                    tx_grid[l][pilotL[l][p]] = dmrsL[l][p];
+                /* 데이터: 4개 레이어 모두 동일한 data_pos에 심볼 배치 */
+                for (int d = 0; d < nd; d++)
+                    tx_grid[l][data_pos[d]] = syms[l][d];
+            }
+
+            /* ③ 채널 적용: y[r][k] = Σ_t H[r][t] · tx[t][k] + n */
+            cx_t h[NL][NL];
+            mimo_channel_draw_4x4(h);
+            for (int r = 0; r < NL; r++) {
+                double sigma = sqrt(N0 / 2.0);
+                for (int k = 0; k < active; k++) {
+                    cx_t s = 0;
+                    for (int t = 0; t < NL; t++) s += h[r][t] * tx_grid[t][k];
+                    rx_grid[r][k] = s + CX_MAKE(randn() * sigma, randn() * sigma);
+                }
+            }
+
+            /* ④ 채널 추정: H_hat[r][t] = mean_p( rx[r][pilotL[t][p]] / dmrsL[t][p] )
+             *   레이어 t의 파일럿 RE에서는 레이어 t만 송신했으므로
+             *   rx[r][pos] ≈ H[r][t] · dmrs[t][p] + noise → 평균 LS 추정 */
+            cx_t h_hat[NL][NL];
+            for (int t = 0; t < NL; t++) {
+                for (int r = 0; r < NL; r++) h_hat[r][t] = 0;
+                for (int p = 0; p < nppl; p++) {
+                    int pos = pilotL[t][p];
+                    for (int r = 0; r < NL; r++)
+                        h_hat[r][t] += rx_grid[r][pos] / dmrsL[t][p];
+                }
+                for (int r = 0; r < NL; r++) h_hat[r][t] /= nppl;
+            }
+
+            /* ⑤ 검출 + LLR 계산 */
+            for (int l = 0; l < NL; l++) nv_sum[l] = 0.0;
+
+            for (int d = 0; d < nd; d++) {
+                cx_t y[NL];
+                for (int r = 0; r < NL; r++) y[r] = rx_grid[r][data_pos[d]];
+
+                if (use_mmse) mimo_mmse_detect_4x4(h_hat, y, N0, x_hat_re, nv_re);
+                else          mimo_zf_detect_4x4  (h_hat, y, N0, x_hat_re, nv_re);
+
+                for (int l = 0; l < NL; l++) {
+                    syms[l][d] = x_hat_re[l];   /* 추정 심볼 임시 저장 */
+                    nv_sum[l] += nv_re[l];
+                }
+            }
+
+            for (int l = 0; l < NL; l++) {
+                double env = nv_sum[l] / nd;
+                qam_demap_llr(syms[l], nd, mcs.modulation, env, allllr[l]);
+                int llr_len = (acsz < nd * bps) ? acsz : nd * bps;
+                memcpy(llr_buf[l], allllr[l], llr_len * sizeof(double));
+                for (int i = llr_len; i < acsz; i++) llr_buf[l][i] = 0.0;
+            }
+
+            /* ⑥ LDPC 디코딩 + 오류 집계 */
+            int trial_err = 0;
+            for (int l = 0; l < NL; l++) {
+                ldpc_decode(&ldpc, llr_buf[l], 25, decoded_buf[l]);
+                int crc_ok = check_crc(decoded_buf[l], K, CRC24A);
+                int bit_err = 0;
+                for (int i = 0; i < tbsz; i++)
+                    if (tb[l][i] != decoded_buf[l][i]) bit_err++;
+                total_err  += bit_err;
+                total_bits += tbsz;
+                if (!crc_ok || bit_err > 0) trial_err++;
+            }
+            if (trial_err > 0) blk_err++;   /* 1개 이상 레이어에서 오류 */
+
+            (void)trial;
+        }
+
+        double ber  = total_bits > 0 ? (double)total_err / total_bits : 0.0;
+        double bler = blk_err / (double)cfg->numTrials;
+        printf("%12.1f%15.4e%15.4f\n", snr, ber, bler);
+    }
+    printf("\nPDSCH 4x4 SM simulation complete.\n");
+
+    ldpc_free(&ldpc);
+    free(pilot_pos); free(data_pos);
+    for (int l = 0; l < NL; l++) {
+        free(pilotL[l]); free(dmrsL[l]);
+        free(tb[l]); free(tb_crc[l]); free(coded[l]); free(txbits[l]);
+        free(syms[l]); free(tx_grid[l]); free(rx_grid[l]);
+        free(allllr[l]); free(llr_buf[l]); free(decoded_buf[l]);
+    }
+}
