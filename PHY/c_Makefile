@@ -8,7 +8,7 @@ COMMON_SRCS = utils.c config_parser.c mcs_table.c crc.c \
               polar_rate_match.c modulation.c ofdm.c \
               channel.c channel_estimation.c dmrs.c mimo.c rate_matching.c tdl.c \
               dft_precode.c pucch_seq.c \
-              ldpc.c polar.c csi_rs.c srs.c prach.c \
+              ldpc.c polar.c csi_rs.c srs.c prach.c codebook.c \
               pbch.c pdcch.c pdsch.c pusch.c pucch.c
 
 COMMON_OBJS = $(patsubst %.c,$(OBJDIR)/%.o,$(COMMON_SRCS))
