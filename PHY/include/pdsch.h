@@ -20,5 +20,6 @@ void run_pdsch_sm2x2_tdl_simulation(const L1Config *cfg);
 void run_pdsch_sm2x2_tdl_harq_simulation(const L1Config *cfg);
 void run_pdsch_sm4x4_simulation(const L1Config *cfg);
 void run_pdsch_simo_mrc_tdl_harq_simulation(const L1Config *cfg);
+void run_pdsch_cl_4port_simulation(const L1Config *cfg);
 
 #endif

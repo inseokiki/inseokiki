@@ -83,4 +83,31 @@ void codebook_type1_sp_4port_pmi_search(const cx_t H[][4], int num_rx,
                                          int *best_i1, int *best_i2,
                                          double *max_power);
 
+/* ── RI + PMI 동시 선택 (Rank Adaptation) ──────────────────────────────
+ *
+ * H[4][4] 채널과 N0 노이즈 분산으로 추정 Shannon 용량을 최대화하는
+ * (rank, PMI) 조합을 전체 탐색(80 후보).
+ *
+ * 선택 기준:
+ *   Rank-1: C₁(l,n) = log₂(1 + ||H·W||²/N₀)
+ *   Rank-2: C₂(l,k,n) = Σ_{j} log₂(1 + α_j/(1−α_j))
+ *           α_j = 1 − N₀·Re{(A⁻¹)_jj},  A = H_eff^H H_eff + N₀·I
+ *
+ * 출력 (선택된 결과 + rank-1·rank-2 각각의 최적도 함께 반환):
+ *   sel_rank  : 선택된 rank (1 또는 2)
+ *   sel_i1_1  : 선택된 i1_1 (빔 인덱스)
+ *   sel_i1_3  : 선택된 i1_3 (rank-1이면 항상 0)
+ *   sel_i2    : 선택된 i2  (코피에이징)
+ *   r1_i1_1   : rank-1 범위 내 최적 i1_1
+ *   r1_i2     : rank-1 범위 내 최적 i2
+ *   r2_i1_1   : rank-2 범위 내 최적 i1_1
+ *   r2_i1_3   : rank-2 범위 내 최적 i1_3
+ *   r2_i2     : rank-2 범위 내 최적 i2
+ */
+void codebook_type1_sp_4port_ri_pmi_select(
+    const cx_t H[4][4], double N0,
+    int *sel_rank, int *sel_i1_1, int *sel_i1_3, int *sel_i2,
+    int *r1_i1_1, int *r1_i2,
+    int *r2_i1_1, int *r2_i1_3, int *r2_i2);
+
 #endif

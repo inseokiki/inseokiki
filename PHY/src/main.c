@@ -195,6 +195,8 @@ int main(int argc, char *argv[]) {
             else                                    run_pdsch_sm2x2_simulation(&cfg);
         } else if (strcmp(cfg.mimoMode,"SM_4X4")==0) {
             run_pdsch_sm4x4_simulation(&cfg);
+        } else if (strcmp(cfg.mimoMode,"CL_4PORT")==0) {
+            run_pdsch_cl_4port_simulation(&cfg);
         } else if (strcmp(cfg.channelModel,"TDL")==0) {
             run_pdsch_tdl_simulation(&cfg);
         } else {

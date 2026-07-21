@@ -200,6 +200,73 @@ void mimo_zf_detect_4x4(cx_t h[4][4], const cx_t y[4], double N0,
  * x_hat[t]      = x_biased[t] / α_t
  * noise_var[t]  = (1 - α_t) / α_t
  * ─────────────────────────────────────────────────────────────────────────── */
+/* ── 4-Rx MRC 결합 (Rank-1 프리코더 적용 후 유효 채널 h_eff = H·W) ─────────
+ *
+ * h[r]  : Rx 안테나 r의 유효 채널 계수 (h_eff = H·W, r = 0..3)
+ * y[r]  : Rx 안테나 r의 수신 신호
+ *
+ * 결합기: x_hat = (Σ_r h[r]^* y[r]) / Σ_r |h[r]|²  (최대 SNR 결합)
+ * noise_var = N0 / Σ_r |h[r]|²                     (후-결합 등가 노이즈 분산)
+ * ─────────────────────────────────────────────────────────────────────────── */
+void mrc_combine_4rx(const cx_t h[4], const cx_t y[4], double N0,
+                     cx_t *x_hat, double *noise_var) {
+    double hp = 0.0;
+    for (int r = 0; r < 4; r++) hp += CX_NORM(h[r]);
+    if (hp < 1e-10) { *x_hat = CX_ZERO; *noise_var = N0; return; }
+    cx_t num = 0.0;
+    for (int r = 0; r < 4; r++) num += conj(h[r]) * y[r];
+    *x_hat     = num / hp;
+    *noise_var = N0 / hp;
+}
+
+/* ── 4Rx × 2Layer MMSE 검출 (Rank-2 프리코더 후 H_eff = H·W, 4×2) ────────
+ *
+ * 과결정(overdetermined) 2-레이어 시스템: 4 Rx, 2 데이터 레이어.
+ *
+ * 2×2 Gramian으로 축소해 기존 inv2x2 재사용:
+ *   A = H_eff^H H_eff + N0·I  (2×2)
+ *   b = H_eff^H y             (2×1)
+ *   x_biased = A⁻¹ b
+ *   α_l  = 1 - N0·Re{(A⁻¹)_ll}   (WH = I - N0·A⁻¹ 의 대각 원소)
+ *   x_hat[l]     = x_biased[l] / α_l
+ *   noise_var[l] = (1 - α_l) / α_l
+ * ─────────────────────────────────────────────────────────────────────────── */
+void mimo_mmse_detect_4rx2(const cx_t h_eff[4][2], const cx_t y[4], double N0,
+                            cx_t x_hat[2], double noise_var[2]) {
+    /* A = H_eff^H H_eff + N0·I  (2×2 Gramian) */
+    cx_t A00 = (cx_t)N0, A01 = 0.0, A10 = 0.0, A11 = (cx_t)N0;
+    for (int r = 0; r < 4; r++) {
+        A00 += conj(h_eff[r][0]) * h_eff[r][0];
+        A01 += conj(h_eff[r][0]) * h_eff[r][1];
+        A10 += conj(h_eff[r][1]) * h_eff[r][0];
+        A11 += conj(h_eff[r][1]) * h_eff[r][1];
+    }
+    cx_t Ainv[2][2];
+    inv2x2(A00, A01, A10, A11, Ainv);
+
+    /* b = H_eff^H y  (2×1) */
+    cx_t b0 = 0.0, b1 = 0.0;
+    for (int r = 0; r < 4; r++) {
+        b0 += conj(h_eff[r][0]) * y[r];
+        b1 += conj(h_eff[r][1]) * y[r];
+    }
+
+    /* x_biased = A⁻¹ b  (2×1) */
+    cx_t xb0 = Ainv[0][0] * b0 + Ainv[0][1] * b1;
+    cx_t xb1 = Ainv[1][0] * b0 + Ainv[1][1] * b1;
+
+    /* α_l = 1 - N0·Re{(A⁻¹)_ll} */
+    double a0 = 1.0 - N0 * creal(Ainv[0][0]);
+    double a1 = 1.0 - N0 * creal(Ainv[1][1]);
+    if (a0 < 1e-6) a0 = 1e-6;
+    if (a1 < 1e-6) a1 = 1e-6;
+
+    x_hat[0]     = xb0 / a0;
+    x_hat[1]     = xb1 / a1;
+    noise_var[0] = (1.0 - a0) / a0;
+    noise_var[1] = (1.0 - a1) / a1;
+}
+
 void mimo_mmse_detect_4x4(cx_t h[4][4], const cx_t y[4], double N0,
                             cx_t x_hat[4], double noise_var[4]) {
     /* A = H^H H + N0·I */

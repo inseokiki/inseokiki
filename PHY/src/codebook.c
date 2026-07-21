@@ -232,6 +232,125 @@ void codebook_type1_sp_4port_print(int rank) {
 }
 
 /* ════════════════════════════════════════════════════════════════════════
+ * RI + PMI 동시 선택 (Rank Adaptation)
+ *
+ * Rank-1 탐색: 32 후보 (8빔 × 4코피에이징)
+ *   기준  C₁ = log₂(1 + ||H·W||²/N₀)
+ *
+ * Rank-2 탐색: 48 후보 (변형A 16 + 변형B 32)
+ *   H_eff = H·W (4×2) → A = H_eff^H H_eff + N₀·I (2×2)
+ *   α_j = 1 − N₀·Re{(A⁻¹)_jj}
+ *   C₂ = Σ_j log₂(1 + α_j/(1−α_j))   (MMSE 후-검출 SINR 기반 용량)
+ *
+ * 총 탐색 후보: 80개  (수 μs 수준, 블록-평탄 채널 1회 드로우 당 1회 실행)
+ * ════════════════════════════════════════════════════════════════════════ */
+void codebook_type1_sp_4port_ri_pmi_select(
+        const cx_t H[4][4], double N0,
+        int *sel_rank, int *sel_i1_1, int *sel_i1_3, int *sel_i2,
+        int *r1_i1_1, int *r1_i2,
+        int *r2_i1_1, int *r2_i1_3, int *r2_i2) {
+
+    double best_cap_r1 = -1.0, best_cap_r2 = -1.0, best_cap = -1.0;
+
+    /* 초기화 */
+    *sel_rank = 1; *sel_i1_1 = 0; *sel_i1_3 = 0; *sel_i2 = 0;
+    *r1_i1_1 = 0; *r1_i2 = 0;
+    *r2_i1_1 = 0; *r2_i1_3 = 0; *r2_i2 = 0;
+
+    /* ── Rank-1 탐색 (32 후보) ─────────────────────────────────────────── */
+    for (int i1 = 0; i1 < N1 * O1; i1++) {
+        for (int i2 = 0; i2 < 4; i2++) {
+            cx_t W[4];
+            codebook_type1_sp_4port_rank1(i1, i2, W);
+
+            /* H_eff[r] = Σ_t H[r][t]·W[t]  (4×1) → 수신 파워 */
+            double pw = 0.0;
+            for (int r = 0; r < 4; r++) {
+                cx_t he = 0.0;
+                for (int t = 0; t < P; t++) he += H[r][t] * W[t];
+                pw += CX_NORM(he);
+            }
+            double cap = log2(1.0 + pw / N0);
+
+            if (cap > best_cap_r1) {
+                best_cap_r1 = cap;
+                *r1_i1_1 = i1;
+                *r1_i2   = i2;
+            }
+        }
+    }
+
+    /* ── Rank-2 탐색 (변형A 16 + 변형B 32 = 48 후보) ─────────────────── */
+    for (int i1_3 = 0; i1_3 <= 1; i1_3++) {
+        int i1_max = (i1_3 == 0) ? (N1 * O1 / 2) : (N1 * O1);
+        for (int i1 = 0; i1 < i1_max; i1++) {
+            for (int i2 = 0; i2 < 4; i2++) {
+                cx_t W2[4][2];
+                codebook_type1_sp_4port_rank2(i1, i1_3, i2, W2);
+
+                /* H_eff[r][l] = Σ_t H[r][t]·W2[t][l]  (4×2) */
+                cx_t he[4][2];
+                for (int r = 0; r < 4; r++)
+                    for (int l = 0; l < 2; l++) {
+                        he[r][l] = 0.0;
+                        for (int t = 0; t < P; t++) he[r][l] += H[r][t] * W2[t][l];
+                    }
+
+                /* A = H_eff^H H_eff + N₀·I  (2×2 Gramian) */
+                cx_t A00 = (cx_t)N0, A01 = 0.0, A10 = 0.0, A11 = (cx_t)N0;
+                for (int r = 0; r < 4; r++) {
+                    A00 += conj(he[r][0]) * he[r][0];
+                    A01 += conj(he[r][0]) * he[r][1];
+                    A10 += conj(he[r][1]) * he[r][0];
+                    A11 += conj(he[r][1]) * he[r][1];
+                }
+
+                /* A⁻¹ (2×2 직접 역산) */
+                cx_t det = A00 * A11 - A01 * A10;
+                if (cabs(det) < 1e-14) continue;   /* 특이 행렬 → 스킵 */
+                cx_t id = 1.0 / det;
+                double inv00 = creal( A11 * id);
+                double inv11 = creal( A00 * id);
+
+                /* α_j = 1 − N₀·Re{(A⁻¹)_jj} */
+                double a0 = 1.0 - N0 * inv00;
+                double a1 = 1.0 - N0 * inv11;
+                if (a0 < 1e-6) a0 = 1e-6;
+                if (a1 < 1e-6) a1 = 1e-6;
+                if (a0 >= 1.0) a0 = 1.0 - 1e-6;
+                if (a1 >= 1.0) a1 = 1.0 - 1e-6;
+
+                /* C₂ = log₂(1+SINR₀) + log₂(1+SINR₁),  SINR_j = α_j/(1-α_j) */
+                double cap = log2(1.0 + a0 / (1.0 - a0)) + log2(1.0 + a1 / (1.0 - a1));
+
+                if (cap > best_cap_r2) {
+                    best_cap_r2 = cap;
+                    *r2_i1_1  = i1;
+                    *r2_i1_3  = i1_3;
+                    *r2_i2    = i2;
+                }
+            }
+        }
+    }
+
+    /* ── 최적 rank 선택 ────────────────────────────────────────────────── */
+    if (best_cap_r1 >= best_cap_r2) {
+        best_cap  = best_cap_r1;
+        *sel_rank = 1;
+        *sel_i1_1 = *r1_i1_1;
+        *sel_i1_3 = 0;
+        *sel_i2   = *r1_i2;
+    } else {
+        best_cap  = best_cap_r2;
+        *sel_rank = 2;
+        *sel_i1_1 = *r2_i1_1;
+        *sel_i1_3 = *r2_i1_3;
+        *sel_i2   = *r2_i2;
+    }
+    (void)best_cap;  /* 상위 호출자가 용량 값 자체는 사용 안 함 */
+}
+
+/* ════════════════════════════════════════════════════════════════════════
  * Rank-1 PMI Exhaustive Search
  *
  * 기준: 최대 후-빔포밍 수신 파워  P_rx(l,n) = Σ_r |Σ_t H[r][t]·W[t]|²

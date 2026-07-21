@@ -54,4 +54,20 @@ void mimo_zf_detect_4x4(cx_t h[4][4], const cx_t y[4], double N0,
 void mimo_mmse_detect_4x4(cx_t h[4][4], const cx_t y[4], double N0,
                            cx_t x_hat[4], double noise_var[4]);
 
+/* MRC combining for 4-Rx antennas.  Used when a rank-1 precoder W reduces
+   the effective channel to h_eff[4] = H·W (a single 4-element vector).
+   Generalises mrc_combine() from 2 to 4 Rx antennas; interface is identical. */
+void mrc_combine_4rx(const cx_t h[4], const cx_t y[4], double N0,
+                     cx_t *x_hat, double *noise_var);
+
+/* MMSE detection for 4Rx × 2Layer overdetermined system.
+   h_eff[r][l] = (H·W)[r][l] is the 4×2 effective channel after rank-2 precoding.
+   Builds the 2×2 Gramian A = H_eff^H H_eff + N0·I and applies the same
+   de-biased MMSE formula as mimo_mmse_detect():
+     x_hat[l]     = (A⁻¹ H_eff^H y)[l] / α_l
+     noise_var[l] = (1 - α_l) / α_l
+     α_l          = 1 - N0·Re{(A⁻¹)_ll} */
+void mimo_mmse_detect_4rx2(const cx_t h_eff[4][2], const cx_t y[4], double N0,
+                            cx_t x_hat[2], double noise_var[2]);
+
 #endif

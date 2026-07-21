@@ -15,6 +15,7 @@
 #include "mimo.h"
 #include "rate_matching.h"
 #include "tdl.h"
+#include "codebook.h"
 #include "utils.h"
 #include <stdio.h>
 #include <math.h>
@@ -1940,5 +1941,322 @@ void run_pdsch_sm4x4_simulation(const L1Config *cfg) {
         free(tb[l]); free(tb_crc[l]); free(coded[l]); free(txbits[l]);
         free(syms[l]); free(tx_grid[l]); free(rx_grid[l]);
         free(allllr[l]); free(llr_buf[l]); free(decoded_buf[l]);
+    }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+ * 4포트 Type I SP 코드북 기반 Closed-Loop PDSCH — RI + PMI 적응 선택
+ *
+ * 채널 모델  : 블록-평탄 Rayleigh H[4][4] (iid CN(0,1))
+ * 채널 추정  : Genie-aided (완벽 CSI — 프리코딩 이득 자체에만 집중)
+ * 프리코더   : TS 38.214 Table 5.2.2.2.1-5/6 (N1=2, O1=4, Ng=2)
+ *               Rank-1 : 32 후보 (8빔 × 4코피에이징)
+ *               Rank-2 : 48 후보 (변형A 16 + 변형B 32)
+ * 선택 기준  : 추정 Shannon 용량 최대화 (80 후보 전수 탐색)
+ *               Rank-1 : C₁ = log₂(1 + ||H·W||²/N₀)
+ *               Rank-2 : C₂ = Σ_l log₂(1 + α_l/(1−α_l))
+ * 검출기     : Rank-1 → MRC (4-Rx), Rank-2 → MMSE (4Rx×2Layer)
+ *
+ * 비교 출력  :
+ *   ① Adaptive  — RI+PMI 자동 선택 (rank-1 또는 rank-2 중 용량 우수 쪽)
+ *   ② R1-fixed  — rank-1 고정, 최적 PMI 선택 (32 후보 내)
+ *   ③ R2-fixed  — rank-2 고정, 최적 PMI 선택 (48 후보 내)
+ *
+ * 공정 비교  : 동일 채널 H, 동일 노이즈 벡터 n, 동일 정보 비트
+ *              → 전략 차이(precoder + rank)만 다름
+ * ─────────────────────────────────────────────────────────────────────────── */
+void run_pdsch_cl_4port_simulation(const L1Config *cfg) {
+    int num_rb   = cfg->numRB;
+    int num_data = 6 * num_rb;   /* OFDM symbol당 데이터 RE (DMRS용 절반 제외) */
+
+    MCSTableType tbl = (strcmp(cfg->mcsTableType, "TABLE2") == 0) ? MCS_TABLE2 : MCS_TABLE1;
+    MCSEntry mcs = get_mcs_entry(cfg->mcsIndex, tbl);
+    double cr  = get_code_rate(&mcs);
+    int    bps = mcs.modulationOrder;
+    int    crc_bits = 24;
+
+    int max_dbits = num_data * bps;
+    int tbsz = (int)(max_dbits * cr);
+    if (tbsz < 1)    tbsz = 1;
+    if (tbsz > 8424) tbsz = 8424;
+
+    int K = tbsz + crc_bits;
+    LDPCCodec ldpc;
+    ldpc_init(&ldpc, K, cr);
+    int acsz  = ldpc.coded_size;
+    int padsz = acsz + ((acsz % bps) ? bps - acsz % bps : 0);
+    int nsym  = padsz / bps;
+    int nd    = (nsym < num_data) ? nsym : num_data;
+
+    printf("=== PDSCH Closed-Loop 4-port Codebook (RI+PMI Adaptive) ===\n");
+    printf("MCS Index    : %d (Table %s)\n", cfg->mcsIndex, cfg->mcsTableType);
+    printf("Modulation   : %s (Qm=%d)\n", mcs.modulation, bps);
+    printf("Code Rate    : %.4f\n", cr);
+    printf("Num RB       : %d\n", num_rb);
+    printf("Tx/Rx Ants   : 4 / 4\n");
+    printf("Codebook     : TS 38.214 Type I SP (N1=2, O1=4, Ng=2)\n");
+    printf("Rank Range   : 1~2  (RI+PMI 자동 선택, 추정 용량 기준)\n");
+    printf("TB Size/CW   : %d bits\n", tbsz);
+    printf("Data RE/CW   : %d  (Genie-aided CSI, pilot 오버헤드 없음)\n", nd);
+    printf("Trials/SNR   : %d\n\n", cfg->numTrials);
+
+    /* 코드워드 버퍼 (최대 2 CW) */
+    int   *tb[2], *tb_crc[2], *coded[2], *txbits[2], *dec[2];
+    cx_t  *sym[2];
+    double *allllr[2], *llr[2];
+    cx_t  *rx_hat[2];   /* 검출된 심볼 (LLR 계산용) */
+    for (int l = 0; l < 2; l++) {
+        tb[l]     = (int    *)malloc(tbsz  * sizeof(int));
+        tb_crc[l] = (int    *)malloc(K     * sizeof(int));
+        coded[l]  = (int    *)malloc(acsz  * sizeof(int));
+        txbits[l] = (int    *)malloc(padsz * sizeof(int));
+        sym[l]    = (cx_t  *)malloc(nsym   * sizeof(cx_t));
+        allllr[l] = (double *)malloc(padsz * sizeof(double));
+        llr[l]    = (double *)malloc(acsz  * sizeof(double));
+        dec[l]    = (int    *)malloc(K     * sizeof(int));
+        rx_hat[l] = (cx_t  *)malloc(nd     * sizeof(cx_t));
+    }
+    /* 노이즈 버퍼: nd RE × 4 Rx 안테나 */
+    cx_t *nbuf = (cx_t *)malloc(nd * 4 * sizeof(cx_t));
+
+    /* 출력 헤더 */
+    printf("%-9s  %-12s %-11s  %-12s %-11s  %-12s %-11s  %s\n",
+           "SNR(dB)", "BER_Adapt", "BLER_Adapt",
+           "BER_R1fix", "BLER_R1fix",
+           "BER_R2fix", "BLER_R2fix", "R1%");
+    for (int i = 0; i < 98; i++) printf("-");
+    printf("\n");
+
+    for (double snr = cfg->snrStart; snr <= cfg->snrEnd + 1e-6; snr += cfg->snrStep) {
+        double N0    = 1.0 / pow(10.0, snr / 10.0);
+        double sigma = sqrt(N0 / 2.0);
+
+        long t_ad = 0, b_ad = 0;
+        long t_r1 = 0, b_r1 = 0;
+        long t_r2 = 0, b_r2 = 0;
+        int  e_ad = 0, e_r1 = 0, e_r2 = 0;
+        int  r1_sel_cnt = 0;
+
+        for (int trial = 0; trial < cfg->numTrials; trial++) {
+
+            /* ① 채널 드로우: H[4][4] */
+            cx_t H[4][4];
+            mimo_channel_draw_4x4(H);
+
+            /* ② RI+PMI 선택 (80 후보 전수 탐색)
+             *   → 적응형 best + rank-1 best + rank-2 best 동시 반환 */
+            int rank_ad, i1_ad, i13_ad, i2_ad;
+            int i1_r1, i2_r1;
+            int i1_r2, i13_r2, i2_r2;
+            codebook_type1_sp_4port_ri_pmi_select(
+                H, N0,
+                &rank_ad, &i1_ad, &i13_ad, &i2_ad,
+                &i1_r1, &i2_r1,
+                &i1_r2, &i13_r2, &i2_r2);
+            if (rank_ad == 1) r1_sel_cnt++;
+
+            /* ③ 2개 CW 인코딩 (동일 정보 비트로 3 시나리오 공정 비교) */
+            for (int l = 0; l < 2; l++) {
+                gen_random_bits(tb[l], tbsz);
+                attach_crc(tb[l], tbsz, CRC24A, tb_crc[l]);
+                ldpc_encode(&ldpc, tb_crc[l], coded[l]);
+                memcpy(txbits[l], coded[l], acsz * sizeof(int));
+                for (int i = acsz; i < padsz; i++) txbits[l][i] = 0;
+                qam_modulate(txbits[l], padsz, mcs.modulation, sym[l]);
+            }
+
+            /* ④ 노이즈 드로우: n[d][r]  (3 시나리오가 동일 노이즈 공유) */
+            for (int d = 0; d < nd; d++)
+                for (int r = 0; r < 4; r++)
+                    nbuf[d * 4 + r] = CX_MAKE(randn() * sigma, randn() * sigma);
+
+            /* ────────────────────────────────────────────────────────────────
+             * 시나리오별 유효 채널 계산 + 검출 + 복호 매크로
+             *
+             * H_eff_r1[4]    : rank-1 유효 채널 (4×1)
+             * H_eff_r2[4][2] : rank-2 유효 채널 (4×2)
+             * H_eff_ad[4]    : adaptive rank-1 유효 채널 (rank-1 선택 시)
+             * H_eff_ad2[4][2]: adaptive rank-2 유효 채널 (rank-2 선택 시)
+             * ──────────────────────────────────────────────────────────────── */
+
+            /* === 시나리오 R1-fixed (rank-1, 최적 PMI 고정) === */
+            {
+                cx_t W[4];
+                codebook_type1_sp_4port_rank1(i1_r1, i2_r1, W);
+                cx_t h_eff[4];
+                for (int r = 0; r < 4; r++) {
+                    h_eff[r] = 0.0;
+                    for (int t = 0; t < 4; t++) h_eff[r] += H[r][t] * W[t];
+                }
+                /* y[d][r] = h_eff[r]·sym[0][d] + n[d][r] */
+                double nv_sum = 0.0;
+                for (int d = 0; d < nd; d++) {
+                    cx_t y[4];
+                    for (int r = 0; r < 4; r++)
+                        y[r] = h_eff[r] * sym[0][d] + nbuf[d * 4 + r];
+                    cx_t xh; double nv;
+                    mrc_combine_4rx(h_eff, y, N0, &xh, &nv);
+                    rx_hat[0][d] = xh;
+                    nv_sum += nv;
+                }
+                double env = nv_sum / nd;
+                qam_demap_llr(rx_hat[0], nd, mcs.modulation, env, allllr[0]);
+                int llen = (acsz < nd * bps) ? acsz : nd * bps;
+                memcpy(llr[0], allllr[0], llen * sizeof(double));
+                for (int i = llen; i < acsz; i++) llr[0][i] = 0.0;
+                ldpc_decode(&ldpc, llr[0], 25, dec[0]);
+                int crc_r1 = check_crc(dec[0], K, CRC24A);
+                int be_r1 = 0;
+                for (int i = 0; i < tbsz; i++)
+                    if (tb[0][i] != dec[0][i]) be_r1++;
+                b_r1 += be_r1;
+                t_r1 += tbsz;
+                if (!crc_r1 || be_r1 > 0) e_r1++;
+            }
+
+            /* === 시나리오 R2-fixed (rank-2, 최적 PMI 고정) === */
+            {
+                cx_t W2[4][2];
+                codebook_type1_sp_4port_rank2(i1_r2, i13_r2, i2_r2, W2);
+                cx_t h_eff2[4][2];
+                for (int r = 0; r < 4; r++)
+                    for (int l = 0; l < 2; l++) {
+                        h_eff2[r][l] = 0.0;
+                        for (int t = 0; t < 4; t++) h_eff2[r][l] += H[r][t] * W2[t][l];
+                    }
+                /* y[d][r] = Σ_l h_eff2[r][l]·sym[l][d] + n[d][r] */
+                double nv2_sum[2] = {0.0, 0.0};
+                for (int d = 0; d < nd; d++) {
+                    cx_t y[4];
+                    for (int r = 0; r < 4; r++)
+                        y[r] = h_eff2[r][0] * sym[0][d] + h_eff2[r][1] * sym[1][d]
+                               + nbuf[d * 4 + r];
+                    cx_t xh2[2]; double nv2[2];
+                    mimo_mmse_detect_4rx2(h_eff2, y, N0, xh2, nv2);
+                    rx_hat[0][d] = xh2[0];
+                    rx_hat[1][d] = xh2[1];
+                    nv2_sum[0] += nv2[0];
+                    nv2_sum[1] += nv2[1];
+                }
+                int blk_r2 = 0;
+                for (int l = 0; l < 2; l++) {
+                    double env = nv2_sum[l] / nd;
+                    qam_demap_llr(rx_hat[l], nd, mcs.modulation, env, allllr[l]);
+                    int llen = (acsz < nd * bps) ? acsz : nd * bps;
+                    memcpy(llr[l], allllr[l], llen * sizeof(double));
+                    for (int i = llen; i < acsz; i++) llr[l][i] = 0.0;
+                    ldpc_decode(&ldpc, llr[l], 25, dec[l]);
+                    int crc_l = check_crc(dec[l], K, CRC24A);
+                    int be_l = 0;
+                    for (int i = 0; i < tbsz; i++)
+                        if (tb[l][i] != dec[l][i]) be_l++;
+                    b_r2 += be_l;
+                    t_r2 += tbsz;
+                    if (!crc_l || be_l > 0) blk_r2++;
+                }
+                if (blk_r2 > 0) e_r2++;
+            }
+
+            /* === 시나리오 Adaptive (rank_ad에 따라 분기) === */
+            if (rank_ad == 1) {
+                cx_t W[4];
+                codebook_type1_sp_4port_rank1(i1_ad, i2_ad, W);
+                cx_t h_eff[4];
+                for (int r = 0; r < 4; r++) {
+                    h_eff[r] = 0.0;
+                    for (int t = 0; t < 4; t++) h_eff[r] += H[r][t] * W[t];
+                }
+                double nv_sum = 0.0;
+                for (int d = 0; d < nd; d++) {
+                    cx_t y[4];
+                    for (int r = 0; r < 4; r++)
+                        y[r] = h_eff[r] * sym[0][d] + nbuf[d * 4 + r];
+                    cx_t xh; double nv;
+                    mrc_combine_4rx(h_eff, y, N0, &xh, &nv);
+                    rx_hat[0][d] = xh;
+                    nv_sum += nv;
+                }
+                double env = nv_sum / nd;
+                qam_demap_llr(rx_hat[0], nd, mcs.modulation, env, allllr[0]);
+                int llen = (acsz < nd * bps) ? acsz : nd * bps;
+                memcpy(llr[0], allllr[0], llen * sizeof(double));
+                for (int i = llen; i < acsz; i++) llr[0][i] = 0.0;
+                ldpc_decode(&ldpc, llr[0], 25, dec[0]);
+                int crc_ad = check_crc(dec[0], K, CRC24A);
+                int be_ad = 0;
+                for (int i = 0; i < tbsz; i++)
+                    if (tb[0][i] != dec[0][i]) be_ad++;
+                b_ad += be_ad;
+                t_ad += tbsz;
+                if (!crc_ad || be_ad > 0) e_ad++;
+
+            } else {   /* rank_ad == 2 */
+                cx_t W2[4][2];
+                codebook_type1_sp_4port_rank2(i1_ad, i13_ad, i2_ad, W2);
+                cx_t h_eff2[4][2];
+                for (int r = 0; r < 4; r++)
+                    for (int l = 0; l < 2; l++) {
+                        h_eff2[r][l] = 0.0;
+                        for (int t = 0; t < 4; t++) h_eff2[r][l] += H[r][t] * W2[t][l];
+                    }
+                double nv2_sum[2] = {0.0, 0.0};
+                for (int d = 0; d < nd; d++) {
+                    cx_t y[4];
+                    for (int r = 0; r < 4; r++)
+                        y[r] = h_eff2[r][0] * sym[0][d] + h_eff2[r][1] * sym[1][d]
+                               + nbuf[d * 4 + r];
+                    cx_t xh2[2]; double nv2[2];
+                    mimo_mmse_detect_4rx2(h_eff2, y, N0, xh2, nv2);
+                    rx_hat[0][d] = xh2[0];
+                    rx_hat[1][d] = xh2[1];
+                    nv2_sum[0] += nv2[0];
+                    nv2_sum[1] += nv2[1];
+                }
+                int blk_ad = 0;
+                for (int l = 0; l < 2; l++) {
+                    double env = nv2_sum[l] / nd;
+                    qam_demap_llr(rx_hat[l], nd, mcs.modulation, env, allllr[l]);
+                    int llen = (acsz < nd * bps) ? acsz : nd * bps;
+                    memcpy(llr[l], allllr[l], llen * sizeof(double));
+                    for (int i = llen; i < acsz; i++) llr[l][i] = 0.0;
+                    ldpc_decode(&ldpc, llr[l], 25, dec[l]);
+                    int crc_l = check_crc(dec[l], K, CRC24A);
+                    int be_l = 0;
+                    for (int i = 0; i < tbsz; i++)
+                        if (tb[l][i] != dec[l][i]) be_l++;
+                    b_ad += be_l;
+                    t_ad += tbsz;
+                    if (!crc_l || be_l > 0) blk_ad++;
+                }
+                if (blk_ad > 0) e_ad++;
+            }
+
+            (void)trial;
+        }   /* end trial loop */
+
+        double ber_ad  = t_ad > 0 ? (double)b_ad / t_ad : 0.0;
+        double bler_ad = e_ad / (double)cfg->numTrials;
+        double ber_r1  = t_r1 > 0 ? (double)b_r1 / t_r1 : 0.0;
+        double bler_r1 = e_r1 / (double)cfg->numTrials;
+        double ber_r2  = t_r2 > 0 ? (double)b_r2 / t_r2 : 0.0;
+        double bler_r2 = e_r2 / (double)cfg->numTrials;
+        double r1_rate = r1_sel_cnt * 100.0 / cfg->numTrials;
+
+        printf("%-9.1f  %-12.4e %-11.4f  %-12.4e %-11.4f  %-12.4e %-11.4f  %.1f\n",
+               snr,
+               ber_ad, bler_ad,
+               ber_r1, bler_r1,
+               ber_r2, bler_r2,
+               r1_rate);
+    }   /* end SNR loop */
+
+    printf("\nPDSCH CL 4-port simulation complete.\n");
+
+    ldpc_free(&ldpc);
+    free(nbuf);
+    for (int l = 0; l < 2; l++) {
+        free(tb[l]); free(tb_crc[l]); free(coded[l]); free(txbits[l]);
+        free(sym[l]); free(allllr[l]); free(llr[l]); free(dec[l]);
+        free(rx_hat[l]);
     }
 }
