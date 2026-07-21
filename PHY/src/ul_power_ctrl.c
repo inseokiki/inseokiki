@@ -198,7 +198,7 @@ void run_ulpc_simulation(const L1Config *cfg) {
      *   ∴ PL_crit = P_CMAX − SINR_target − N_floor                     */
     double pl_edge = PCMAX - SINR_tgt - N_floor;
     printf("P_CMAX 한계 PL                 : %.1f dB  (이상이면 클램핑)\n", pl_edge);
-    printf("  계산: P_CMAX(%.0f) − SINR_tgt(%.0f) − N_floor(%.1f) = %.1f dB\n",
+    printf("  계산: P_CMAX(%.0f dBm) − SINR_tgt(%.0f dB) − N_floor(%.1f dBm) = %.1f dB\n",
            PCMAX, SINR_tgt, N_floor, pl_edge);
     printf("  → PL < %.1fdB : CL이 SINR 목표 %.1fdB 달성 가능\n",
            pl_edge, SINR_tgt);
