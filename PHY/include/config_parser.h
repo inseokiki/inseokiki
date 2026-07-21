@@ -72,6 +72,14 @@ typedef struct {
     int    prachRootSeqIndex;
     int    prachNumCs;
     int    prachMaxDelaySamples;
+    /* ── UL Closed-Loop Power Control (TS 38.213 §7.2.1) ── */
+    double ulpcP0Dbm;           /* 목표 수신 파워/RB at gNB [dBm]        */
+    double ulpcPcmaxDbm;        /* UE 최대 송신 파워 [dBm]               */
+    double ulpcAlpha;           /* 경로손실 부분 보상 계수 α (0~1)       */
+    double ulpcNfDb;            /* gNB 잡음지수 NF [dB]                  */
+    double ulpcSinrTargetDb;    /* 내부루프 SINR 목표 [dB]               */
+    double ulpcPlDb;            /* UE가 측정한 DL 경로손실 (시계열용) [dB] */
+    int    ulpcNumSf;           /* 시계열 시뮬레이션 서브프레임 수       */
 } L1Config;
 
 typedef struct {

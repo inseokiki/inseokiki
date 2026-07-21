@@ -98,6 +98,13 @@ void config_parser_init(ConfigParser *p) {
     c->pucchFormat = 0; c->pucchUciBits = 1; c->pucchNumSymbols = 4; c->pucchNumPrb = 1;
     strncpy(c->prachFormat,    "SHORT",  CFG_STR_MAX-1);
     c->prachRootSeqIndex = 1; c->prachNumCs = 13; c->prachMaxDelaySamples = 8;
+    c->ulpcP0Dbm        = -95.0;
+    c->ulpcPcmaxDbm     =  23.0;
+    c->ulpcAlpha        =   0.8;
+    c->ulpcNfDb         =   7.0;
+    c->ulpcSinrTargetDb =  10.0;
+    c->ulpcPlDb         = 100.0;
+    c->ulpcNumSf        = 100;
     strncpy(c->iqDumpFile,     "iq_dump.txt", CFG_STR_MAX-1);
     /* modulation and codeRate are set by calc_derived() via MCS table */
 }
@@ -227,6 +234,13 @@ int config_parser_load(ConfigParser *p, const char *filename) {
     c->prachRootSeqIndex    = kv_int(p, "PRACH_ROOT_SEQ_INDEX",     1);
     c->prachNumCs           = kv_int(p, "PRACH_NUM_CS",            13);
     c->prachMaxDelaySamples = kv_int(p, "PRACH_MAX_DELAY_SAMPLES",  8);
+    c->ulpcP0Dbm        = kv_dbl(p, "UL_PC_P0_DBM",        -95.0);
+    c->ulpcPcmaxDbm     = kv_dbl(p, "UL_PC_P_CMAX_DBM",    23.0);
+    c->ulpcAlpha        = kv_dbl(p, "UL_PC_ALPHA",           0.8);
+    c->ulpcNfDb         = kv_dbl(p, "UL_PC_NF_DB",           7.0);
+    c->ulpcSinrTargetDb = kv_dbl(p, "UL_PC_SINR_TARGET_DB", 10.0);
+    c->ulpcPlDb         = kv_dbl(p, "UL_PC_PL_DB",         100.0);
+    c->ulpcNumSf        = kv_int(p, "UL_PC_NUM_SF",          100);
     kv_str(p, "MODULATION",      "QPSK",   c->modulation,     CFG_STR_MAX);
     kv_str(p, "CODING",          "LDPC",   c->coding,         CFG_STR_MAX);
     kv_str(p, "CHANNEL_MODEL",   "AWGN",   c->channelModel,   CFG_STR_MAX);
@@ -316,6 +330,15 @@ void config_parser_print(const ConfigParser *p) {
             printf("Root Seq u   : %d\n", c->prachRootSeqIndex);
             printf("N_CS         : %d\n", c->prachNumCs);
             printf("Max Delay    : %d samples\n", c->prachMaxDelaySamples);
+        }
+        if (strcmp(c->physicalChannel, "ULPC") == 0) {
+            printf("UL PC P0     : %.1f dBm/RB\n", c->ulpcP0Dbm);
+            printf("UL PC P_CMAX : %.1f dBm\n",    c->ulpcPcmaxDbm);
+            printf("UL PC alpha  : %.2f\n",          c->ulpcAlpha);
+            printf("UL PC NF     : %.1f dB\n",      c->ulpcNfDb);
+            printf("SINR target  : %.1f dB\n",      c->ulpcSinrTargetDb);
+            printf("Path Loss    : %.1f dB (시계열 고정값)\n", c->ulpcPlDb);
+            printf("Num SF       : %d\n",            c->ulpcNumSf);
         }
     }
     printf("========================\n");

@@ -23,6 +23,7 @@
 #include "pusch.h"
 #include "pucch.h"
 #include "prach.h"
+#include "ul_power_ctrl.h"
 
 static void run_ber_sim(const L1Config *cfg) {
     int bps = get_bits_per_symbol(cfg->modulation);
@@ -232,6 +233,7 @@ int main(int argc, char *argv[]) {
         if (strcmp(cfg.channelModel,"TDL")==0) run_prach_tdl_simulation(&cfg);
         else                                    run_prach_simulation(&cfg);
     }
+    else if (strcmp(cfg.physicalChannel,"ULPC"  )==0) run_ulpc_simulation(&cfg);
     else if (strcmp(cfg.physicalChannel,"BER"   )==0) run_ber_sim(&cfg);
     else                                               run_legacy_sim(&cfg);
 
