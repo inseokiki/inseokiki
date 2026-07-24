@@ -1,0 +1,36 @@
+# ── 빌드 아티팩트 ──────────────────────────────────────────────────
+**/build/
+**/*.o
+**/*.a
+
+# ── 바이너리 ────────────────────────────────────────────────────────
+PHY/lls_sim/lls_sim
+PHY/ber_sim/ber_sim
+
+# ── 시뮬레이션 결과 출력물 (재현 가능) ─────────────────────────────
+PHY/lls_sim/results/
+PHY/ber_sim/results/
+
+# ── macOS ────────────────────────────────────────────────────────────
+.DS_Store
+**/*.dSYM/
+
+# ── 개인정보 / 사내 정보 ─────────────────────────────────────────────
+CLAUDE.md
+AI_dev_setup_guide.md
+PHY/DEV_LOG_*.md
+PHY/README.md
+
+# copy.sh: Windows 개인 경로(kang0 username, OneDrive) 포함
+PHY/lls_sim/copy.sh
+
+# 개인 에디터 / git 설정
+Setting/*
+!Setting/dotfiles_setup_guide.md
+
+# ── 외부 데이터 / 저작권 자료 ───────────────────────────────────────
+3gpp/
+rag_5g/
+
+# ── Claude 메모리 ────────────────────────────────────────────────────
+memory/
