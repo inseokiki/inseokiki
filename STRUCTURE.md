@@ -78,9 +78,15 @@ main()
                                 ← 채널 타입별 코딩 방식 강제
   └─ 채널 타입 분기
        ├─ PDSCH  → run_pdsch_simulation()                  ← USE_DMRS=0
+       │           run_pdsch_sm4x4_harq_simulation()        ← USE_DMRS=1, HARQ_ENABLE=1, MIMO_MODE=SM_4X4 (4x4 SM+HARQ, flat/TDL 공용, genie-aided CSI)
+       │           run_pdsch_cl_4port_harq_simulation()     ← USE_DMRS=1, HARQ_ENABLE=1, MIMO_MODE=CL_4PORT (4포트 CL+HARQ, wideband PMI 고정, genie-aided CSI)
        │           run_pdsch_sm2x2_tdl_harq_simulation()    ← USE_DMRS=1, HARQ_ENABLE=1, MIMO_MODE=SM_2X2, CHANNEL_MODEL=TDL (2x2+TDL+IR/Chase)
        │           run_pdsch_simo_mrc_tdl_harq_simulation() ← USE_DMRS=1, HARQ_ENABLE=1, MIMO_MODE=SIMO_MRC, CHANNEL_MODEL=TDL (1x2 MRC+TDL+IR/Chase)
        │           run_pdsch_harq_simulation()              ← USE_DMRS=1, HARQ_ENABLE=1, 그 외 (SISO, flat 또는 TDL 무관)
+       │           run_pdsch_sm4x4_simulation()             ← MIMO_MODE=SM_4X4, CHANNEL_MODEL≠TDL (4x4, MMSE, genie-aided CSI)
+       │           run_pdsch_sm4x4_tdl_simulation()         ← MIMO_MODE=SM_4X4, CHANNEL_MODEL=TDL (4x4, MMSE, 주파수선택적, genie-aided CSI)
+       │           run_pdsch_cl_4port_simulation()          ← MIMO_MODE=CL_4PORT, CHANNEL_MODEL≠TDL (4포트 CL, RI+PMI 적응, genie-aided CSI)
+       │           run_pdsch_cl_4port_tdl_simulation()      ← MIMO_MODE=CL_4PORT, CHANNEL_MODEL=TDL (4포트 CL+TDL, wideband PMI, genie-aided CSI)
        │           run_pdsch_simo_mrc_simulation()          ← MIMO_MODE=SIMO_MRC, CHANNEL_MODEL≠TDL (1x2, MRC)
        │           run_pdsch_simo_mrc_tdl_simulation()      ← MIMO_MODE=SIMO_MRC, CHANNEL_MODEL=TDL (1x2, MRC, 주파수선택적)
        │           run_pdsch_sm2x2_simulation()             ← MIMO_MODE=SM_2X2, CHANNEL_MODEL≠TDL (2x2, ZF/MMSE)
@@ -93,10 +99,11 @@ main()
        │           run_pdcch_fading_simulation()      ← CHANNEL_MODEL=FLAT_FADING/TDL (TX 후보만 genie-aided 페이딩)
        ├─ CSIRS  → run_csirs_simulation()
        ├─ SRS    → run_srs_simulation()
-       ├─ PUSCH  → run_pusch_simulation()              ← UL, CHANNEL_MODEL≠TDL, TRANSFORM_PRECODING로 DFT-s-OFDM/CP-OFDM 토글
-       │           run_pusch_tdl_simulation()          ← CHANNEL_MODEL=TDL, TURBO/DFE 둘 다 비활성 (ZF/MMSE 둘 다 지원)
-       │           run_pusch_tdl_dfe_simulation()      ← CHANNEL_MODEL=TDL, PUSCH_DFE_ENABLE=1 (MMSE+DFE 연구 프로토타입)
-       │           run_pusch_tdl_turbo_simulation()    ← CHANNEL_MODEL=TDL, PUSCH_TURBO_ENABLE=1 (DFE_ENABLE보다 우선, MMSE+turbo 연구 프로토타입)
+       ├─ PUSCH  → run_pusch_harq_simulation()          ← HARQ_ENABLE=1 (AWGN/FLAT_FADING/TDL 공용, LS 채널 추정, DFT-s-OFDM 토글)
+       │           run_pusch_simulation()              ← HARQ 비활성, CHANNEL_MODEL≠TDL, TRANSFORM_PRECODING로 DFT-s-OFDM/CP-OFDM 토글
+       │           run_pusch_tdl_simulation()          ← HARQ 비활성, CHANNEL_MODEL=TDL, TURBO/DFE 둘 다 비활성 (ZF/MMSE 둘 다 지원)
+       │           run_pusch_tdl_dfe_simulation()      ← HARQ 비활성, CHANNEL_MODEL=TDL, PUSCH_DFE_ENABLE=1 (MMSE+DFE 연구 프로토타입)
+       │           run_pusch_tdl_turbo_simulation()    ← HARQ 비활성, CHANNEL_MODEL=TDL, PUSCH_TURBO_ENABLE=1 (DFE_ENABLE보다 우선, MMSE+turbo 연구 프로토타입)
        ├─ PUCCH  → run_pucch_format0_simulation()      ← PUCCH_FORMAT=0 (시퀀스 검출, AWGN 전용)
        │           run_pucch_format1_simulation()      ← PUCCH_FORMAT=1, CHANNEL_MODEL≠TDL (시퀀스+반복결합)
        │           run_pucch_format1_tdl_simulation()  ← PUCCH_FORMAT=1, CHANNEL_MODEL=TDL (반복마다 독립 채널, genie-aided MRC)
@@ -116,11 +123,13 @@ PUSCH/PUCCH 분기는 2026-07-14까지 `main.c`에 `#include`조차 없어 이 �
 
 PDSCH 분기는 `main.c`에서 `USE_DMRS`/`HARQ_ENABLE`/`MIMO_MODE`/`CHANNEL_MODEL`
 값으로 실제 라우팅된다 (2026-07-13까지는 이 배선이 빠져 있어 `run_pdsch_dmrs_simulation()`
-외의 PDSCH 함수들이 config로 도달 불가능한 상태였음). `HARQ_ENABLE=1`일 때는
-`MIMO_MODE`/`CHANNEL_MODEL`이 SM_2X2+TDL이면 세 기능이 전부 결합된
-`run_pdsch_sm2x2_tdl_harq_simulation()`으로, 그 외에는 SISO `run_pdsch_harq_simulation()`
-으로 라우팅된다. MIMO_MODE=SIMO_MRC+CHANNEL_MODEL=TDL이면 `run_pdsch_simo_mrc_tdl_harq_simulation()`으로
-간다 — 이로써 SIMO_MRC/SM_2X2 두 MIMO 모드 모두 TDL+HARQ 조합까지 커버됨.
+외의 PDSCH 함수들이 config로 도달 불가능한 상태였음). `HARQ_ENABLE=1`일 때 우선순위:
+SM_4X4 → `run_pdsch_sm4x4_harq_simulation()` (채널 모델 무관, genie-aided CSI),
+CL_4PORT → `run_pdsch_cl_4port_harq_simulation()` (채널 모델 무관, genie-aided CSI),
+SM_2X2+TDL → `run_pdsch_sm2x2_tdl_harq_simulation()`,
+SIMO_MRC+TDL → `run_pdsch_simo_mrc_tdl_harq_simulation()`,
+그 외(SISO 등) → `run_pdsch_harq_simulation()`.
+PUSCH는 `HARQ_ENABLE=1`이면 채널 모델/파형 설정에 무관하게 `run_pusch_harq_simulation()`이 우선.
 
 ---
 

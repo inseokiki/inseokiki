@@ -178,6 +178,65 @@ static void calc_derived(ConfigParser *p) {
     c->modulation[CFG_STR_MAX - 1] = '\0';
 }
 
+static void validate_config(const L1Config *c) {
+    int errors = 0;
+
+#define CFG_ERR(fmt, ...) \
+    do { fprintf(stderr, "[config error] " fmt "\n", ##__VA_ARGS__); errors++; } while(0)
+
+    /* MCS table 문자열 */
+    if (strcmp(c->mcsTableType,"TABLE1")!=0 &&
+        strcmp(c->mcsTableType,"TABLE2")!=0 &&
+        strcmp(c->mcsTableType,"TABLE3")!=0) {
+        CFG_ERR("MCS_TABLE='%s' is invalid; must be TABLE1, TABLE2, or TABLE3",
+                c->mcsTableType);
+    } else {
+        /* MCS index range */
+        MCSTableType tbl = mcs_table_from_str(c->mcsTableType);
+        int max_idx = get_max_mcs_index(tbl);
+        if (c->mcsIndex < 0 || c->mcsIndex > max_idx)
+            CFG_ERR("MCS_INDEX=%d out of range [0,%d] for %s",
+                    c->mcsIndex, max_idx, c->mcsTableType);
+    }
+
+    /* SNR sweep */
+    if (c->snrStep <= 0.0)
+        CFG_ERR("SNR_STEP=%.4g must be > 0", c->snrStep);
+    if (c->snrEnd < c->snrStart)
+        CFG_ERR("SNR_END=%.1f < SNR_START=%.1f", c->snrEnd, c->snrStart);
+
+    /* 시뮬레이션 횟수 */
+    if (c->numTrials <= 0)
+        CFG_ERR("NUM_TRIALS=%d must be > 0", c->numTrials);
+
+    /* 이퀄라이저 */
+    if (strcmp(c->equalizer,"ZF")!=0 && strcmp(c->equalizer,"MMSE")!=0)
+        CFG_ERR("EQUALIZER='%s' is invalid; must be ZF or MMSE", c->equalizer);
+
+    /* 공간 상관 */
+    if (c->spatialCorrTx < 0.0 || c->spatialCorrTx >= 1.0)
+        CFG_ERR("SPATIAL_CORR_TX=%.4g out of range [0, 1)", c->spatialCorrTx);
+
+    /* HARQ */
+    if (c->harqEnable) {
+        if (c->harqMaxRetx < 1)
+            CFG_ERR("HARQ_MAX_RETX=%d must be >= 1 when HARQ_ENABLE=1", c->harqMaxRetx);
+        if (strcmp(c->harqRvSeq,"IR")!=0 && strcmp(c->harqRvSeq,"CHASE")!=0)
+            CFG_ERR("HARQ_RV_SEQUENCE='%s' is invalid; must be IR or CHASE", c->harqRvSeq);
+    }
+
+    /* 리소스 그리드 기본 정합성 */
+    if (c->numRB > 0 && c->nfft > 0 && c->numRB * 12 > c->nfft)
+        CFG_ERR("12 * NUM_RB=%d exceeds NFFT=%d", c->numRB * 12, c->nfft);
+
+#undef CFG_ERR
+
+    if (errors > 0) {
+        fprintf(stderr, "%d config error(s) found — aborting.\n", errors);
+        exit(1);
+    }
+}
+
 int config_parser_load(ConfigParser *p, const char *filename) {
     config_parser_init(p);
     FILE *test = fopen(filename, "r");
@@ -255,6 +314,7 @@ int config_parser_load(ConfigParser *p, const char *filename) {
     kv_str(p, "PRACH_FORMAT",    "SHORT",  c->prachFormat,    CFG_STR_MAX);
     kv_str(p, "IQ_DUMP_FILE","iq_dump.txt",c->iqDumpFile,     CFG_STR_MAX);
     calc_derived(p);
+    validate_config(&p->cfg);
     return 1;
 }
 

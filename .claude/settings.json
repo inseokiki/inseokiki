@@ -32,6 +32,9 @@
     ]
   },
   "permissions": {
+    "allow": [
+      "Bash(./lls_sim_c /tmp/test_cl.cfg)"
+    ],
     "deny": [
       "Read(./.env)",
       "Read(./.env.*)",

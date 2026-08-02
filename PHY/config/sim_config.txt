@@ -38,7 +38,7 @@ SNR_STEP = 1
 
 # Channel Model: AWGN, FLAT_FADING, TDL (frequency-selective, approx 6-tap
 # NLOS profile -- see TDL_DELAY_SPREAD_NS below). Applies to PDSCH/PUSCH/
-# PUCCH(F1/F3)/PRACH/CSIRS/SRS/PBCH; PDCCH support pending. See STRUCTURE.md
+# PUCCH(F1/F3)/PRACH/CSIRS/SRS/PBCH/PDCCH. See STRUCTURE.md
 # for exactly which combinations exist per channel.
 CHANNEL_MODEL = AWGN
 

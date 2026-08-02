@@ -23,7 +23,7 @@
 #include <string.h>
 
 void run_pdsch_simulation(const L1Config *cfg) {
-    MCSTableType tbl = (strcmp(cfg->mcsTableType,"TABLE2")==0) ? MCS_TABLE2 : MCS_TABLE1;
+    MCSTableType tbl = mcs_table_from_str(cfg->mcsTableType);
     MCSEntry mcs  = get_mcs_entry(cfg->mcsIndex, tbl);
     double cr     = get_code_rate(&mcs);
     int    bps    = mcs.modulationOrder;
@@ -138,7 +138,7 @@ void run_pdsch_dmrs_simulation(const L1Config *cfg) {
     int num_rb   = cfg->numRB;
     int active   = num_rb * 12;
 
-    MCSTableType tbl = (strcmp(cfg->mcsTableType,"TABLE2")==0) ? MCS_TABLE2 : MCS_TABLE1;
+    MCSTableType tbl = mcs_table_from_str(cfg->mcsTableType);
     MCSEntry mcs = get_mcs_entry(cfg->mcsIndex, tbl);
     double cr    = get_code_rate(&mcs);
     int    bps   = mcs.modulationOrder;
@@ -290,7 +290,7 @@ void run_pdsch_simo_mrc_simulation(const L1Config *cfg) {
     int num_rb   = cfg->numRB;
     int active   = num_rb * 12;
 
-    MCSTableType tbl = (strcmp(cfg->mcsTableType,"TABLE2")==0) ? MCS_TABLE2 : MCS_TABLE1;
+    MCSTableType tbl = mcs_table_from_str(cfg->mcsTableType);
     MCSEntry mcs = get_mcs_entry(cfg->mcsIndex, tbl);
     double cr    = get_code_rate(&mcs);
     int    bps   = mcs.modulationOrder;
@@ -440,7 +440,7 @@ void run_pdsch_simo_mrc_tdl_simulation(const L1Config *cfg) {
     int num_rb   = cfg->numRB;
     int active   = num_rb * 12;
 
-    MCSTableType tbl = (strcmp(cfg->mcsTableType,"TABLE2")==0) ? MCS_TABLE2 : MCS_TABLE1;
+    MCSTableType tbl = mcs_table_from_str(cfg->mcsTableType);
     MCSEntry mcs = get_mcs_entry(cfg->mcsIndex, tbl);
     double cr    = get_code_rate(&mcs);
     int    bps   = mcs.modulationOrder;
@@ -604,7 +604,7 @@ void run_pdsch_simo_mrc_tdl_harq_simulation(const L1Config *cfg) {
     int num_rb   = cfg->numRB;
     int active   = num_rb * 12;
 
-    MCSTableType tbl = (strcmp(cfg->mcsTableType,"TABLE2")==0) ? MCS_TABLE2 : MCS_TABLE1;
+    MCSTableType tbl = mcs_table_from_str(cfg->mcsTableType);
     MCSEntry mcs = get_mcs_entry(cfg->mcsIndex, tbl);
     double cr    = get_code_rate(&mcs);
     int    bps   = mcs.modulationOrder;
@@ -787,7 +787,7 @@ void run_pdsch_sm2x2_simulation(const L1Config *cfg) {
     int num_rb   = cfg->numRB;
     int active   = num_rb * 12;
 
-    MCSTableType tbl = (strcmp(cfg->mcsTableType,"TABLE2")==0) ? MCS_TABLE2 : MCS_TABLE1;
+    MCSTableType tbl = mcs_table_from_str(cfg->mcsTableType);
     MCSEntry mcs = get_mcs_entry(cfg->mcsIndex, tbl);
     double cr    = get_code_rate(&mcs);
     int    bps   = mcs.modulationOrder;
@@ -962,7 +962,7 @@ void run_pdsch_sm2x2_tdl_simulation(const L1Config *cfg) {
     int num_rb   = cfg->numRB;
     int active   = num_rb * 12;
 
-    MCSTableType tbl = (strcmp(cfg->mcsTableType,"TABLE2")==0) ? MCS_TABLE2 : MCS_TABLE1;
+    MCSTableType tbl = mcs_table_from_str(cfg->mcsTableType);
     MCSEntry mcs = get_mcs_entry(cfg->mcsIndex, tbl);
     double cr    = get_code_rate(&mcs);
     int    bps   = mcs.modulationOrder;
@@ -1179,7 +1179,7 @@ void run_pdsch_sm2x2_tdl_harq_simulation(const L1Config *cfg) {
     int num_rb   = cfg->numRB;
     int active   = num_rb * 12;
 
-    MCSTableType tbl = (strcmp(cfg->mcsTableType,"TABLE2")==0) ? MCS_TABLE2 : MCS_TABLE1;
+    MCSTableType tbl = mcs_table_from_str(cfg->mcsTableType);
     MCSEntry mcs = get_mcs_entry(cfg->mcsIndex, tbl);
     double cr    = get_code_rate(&mcs);
     int    bps   = mcs.modulationOrder;
@@ -1410,7 +1410,7 @@ void run_pdsch_harq_simulation(const L1Config *cfg) {
     int num_rb   = cfg->numRB;
     int active   = num_rb * 12;
 
-    MCSTableType tbl = (strcmp(cfg->mcsTableType,"TABLE2")==0) ? MCS_TABLE2 : MCS_TABLE1;
+    MCSTableType tbl = mcs_table_from_str(cfg->mcsTableType);
     MCSEntry mcs = get_mcs_entry(cfg->mcsIndex, tbl);
     double cr    = get_code_rate(&mcs);
     int    bps   = mcs.modulationOrder;
@@ -1581,7 +1581,7 @@ void run_pdsch_tdl_simulation(const L1Config *cfg) {
     int num_rb   = cfg->numRB;
     int active   = num_rb * 12;
 
-    MCSTableType tbl = (strcmp(cfg->mcsTableType,"TABLE2")==0) ? MCS_TABLE2 : MCS_TABLE1;
+    MCSTableType tbl = mcs_table_from_str(cfg->mcsTableType);
     MCSEntry mcs = get_mcs_entry(cfg->mcsIndex, tbl);
     double cr    = get_code_rate(&mcs);
     int    bps   = mcs.modulationOrder;
@@ -1748,7 +1748,7 @@ void run_pdsch_sm4x4_simulation(const L1Config *cfg) {
     int num_rb = cfg->numRB;
     int active = num_rb * 12;
 
-    MCSTableType tbl = (strcmp(cfg->mcsTableType, "TABLE2") == 0) ? MCS_TABLE2 : MCS_TABLE1;
+    MCSTableType tbl = mcs_table_from_str(cfg->mcsTableType);
     MCSEntry mcs = get_mcs_entry(cfg->mcsIndex, tbl);
     double cr  = get_code_rate(&mcs);
     int    bps = mcs.modulationOrder;
@@ -1960,7 +1960,7 @@ void run_pdsch_sm4x4_tdl_simulation(const L1Config *cfg) {
     int *data_pos = (int *)malloc(num_data * sizeof(int));
     dmrs_data_indices(num_rb, data_pos);
 
-    MCSTableType tbl = (strcmp(cfg->mcsTableType,"TABLE2")==0) ? MCS_TABLE2 : MCS_TABLE1;
+    MCSTableType tbl = mcs_table_from_str(cfg->mcsTableType);
     MCSEntry mcs = get_mcs_entry(cfg->mcsIndex, tbl);
     double cr  = get_code_rate(&mcs);
     int    bps = mcs.modulationOrder;
@@ -2133,7 +2133,7 @@ void run_pdsch_sm4x4_harq_simulation(const L1Config *cfg) {
     int is_tdl  = (strcmp(cfg->channelModel, "TDL") == 0);
     double scs_hz = (double)cfg->scsKHz * 1000.0;
 
-    MCSTableType tbl = (strcmp(cfg->mcsTableType,"TABLE2")==0) ? MCS_TABLE2 : MCS_TABLE1;
+    MCSTableType tbl = mcs_table_from_str(cfg->mcsTableType);
     MCSEntry mcs = get_mcs_entry(cfg->mcsIndex, tbl);
     double cr   = get_code_rate(&mcs);
     int    bps  = mcs.modulationOrder;
@@ -2348,7 +2348,7 @@ void run_pdsch_cl_4port_simulation(const L1Config *cfg) {
     int num_rb   = cfg->numRB;
     int num_data = 6 * num_rb;   /* OFDM symbol당 데이터 RE (DMRS용 절반 제외) */
 
-    MCSTableType tbl = (strcmp(cfg->mcsTableType, "TABLE2") == 0) ? MCS_TABLE2 : MCS_TABLE1;
+    MCSTableType tbl = mcs_table_from_str(cfg->mcsTableType);
     MCSEntry mcs = get_mcs_entry(cfg->mcsIndex, tbl);
     double cr  = get_code_rate(&mcs);
     int    bps = mcs.modulationOrder;
@@ -2659,7 +2659,7 @@ void run_pdsch_cl_4port_tdl_simulation(const L1Config *cfg) {
 
     double scs_hz = (double)cfg->scsKHz * 1000.0;
 
-    MCSTableType tbl = (strcmp(cfg->mcsTableType, "TABLE2") == 0) ? MCS_TABLE2 : MCS_TABLE1;
+    MCSTableType tbl = mcs_table_from_str(cfg->mcsTableType);
     MCSEntry mcs = get_mcs_entry(cfg->mcsIndex, tbl);
     double cr  = get_code_rate(&mcs);
     int    bps = mcs.modulationOrder;
@@ -2994,7 +2994,7 @@ void run_pdsch_cl_4port_harq_simulation(const L1Config *cfg) {
     int is_tdl  = (strcmp(cfg->channelModel, "TDL") == 0);
     double scs_hz = (double)cfg->scsKHz * 1000.0;
 
-    MCSTableType tbl = (strcmp(cfg->mcsTableType, "TABLE2") == 0) ? MCS_TABLE2 : MCS_TABLE1;
+    MCSTableType tbl = mcs_table_from_str(cfg->mcsTableType);
     MCSEntry mcs = get_mcs_entry(cfg->mcsIndex, tbl);
     double cr   = get_code_rate(&mcs);
     int    bps  = mcs.modulationOrder;

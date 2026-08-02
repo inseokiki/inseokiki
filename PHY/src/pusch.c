@@ -37,7 +37,7 @@ void run_pusch_simulation(const L1Config *cfg) {
     int num_rb   = cfg->numRB;
     int active   = num_rb * 12;
 
-    MCSTableType tbl = (strcmp(cfg->mcsTableType,"TABLE2")==0) ? MCS_TABLE2 : MCS_TABLE1;
+    MCSTableType tbl = mcs_table_from_str(cfg->mcsTableType);
     MCSEntry mcs = get_mcs_entry(cfg->mcsIndex, tbl);
     double cr    = get_code_rate(&mcs);
     int    bps   = mcs.modulationOrder;
@@ -250,7 +250,7 @@ void run_pusch_tdl_simulation(const L1Config *cfg) {
     int num_rb   = cfg->numRB;
     int active   = num_rb * 12;
 
-    MCSTableType tbl = (strcmp(cfg->mcsTableType,"TABLE2")==0) ? MCS_TABLE2 : MCS_TABLE1;
+    MCSTableType tbl = mcs_table_from_str(cfg->mcsTableType);
     MCSEntry mcs = get_mcs_entry(cfg->mcsIndex, tbl);
     double cr    = get_code_rate(&mcs);
     int    bps   = mcs.modulationOrder;
@@ -471,7 +471,7 @@ void run_pusch_tdl_dfe_simulation(const L1Config *cfg) {
     int num_rb   = cfg->numRB;
     int active   = num_rb * 12;
 
-    MCSTableType tbl = (strcmp(cfg->mcsTableType,"TABLE2")==0) ? MCS_TABLE2 : MCS_TABLE1;
+    MCSTableType tbl = mcs_table_from_str(cfg->mcsTableType);
     MCSEntry mcs = get_mcs_entry(cfg->mcsIndex, tbl);
     double cr    = get_code_rate(&mcs);
     int    bps   = mcs.modulationOrder;
@@ -702,7 +702,7 @@ void run_pusch_tdl_turbo_simulation(const L1Config *cfg) {
     int num_rb   = cfg->numRB;
     int active   = num_rb * 12;
 
-    MCSTableType tbl = (strcmp(cfg->mcsTableType,"TABLE2")==0) ? MCS_TABLE2 : MCS_TABLE1;
+    MCSTableType tbl = mcs_table_from_str(cfg->mcsTableType);
     MCSEntry mcs = get_mcs_entry(cfg->mcsIndex, tbl);
     double cr    = get_code_rate(&mcs);
     int    bps   = mcs.modulationOrder;
@@ -960,7 +960,7 @@ void run_pusch_harq_simulation(const L1Config *cfg) {
     int num_rb   = cfg->numRB;
     int active   = num_rb * 12;
 
-    MCSTableType tbl = (strcmp(cfg->mcsTableType,"TABLE2")==0) ? MCS_TABLE2 : MCS_TABLE1;
+    MCSTableType tbl = mcs_table_from_str(cfg->mcsTableType);
     MCSEntry mcs = get_mcs_entry(cfg->mcsIndex, tbl);
     double cr  = get_code_rate(&mcs);
     int    bps = mcs.modulationOrder;
