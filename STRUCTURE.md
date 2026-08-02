@@ -60,8 +60,8 @@ cd BER && make
 | `ldpc.c` | LDPC 인코더 / 디코더 (데이터 채널). `ldpc_decode_soft()`가 belief-propagation 변수노드 사후 LLR 전체(coded_size)를 반환 — turbo 등화의 extrinsic 계산용(`ldpc_decode()`는 이 함수의 얇은 래퍼로 리팩터링됨, 동작 동일) |
 | `polar.c` | Polar 인코더 / 디코더 (제어 채널). `polar_init(N,K,E)`가 E를 받아 rate-matching shortening 위치를 강제-frozen 처리 (TS 38.212 5.4.1.1, 2026-07-13 버그 수정 — 이전엔 shortening 위치가 info bit와 겹쳐 파괴될 수 있었음) |
 | `polar_rate_match.c` | Polar Rate Matching / Dematching. `polar_interleaver()`는 `polar.c`의 frozen-bit 계산과 공유하기 위해 공개 함수로 노출됨 |
-| `pbch.c` | PBCH 시뮬레이션 루프 |
-| `pdcch.c` | PDCCH 시뮬레이션 루프 (Blind Decoding 포함) |
+| `pbch.c` | PBCH 시뮬레이션 루프. `run_pbch_fading_simulation()`(CHANNEL_MODEL=FLAT_FADING/TDL)은 PUCCH처럼 DMRS 파이프라인이 없어 genie-aided CSI 사용 — FLAT_FADING은 전체 SSB에 단일 탭, TDL은 심볼 인덱스를 RE로 취급(SCS=SCS_KHZ). `qam_demap_llr_mmse()`는 반드시 `mmse_equalize()` 결과(이미 등화된 신호)를 입력받아야 함(원시 rx 아님) — 이 규약을 지키지 않으면 위상 보정이 안 돼 SNR과 무관한 BLER floor가 생김(2026-08-02 구현 중 발견·수정) |
+| `pdcch.c` | PDCCH 시뮬레이션 루프 (Blind Decoding 포함). `run_pdcch_fading_simulation()`은 실제 송신된 후보(TX candidate)만 페이딩 채널을 통과시키고, 나머지 blind-decoding 후보들은 기존과 동일하게 순수 노이즈 드로우 유지(실제 송신과 무관하므로 채널이 의미 없음) — ZF/MMSE 등화 후 TX 후보 전용 스칼라 유효 노이즈분산(`run_pucch_format3_tdl_simulation()`과 같은 평균화 단순화)을 계산해 기존 `qam_demap_llr()` 경로 그대로 재사용 |
 | `pdsch.c` | PDSCH 시뮬레이션 루프 (w/o DMRS, w/ DMRS) |
 | `csi_rs.c` | CSI-RS 채널 추정 시뮬레이션 |
 | `srs.c` | SRS 채널 사운딩 시뮬레이션 |
@@ -87,8 +87,10 @@ main()
        │           run_pdsch_sm2x2_tdl_simulation()         ← MIMO_MODE=SM_2X2, CHANNEL_MODEL=TDL (2x2, ZF/MMSE, 주파수선택적)
        │           run_pdsch_tdl_simulation()               ← MIMO_MODE=SISO, CHANNEL_MODEL=TDL
        │           run_pdsch_dmrs_simulation()              ← MIMO_MODE=SISO, CHANNEL_MODEL≠TDL (기본)
-       ├─ PBCH   → run_pbch_simulation()
-       ├─ PDCCH  → run_pdcch_simulation()
+       ├─ PBCH   → run_pbch_simulation()             ← CHANNEL_MODEL=AWGN
+       │           run_pbch_fading_simulation()      ← CHANNEL_MODEL=FLAT_FADING/TDL (genie-aided CSI)
+       ├─ PDCCH  → run_pdcch_simulation()             ← CHANNEL_MODEL=AWGN
+       │           run_pdcch_fading_simulation()      ← CHANNEL_MODEL=FLAT_FADING/TDL (TX 후보만 genie-aided 페이딩)
        ├─ CSIRS  → run_csirs_simulation()
        ├─ SRS    → run_srs_simulation()
        ├─ PUSCH  → run_pusch_simulation()              ← UL, CHANNEL_MODEL≠TDL, TRANSFORM_PRECODING로 DFT-s-OFDM/CP-OFDM 토글

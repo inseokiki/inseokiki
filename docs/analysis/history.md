@@ -69,6 +69,15 @@
 
 **원인 분석(수식으로 확인, 버그 아님)**: 닫힌형 2×2 블록 제곱근에서 ρ→1이면 a=b=1/√2로 수렴 — 즉 편파 쌍 내 두 안테나가 완전히 상관돼도 "그 편파의 유효 안테나 1개"로 축소될 뿐, **두 편파(pol1/pol2)는 여전히 완전히 독립**이라 유효 공간자유도가 2개 그대로 남는다. 코드북의 rank-2 "동일빔 교차편파 다이버시티" 변형(i1_3=1)이 정확히 이 2개의 독립 편파 자유도만 있으면 성립하도록 설계되어 있어, 동일편파 내부 상관이 아무리 심해져도 RI+PMI는 거의 항상 이 변형을 통해 rank-2를 계속 선택한다. 즉 이번 검증에서 "동일편파 상관만으로는 rank-1이 거의 선택되지 않는다"는 것 자체가 결론 — 진짜로 rank-1 전환을 보려면 교차편파(XPD) 누설 상관을 추가로 모델링해야 하며, 이는 후속 과제로 `tasks/todo.md`에 남김(사용자와 확인 후 이번 라운드는 여기서 마무리, 2026-08-02).
 
+### PHY LLS — 완성도 작업 1단계: PBCH/PDCCH에 페이딩 채널 추가 (2026-08-02)
+"NTN 같은 새 영역보다 기존 LLS 완성도 우선"이라는 사용자 확인(2026-08-02, `tasks/todo.md` 참조) 이후 첫 작업. PBCH/PDCCH는 이 LLS에서 유일하게 AWGN 전용으로 남아있던 채널이라 최우선 착수.
+
+- `run_pbch_fading_simulation()`: PUCCH와 같은 genie-aided CSI 방식(DMRS 파이프라인 없음). FLAT_FADING은 SSB 전체(E/bps=432 심볼)에 단일 탭 유지, TDL은 심볼 인덱스를 RE로 취급해 SCS_KHZ 기준 진짜 다경로 페이딩 적용. ZF/MMSE 둘 다 지원.
+- `run_pdcch_fading_simulation()`: blind-decoding 후보들 중 **실제 송신된 후보(TX candidate)에만** 페이딩 채널 적용 — 나머지 후보는 실제 전송과 무관한 순수 노이즈 드로우라 채널을 적용할 대상 자체가 없음(기존 구조 그대로 유지). ZF/MMSE 등화 후 TX 후보 전용 평균 유효 노이즈분산을 계산해(기존 `run_pucch_format3_tdl_simulation()`의 단순화와 동일 패턴) 기존 스칼라 `qam_demap_llr()` 경로에 그대로 흘려보냄.
+- `main.c`에 `CHANNEL_MODEL` 분기 추가(AWGN=기존 함수, 그 외=신규 함수), `config/sim_config.txt`의 `CHANNEL_MODEL` 주석을 "PDSCH+DMRS 전용" 옛 문구에서 실제 지원 채널 목록으로 갱신.
+- **구현 중 발견한 버그(내 코드, 기존 코드 아님) 및 수정**: `qam_demap_llr_mmse()`는 이미 `mmse_equalize()`를 거친 등화 신호를 입력으로 기대하는데(비교 대상인 실수 PAM 레벨이 α로만 스케일되고 채널 위상은 보정 안 됨 — pdsch.c/pusch.c 기존 호출부는 전부 `mmse_equalize()` 먼저 호출 후 그 결과를 넘기고 있었음), PBCH 초안 코드는 원시 rx를 바로 넘겨서 SNR과 무관한 BLER floor(~0.77~0.88)가 발생 — `mmse_equalize()` 선행 호출로 수정 후 재검증, floor 사라지고 단조 감소 확인.
+- **검증**: AWGN 경로 회귀 없음(기존과 동일). FLAT_FADING은 ZF/MMSE 결과가 거의 동일(단일탭 채널에서 이론적으로 당연). TDL은 MMSE가 ZF보다 전 SNR에서 확실히 우세(PDCCH -6dB에서 P_detect 0.22 vs 0.014). 어느 조합에서도 floor 없이 SNR 증가에 따라 단조 개선 확인.
+
 ---
 
 ## 🔄 업데이트 이력 (원본 CLAUDE.md 기준)

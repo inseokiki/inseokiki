@@ -176,8 +176,14 @@ int main(int argc, char *argv[]) {
     config_parser_print(&parser);
     printf("\n");
 
-    if      (strcmp(cfg.physicalChannel,"PBCH"  )==0) run_pbch_simulation(&cfg);
-    else if (strcmp(cfg.physicalChannel,"PDCCH" )==0) run_pdcch_simulation(&cfg);
+    if      (strcmp(cfg.physicalChannel,"PBCH"  )==0) {
+        if (strcmp(cfg.channelModel,"AWGN")==0) run_pbch_simulation(&cfg);
+        else                                     run_pbch_fading_simulation(&cfg);
+    }
+    else if (strcmp(cfg.physicalChannel,"PDCCH" )==0) {
+        if (strcmp(cfg.channelModel,"AWGN")==0) run_pdcch_simulation(&cfg);
+        else                                     run_pdcch_fading_simulation(&cfg);
+    }
     else if (strcmp(cfg.physicalChannel,"PDSCH" )==0) {
         if (!cfg.useDmrs) {
             run_pdsch_simulation(&cfg);
