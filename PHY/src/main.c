@@ -188,7 +188,11 @@ int main(int argc, char *argv[]) {
         if (!cfg.useDmrs) {
             run_pdsch_simulation(&cfg);
         } else if (cfg.harqEnable) {
-            if (strcmp(cfg.mimoMode,"SM_2X2")==0 && strcmp(cfg.channelModel,"TDL")==0)
+            if (strcmp(cfg.mimoMode,"SM_4X4")==0)
+                run_pdsch_sm4x4_harq_simulation(&cfg);
+            else if (strcmp(cfg.mimoMode,"CL_4PORT")==0)
+                run_pdsch_cl_4port_harq_simulation(&cfg);
+            else if (strcmp(cfg.mimoMode,"SM_2X2")==0 && strcmp(cfg.channelModel,"TDL")==0)
                 run_pdsch_sm2x2_tdl_harq_simulation(&cfg);
             else if (strcmp(cfg.mimoMode,"SIMO_MRC")==0 && strcmp(cfg.channelModel,"TDL")==0)
                 run_pdsch_simo_mrc_tdl_harq_simulation(&cfg);
@@ -201,9 +205,11 @@ int main(int argc, char *argv[]) {
             if (strcmp(cfg.channelModel,"TDL")==0) run_pdsch_sm2x2_tdl_simulation(&cfg);
             else                                    run_pdsch_sm2x2_simulation(&cfg);
         } else if (strcmp(cfg.mimoMode,"SM_4X4")==0) {
-            run_pdsch_sm4x4_simulation(&cfg);
+            if (strcmp(cfg.channelModel,"TDL")==0) run_pdsch_sm4x4_tdl_simulation(&cfg);
+            else                                    run_pdsch_sm4x4_simulation(&cfg);
         } else if (strcmp(cfg.mimoMode,"CL_4PORT")==0) {
-            run_pdsch_cl_4port_simulation(&cfg);
+            if (strcmp(cfg.channelModel,"TDL")==0) run_pdsch_cl_4port_tdl_simulation(&cfg);
+            else                                    run_pdsch_cl_4port_simulation(&cfg);
         } else if (strcmp(cfg.channelModel,"TDL")==0) {
             run_pdsch_tdl_simulation(&cfg);
         } else {
@@ -213,7 +219,9 @@ int main(int argc, char *argv[]) {
     else if (strcmp(cfg.physicalChannel,"CSIRS" )==0) run_csirs_simulation(&cfg);
     else if (strcmp(cfg.physicalChannel,"SRS"   )==0) run_srs_simulation(&cfg);
     else if (strcmp(cfg.physicalChannel,"PUSCH" )==0) {
-        if (strcmp(cfg.channelModel,"TDL")==0) {
+        if (cfg.harqEnable) {
+            run_pusch_harq_simulation(&cfg);
+        } else if (strcmp(cfg.channelModel,"TDL")==0) {
             if      (cfg.puschTurboEnable) run_pusch_tdl_turbo_simulation(&cfg);
             else if (cfg.puschDfeEnable)   run_pusch_tdl_dfe_simulation(&cfg);
             else                           run_pusch_tdl_simulation(&cfg);

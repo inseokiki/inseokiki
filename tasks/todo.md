@@ -17,11 +17,11 @@ _(현재 진행 중인 작업 없음)_
 > 우선순위 원칙(2026-08-02, 사용자 확인): NTN 같은 새 영역 확장보다 **기존 LLS의 완성도**(이미 있는 채널/기능들이 빠짐없이 조합되어 동작하는 것)를 우선한다.
 
 ### A. 조합 공백 메우기 (기존 기능이 서로 안 엮이는 부분)
-- [ ] `SM_4X4`(4x4 SU-MIMO)에 TDL 변형 추가 — 현재 flat/AWGN 채널로만 동작 (SIMO_MRC/SM_2X2는 이미 TDL 버전 있음)
-- [ ] `SM_4X4`에 HARQ 조합 추가 — 2x2는 HARQ+TDL 결합까지 있는데 4x4는 HARQ 자체가 없음
-- [ ] `CL_4PORT`에 TDL 변형 추가 — 현재 flat/AWGN 채널로만 동작
-- [ ] `CL_4PORT`에 HARQ 조합 추가
-- [ ] PUSCH에 HARQ 재전송 조합 추가 — DFE/turbo 등화 연구 프로토타입은 있지만 HARQ 재전송 자체가 없음
+- [x] `SM_4X4`(4x4 SU-MIMO)에 TDL 변형 추가 — genie-aided CSI, 2026-08-02 완료
+- [x] `SM_4X4`에 HARQ 조합 추가 — flat/TDL 모두 지원, genie-aided, 2026-08-03 완료
+- [x] `CL_4PORT`에 TDL 변형 추가 — Wideband PMI (H_avg 기반), genie-aided, 2026-08-03 완료
+- [x] `CL_4PORT`에 HARQ 조합 추가 — flat/TDL 모두 지원, 시도0 PMI 고정, 2026-08-03 완료
+- [x] PUSCH에 HARQ 재전송 조합 추가 — TDL/flat/AWGN 지원, LS est., 2026-08-03 완료
 
 ### B. 이번 세션에 확인된 후속 과제
 - [ ] CL_4PORT 교차편파(XPD) 누설 상관 모델 추가 — 2026-08-02 검증에서 동일편파 상관만으로는 rank-1이 ρ→1에서도 거의 선택 안 됨을 확인(교차편파 다이버시티 변형이 계속 유리하기 때문, 물리적으로 타당). 진짜 rank-1 전환을 보려면 편파 간 누설(유한 XPD) 상관을 추가해야 함 — `docs/analysis/history.md` 2026-08-02 항목 참조
@@ -46,3 +46,4 @@ _(현재 진행 중인 작업 없음)_
 _(상세 구현/실측 결과는 `docs/analysis/history.md` 참조 — 2026-08-02 CLAUDE.md 분리 시점 이전 이력은 전부 그쪽으로 이관됨)_
 
 - [x] PBCH/PDCCH에 페이딩 채널(FLAT_FADING/TDL) 변형 추가 (2026-08-02) — LLS 완성도 작업 1단계, 상세는 `docs/analysis/history.md` 참조
+- [x] Group A 조합 공백 전체 완료 (2026-08-03) — SM_4X4+TDL, SM_4X4+HARQ, CL_4PORT+TDL, CL_4PORT+HARQ, PUSCH+HARQ

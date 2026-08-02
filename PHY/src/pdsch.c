@@ -1945,6 +1945,385 @@ void run_pdsch_sm4x4_simulation(const L1Config *cfg) {
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
+ * 4x4 Spatial Multiplexing (SM_4X4), TDL Frequency-Selective Fading
+ *
+ * 채널 추정  : Genie-aided (완벽 CSI — 4-way 파일럿 간격 8 SC이 DS=300ns
+ *              채널의 코히어런스 대역 ~13 SC에 너무 가까워 LS+선형보간 오류
+ *              floor 발생. CL_4PORT TDL과 동일 이유로 genie-aided 사용)
+ * 채널 모델  : TDL, 16 독립 tap-set [Rx][Tx], RE별 tdl_freq_response
+ * 검출기     : MMSE / ZF (4×4 Gauss-Jordan, per-RE 완벽 H 사용)
+ * ─────────────────────────────────────────────────────────────────────────── */
+void run_pdsch_sm4x4_tdl_simulation(const L1Config *cfg) {
+    const int NL = 4;
+    int num_rb   = cfg->numRB;
+    int num_data = 6 * num_rb;   /* flat 버전과 동일 데이터 RE 수 유지 */
+    int *data_pos = (int *)malloc(num_data * sizeof(int));
+    dmrs_data_indices(num_rb, data_pos);
+
+    MCSTableType tbl = (strcmp(cfg->mcsTableType,"TABLE2")==0) ? MCS_TABLE2 : MCS_TABLE1;
+    MCSEntry mcs = get_mcs_entry(cfg->mcsIndex, tbl);
+    double cr  = get_code_rate(&mcs);
+    int    bps = mcs.modulationOrder;
+    int    crc_bits = 24;
+
+    int max_dbits = num_data * bps;
+    int tbsz = (int)(max_dbits * cr);
+    if (tbsz < 1) tbsz = 1;
+    if (tbsz > 8424) tbsz = 8424;
+    int K = tbsz + crc_bits;
+    LDPCCodec ldpc; ldpc_init(&ldpc, K, cr);
+    int acsz  = ldpc.coded_size;
+    int padsz = acsz + ((acsz % bps) ? bps - acsz % bps : 0);
+    int nsym  = padsz / bps;
+    int nd    = (nsym < num_data) ? nsym : num_data;
+
+    int use_mmse = (strcmp(cfg->equalizer,"MMSE")==0);
+    double scs_hz = (double)cfg->scsKHz * 1000.0;
+
+    printf("=== PDSCH 4x4 Spatial Multiplexing (SM_4X4), TDL Frequency-Selective Fading ===\n");
+    printf("MCS Index    : %d (Table %s)\n", cfg->mcsIndex, cfg->mcsTableType);
+    printf("Modulation   : %s (Qm=%d)\n", mcs.modulation, bps);
+    printf("Code Rate    : %.4f\n", cr);
+    printf("Num RB       : %d\n", num_rb);
+    printf("Layers       : 4 (independent codewords per layer)\n");
+    printf("Tx/Rx Ants   : 4 / 4\n");
+    printf("Channel      : TDL per Tx-Rx pair (16 tap-sets, DS=%.0fns, %d taps, genie-aided CSI)\n",
+           cfg->tdlDelaySpreadNs, TDL_MAX_TAPS);
+    printf("Detector     : %s  (4×4 Gauss-Jordan, per-RE perfect H)\n", use_mmse ? "MMSE" : "ZF");
+    printf("TB Size/layer: %d bits\n", tbsz);
+    printf("Data RE/layer: %d  (pilot 오버헤드 동일 회계, genie)\n", num_data);
+    printf("Trials/SNR   : %d\n\n", cfg->numTrials);
+
+    int   *tb[NL], *tb_crc[NL], *coded[NL], *txbits[NL], *decoded_buf[NL];
+    cx_t  *syms[NL];
+    double *allllr[NL], *llr_buf[NL];
+    for (int l = 0; l < NL; l++) {
+        tb[l]          = (int   *)malloc(tbsz  * sizeof(int));
+        tb_crc[l]      = (int   *)malloc(K     * sizeof(int));
+        coded[l]       = (int   *)malloc(acsz  * sizeof(int));
+        txbits[l]      = (int   *)malloc(padsz * sizeof(int));
+        syms[l]        = (cx_t  *)malloc(nsym  * sizeof(cx_t));
+        allllr[l]      = (double *)malloc(padsz * sizeof(double));
+        llr_buf[l]     = (double *)malloc(acsz  * sizeof(double));
+        decoded_buf[l] = (int   *)malloc(K      * sizeof(int));
+    }
+
+    cx_t  *taps[NL][NL];
+    for (int r = 0; r < NL; r++)
+        for (int t = 0; t < NL; t++)
+            taps[r][t] = (cx_t *)malloc(TDL_MAX_TAPS * sizeof(cx_t));
+
+    printf("%12s%15s%15s\n", "SNR (dB)", "BER", "BLER");
+    for (int i = 0; i < 42; i++) printf("-");
+    printf("\n");
+
+    TDLChannel tdl_ch;
+    cx_t x_hat_re[NL]; double nv_re[NL];
+
+    for (double snr = cfg->snrStart; snr <= cfg->snrEnd + 1e-6; snr += cfg->snrStep) {
+        tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        double N0    = 1.0 / pow(10.0, snr / 10.0);
+        double sigma = sqrt(N0 / 2.0);
+
+        long total_err = 0, total_bits = 0;
+        int  blk_err   = 0;
+
+        for (int trial = 0; trial < cfg->numTrials; trial++) {
+
+            /* ① TX */
+            for (int l = 0; l < NL; l++) {
+                gen_random_bits(tb[l], tbsz);
+                attach_crc(tb[l], tbsz, CRC24A, tb_crc[l]);
+                ldpc_encode(&ldpc, tb_crc[l], coded[l]);
+                memcpy(txbits[l], coded[l], acsz * sizeof(int));
+                for (int i = acsz; i < padsz; i++) txbits[l][i] = 0;
+                qam_modulate(txbits[l], padsz, mcs.modulation, syms[l]);
+            }
+
+            /* ② TDL: 16 tap-set draw */
+            for (int r = 0; r < NL; r++)
+                for (int t = 0; t < NL; t++)
+                    tdl_draw(&tdl_ch, taps[r][t]);
+
+            /* ③ 검출 + LLR (genie-aided: 데이터 RE마다 진짜 H 사용) */
+            double nv_sum[NL]; for (int l = 0; l < NL; l++) nv_sum[l] = 0.0;
+
+            for (int d = 0; d < nd; d++) {
+                int k = data_pos[d];
+
+                /* 진짜 4×4 채널 H[r][t] = tdl_freq_response */
+                cx_t h_true[NL][NL];
+                for (int r = 0; r < NL; r++)
+                    for (int t = 0; t < NL; t++)
+                        h_true[r][t] = tdl_freq_response(&tdl_ch, taps[r][t], k);
+
+                /* 수신: y[r] = Σ_t H_rt * sym_t + noise */
+                cx_t y[NL];
+                for (int r = 0; r < NL; r++) {
+                    cx_t s = CX_ZERO;
+                    for (int t = 0; t < NL; t++)
+                        s += h_true[r][t] * syms[t][d];
+                    y[r] = s + CX_MAKE(randn() * sigma, randn() * sigma);
+                }
+
+                if (use_mmse) mimo_mmse_detect_4x4(h_true, y, N0, x_hat_re, nv_re);
+                else          mimo_zf_detect_4x4  (h_true, y, N0, x_hat_re, nv_re);
+
+                for (int l = 0; l < NL; l++) {
+                    syms[l][d] = x_hat_re[l];
+                    nv_sum[l] += nv_re[l];
+                }
+            }
+
+            for (int l = 0; l < NL; l++) {
+                double env = nv_sum[l] / nd;
+                qam_demap_llr(syms[l], nd, mcs.modulation, env, allllr[l]);
+                int llr_len = (acsz < nd * bps) ? acsz : nd * bps;
+                memcpy(llr_buf[l], allllr[l], llr_len * sizeof(double));
+                for (int i = llr_len; i < acsz; i++) llr_buf[l][i] = 0.0;
+            }
+
+            /* ④ LDPC 디코딩 */
+            int trial_err = 0;
+            for (int l = 0; l < NL; l++) {
+                ldpc_decode(&ldpc, llr_buf[l], 25, decoded_buf[l]);
+                int crc_ok = check_crc(decoded_buf[l], K, CRC24A);
+                int bit_err = 0;
+                for (int i = 0; i < tbsz; i++)
+                    if (tb[l][i] != decoded_buf[l][i]) bit_err++;
+                total_err  += bit_err;
+                total_bits += tbsz;
+                if (!crc_ok || bit_err > 0) trial_err++;
+            }
+            if (trial_err > 0) blk_err++;
+        }
+
+        double ber  = total_bits > 0 ? (double)total_err / total_bits : 0.0;
+        double bler = (double)blk_err / cfg->numTrials;
+        printf("%12.1f%15.4e%15.4f\n", snr, ber, bler);
+    }
+    printf("\nPDSCH 4x4 SM + TDL simulation complete.\n");
+
+    ldpc_free(&ldpc);
+    free(data_pos);
+    for (int l = 0; l < NL; l++) {
+        free(tb[l]); free(tb_crc[l]); free(coded[l]); free(txbits[l]);
+        free(syms[l]); free(allllr[l]); free(llr_buf[l]); free(decoded_buf[l]);
+    }
+    for (int r = 0; r < NL; r++)
+        for (int t = 0; t < NL; t++)
+            free(taps[r][t]);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+ * 4x4 Spatial Multiplexing (SM_4X4), HARQ Circular Buffer (Chase / IR)
+ * 지원 채널: FLAT_FADING (블록 flat, 시도마다 재추첨) / TDL (genie-aided, 16 tap-set)
+ *
+ * 채널 추정  : Genie-aided (완벽 CSI — SM_4X4 TDL과 동일, 파일럿 간격 8 SC 문제 회피)
+ * HARQ      : rate_match_select / rate_match_combine (SM_2X2 TDL HARQ와 동일 구조)
+ * 레이어    : 4개 독립 CW / soft-buffer / LDPC
+ * ─────────────────────────────────────────────────────────────────────────── */
+void run_pdsch_sm4x4_harq_simulation(const L1Config *cfg) {
+    const int NL = 4;
+    int num_rb   = cfg->numRB;
+    int num_data = 6 * num_rb;
+    int *data_pos = (int *)malloc(num_data * sizeof(int));
+    dmrs_data_indices(num_rb, data_pos);
+
+    int is_tdl  = (strcmp(cfg->channelModel, "TDL") == 0);
+    double scs_hz = (double)cfg->scsKHz * 1000.0;
+
+    MCSTableType tbl = (strcmp(cfg->mcsTableType,"TABLE2")==0) ? MCS_TABLE2 : MCS_TABLE1;
+    MCSEntry mcs = get_mcs_entry(cfg->mcsIndex, tbl);
+    double cr   = get_code_rate(&mcs);
+    int    bps  = mcs.modulationOrder;
+    int    crc_bits = 24;
+
+    int E    = num_data * bps;
+    int tbsz = (int)(E * cr);
+    if (tbsz < 1)    tbsz = 1;
+    if (tbsz > 8424) tbsz = 8424;
+    int K = tbsz + crc_bits;
+
+    LDPCCodec ldpc; ldpc_init(&ldpc, K, HARQ_MOTHER_RATE);
+    int ncb = ldpc.coded_size;
+
+    int use_mmse = (strcmp(cfg->equalizer,"MMSE")==0);
+    int is_chase = (strcmp(cfg->harqRvSeq,"CHASE")==0);
+    int rvseq[4] = {0,2,3,1};
+    int rvseq_len = is_chase ? 1 : 4;
+    int max_retx = cfg->harqMaxRetx > 0 ? cfg->harqMaxRetx : 1;
+
+    printf("=== PDSCH 4x4 SM (HARQ Circular Buffer %s), %s ===\n",
+           is_chase ? "Chase" : "IR",
+           is_tdl ? "TDL Frequency-Selective Fading" : "Flat Fading");
+    printf("MCS Index    : %d (Table %s)\n", cfg->mcsIndex, cfg->mcsTableType);
+    printf("Modulation   : %s (Qm=%d)\n", mcs.modulation, bps);
+    printf("Target Rate  : %.4f\n", cr);
+    printf("Mother Rate  : %.4f (Ncb=%d)\n", HARQ_MOTHER_RATE, ncb);
+    printf("Num RB       : %d\n", num_rb);
+    printf("Layers       : 4 (independent codewords, shared retransmission occasion)\n");
+    printf("TB Size/layer: %d bits\n", tbsz);
+    printf("Max Retx     : %d\n", max_retx);
+    if (is_tdl)
+        printf("Channel      : TDL per Tx-Rx pair (16 tap-sets, DS=%.0fns, %d taps, genie-aided)\n",
+               cfg->tdlDelaySpreadNs, TDL_MAX_TAPS);
+    else
+        printf("Channel      : Flat Fading 4x4 (block-flat, redrawn per HARQ attempt, genie-aided)\n");
+    printf("Detector     : %s (genie-aided CSI)\n", use_mmse ? "MMSE" : "ZF");
+    printf("Trials/SNR   : %d\n\n", cfg->numTrials);
+
+    int   *tb[NL], *tb_crc[NL], *coded_full[NL], *selbits[NL], *decoded[NL];
+    cx_t  *data_syms[NL], *x_hat[NL];
+    double *allllr[NL], *soft_buf[NL];
+    for (int l = 0; l < NL; l++) {
+        tb[l]         = (int *)malloc(tbsz    * sizeof(int));
+        tb_crc[l]     = (int *)malloc(K       * sizeof(int));
+        coded_full[l] = (int *)malloc(ncb     * sizeof(int));
+        selbits[l]    = (int *)malloc(E       * sizeof(int));
+        decoded[l]    = (int *)malloc(K       * sizeof(int));
+        data_syms[l]  = (cx_t *)malloc(num_data * sizeof(cx_t));
+        x_hat[l]      = (cx_t *)malloc(num_data * sizeof(cx_t));
+        allllr[l]     = (double *)malloc(E    * sizeof(double));
+        soft_buf[l]   = (double *)malloc(ncb  * sizeof(double));
+    }
+    cx_t *taps[NL][NL];
+    for (int r = 0; r < NL; r++)
+        for (int t = 0; t < NL; t++)
+            taps[r][t] = (cx_t *)malloc(TDL_MAX_TAPS * sizeof(cx_t));
+
+    printf("%10s%14s%14s%14s%12s\n", "SNR(dB)", "BER(final)", "BLER(1st)", "BLER(HARQ)", "AvgTx");
+    for (int i = 0; i < 64; i++) printf("-");
+    printf("\n");
+
+    TDLChannel tdl_ch;
+    for (double snr = cfg->snrStart; snr <= cfg->snrEnd + 1e-6; snr += cfg->snrStep) {
+        if (is_tdl) tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        double snrlin = pow(10.0, snr / 10.0);
+        double N0     = 1.0 / snrlin;
+        double sigma  = sqrt(1.0 / (2.0 * snrlin));
+
+        int total_err=0, total_bits=0, blk_err_final=0, blk_err_1st=0;
+        long long total_attempts = 0;
+
+        for (int trial = 0; trial < cfg->numTrials; trial++) {
+            for (int l = 0; l < NL; l++) {
+                gen_random_bits(tb[l], tbsz);
+                attach_crc(tb[l], tbsz, CRC24A, tb_crc[l]);
+                ldpc_encode(&ldpc, tb_crc[l], coded_full[l]);
+                for (int i = 0; i < ncb; i++) soft_buf[l][i] = 0.0;
+            }
+
+            int crc_ok[NL], be[NL], be_1st[NL], crc_1st[NL];
+            for (int l = 0; l < NL; l++) { crc_ok[l]=0; be[l]=0; be_1st[l]=0; crc_1st[l]=0; }
+            int attempts = 0;
+
+            for (int attempt = 0; attempt < max_retx; attempt++) {
+                int rv = rvseq[attempt % rvseq_len];
+
+                for (int l = 0; l < NL; l++) {
+                    rate_match_select(coded_full[l], ncb, rv, E, selbits[l]);
+                    qam_modulate(selbits[l], E, mcs.modulation, data_syms[l]);
+                }
+
+                /* fresh channel draw every attempt (time diversity across HARQ rounds) */
+                cx_t h_flat[NL][NL];
+                if (!is_tdl) {
+                    mimo_channel_draw_4x4(h_flat);
+                } else {
+                    for (int r = 0; r < NL; r++)
+                        for (int t = 0; t < NL; t++)
+                            tdl_draw(&tdl_ch, taps[r][t]);
+                }
+
+                double nv_sum[NL]; for (int l = 0; l < NL; l++) nv_sum[l] = 0.0;
+
+                for (int d = 0; d < num_data; d++) {
+                    int k = data_pos[d];
+                    cx_t h_true[NL][NL];
+                    if (!is_tdl) {
+                        for (int r = 0; r < NL; r++)
+                            for (int t = 0; t < NL; t++)
+                                h_true[r][t] = h_flat[r][t];
+                    } else {
+                        for (int r = 0; r < NL; r++)
+                            for (int t = 0; t < NL; t++)
+                                h_true[r][t] = tdl_freq_response(&tdl_ch, taps[r][t], k);
+                    }
+
+                    cx_t tx[NL];
+                    for (int l = 0; l < NL; l++) tx[l] = data_syms[l][d];
+                    cx_t y[NL];
+                    for (int r = 0; r < NL; r++) {
+                        cx_t s = CX_ZERO;
+                        for (int t = 0; t < NL; t++) s += h_true[r][t] * tx[t];
+                        y[r] = s + CX_MAKE(randn() * sigma, randn() * sigma);
+                    }
+
+                    cx_t x_hat_re[NL]; double nv_re[NL];
+                    if (use_mmse) mimo_mmse_detect_4x4(h_true, y, N0, x_hat_re, nv_re);
+                    else          mimo_zf_detect_4x4  (h_true, y, N0, x_hat_re, nv_re);
+                    for (int l = 0; l < NL; l++) {
+                        x_hat[l][d] = x_hat_re[l];
+                        nv_sum[l]  += nv_re[l];
+                    }
+                }
+
+                int ml = tbsz < ldpc.info_size - crc_bits ? tbsz : ldpc.info_size - crc_bits;
+                if (ml < 0) ml = 0;
+                for (int l = 0; l < NL; l++) {
+                    double env = nv_sum[l] / num_data;
+                    qam_demap_llr(x_hat[l], num_data, mcs.modulation, env, allllr[l]);
+                    rate_match_combine(soft_buf[l], ncb, rv, E, allllr[l]);
+                    ldpc_decode(&ldpc, soft_buf[l], 25, decoded[l]);
+                    crc_ok[l] = check_crc(decoded[l], K, CRC24A);
+                    int biterr = 0;
+                    for (int i = 0; i < ml; i++)
+                        if (tb[l][i] != decoded[l][i]) biterr++;
+                    be[l] = biterr;
+                    if (attempt == 0) { be_1st[l] = biterr; crc_1st[l] = crc_ok[l]; }
+                }
+
+                attempts = attempt + 1;
+                int all_ok = 1;
+                for (int l = 0; l < NL; l++) if (!crc_ok[l]) { all_ok = 0; break; }
+                if (all_ok) break;
+            }
+
+            int any_err_1st = 0, any_err_final = 0;
+            for (int l = 0; l < NL; l++) {
+                total_err  += be[l];
+                total_bits += tbsz;
+                if (!crc_1st[l] || be_1st[l] > 0) any_err_1st   = 1;
+                if (!crc_ok[l]  || be[l]    > 0) any_err_final = 1;
+            }
+            if (any_err_1st)   blk_err_1st++;
+            if (any_err_final) blk_err_final++;
+            total_attempts += attempts;
+        }
+
+        double ber       = total_bits > 0 ? (double)total_err / total_bits : 0.0;
+        double bler_1st  = (double)blk_err_1st   / cfg->numTrials;
+        double bler_final= (double)blk_err_final  / cfg->numTrials;
+        double avg_tx    = (double)total_attempts / cfg->numTrials;
+        printf("%10.1f%14.4e%14.4f%14.4f%12.2f\n", snr, ber, bler_1st, bler_final, avg_tx);
+    }
+    printf("\nPDSCH 4x4 SM + %s + HARQ simulation complete.\n",
+           is_tdl ? "TDL" : "Flat Fading");
+
+    ldpc_free(&ldpc);
+    free(data_pos);
+    for (int l = 0; l < NL; l++) {
+        free(tb[l]); free(tb_crc[l]); free(coded_full[l]); free(selbits[l]);
+        free(decoded[l]); free(data_syms[l]); free(x_hat[l]);
+        free(allllr[l]); free(soft_buf[l]);
+    }
+    for (int r = 0; r < NL; r++)
+        for (int t = 0; t < NL; t++)
+            free(taps[r][t]);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
  * 4포트 Type I SP 코드북 기반 Closed-Loop PDSCH — RI + PMI 적응 선택
  *
  * 채널 모델  : 블록-평탄 Rayleigh H[4][4] (iid CN(0,1))
@@ -2262,4 +2641,629 @@ void run_pdsch_cl_4port_simulation(const L1Config *cfg) {
         free(sym[l]); free(allllr[l]); free(llr[l]); free(dec[l]);
         free(rx_hat[l]);
     }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+ * 4포트 Type I SP 코드북 기반 Closed-Loop PDSCH — TDL 주파수 선택적 페이딩
+ *
+ * PMI 선택  : Wideband — 모든 data SC의 H[k]를 평균낸 H_avg로 RI+PMI 선택
+ *             (3GPP 광대역 PMI 보고 동작과 동일한 원리)
+ * 채널 추정 : Genie-aided (tdl_freq_response, 파일럿 오버헤드 없음)
+ * Tx 상관   : H[k]마다 mimo_apply_tx_correlation_4x4 적용
+ * ─────────────────────────────────────────────────────────────────────────── */
+void run_pdsch_cl_4port_tdl_simulation(const L1Config *cfg) {
+    int num_rb   = cfg->numRB;
+    int num_data = 6 * num_rb;
+    int *data_pos = (int *)malloc(num_data * sizeof(int));
+    dmrs_data_indices(num_rb, data_pos);
+
+    double scs_hz = (double)cfg->scsKHz * 1000.0;
+
+    MCSTableType tbl = (strcmp(cfg->mcsTableType, "TABLE2") == 0) ? MCS_TABLE2 : MCS_TABLE1;
+    MCSEntry mcs = get_mcs_entry(cfg->mcsIndex, tbl);
+    double cr  = get_code_rate(&mcs);
+    int    bps = mcs.modulationOrder;
+    int    crc_bits = 24;
+
+    int max_dbits = num_data * bps;
+    int tbsz = (int)(max_dbits * cr);
+    if (tbsz < 1)    tbsz = 1;
+    if (tbsz > 8424) tbsz = 8424;
+    int K = tbsz + crc_bits;
+
+    LDPCCodec ldpc;
+    ldpc_init(&ldpc, K, cr);
+    int acsz  = ldpc.coded_size;
+    int padsz = acsz + ((acsz % bps) ? bps - acsz % bps : 0);
+    int nsym  = padsz / bps;
+    int nd    = (nsym < num_data) ? nsym : num_data;
+
+    printf("=== PDSCH Closed-Loop 4-port Codebook (RI+PMI Adaptive), TDL Fading ===\n");
+    printf("MCS Index    : %d (Table %s)\n", cfg->mcsIndex, cfg->mcsTableType);
+    printf("Modulation   : %s (Qm=%d)\n", mcs.modulation, bps);
+    printf("Code Rate    : %.4f\n", cr);
+    printf("Num RB       : %d\n", num_rb);
+    printf("Tx/Rx Ants   : 4 / 4\n");
+    printf("Codebook     : TS 38.214 Type I SP (N1=2, O1=4, Ng=2)\n");
+    printf("Rank Range   : 1~2  (RI+PMI 자동 선택, Wideband H_avg 기준)\n");
+    printf("Tx Corr      : rho=%.2f (%s, Kronecker XPOL 2x2 blocks, RX 비상관)\n",
+           cfg->spatialCorrTx, cfg->spatialCorrTx > 0.0 ? "공간상관" : "i.i.d.");
+    printf("Channel      : TDL per Tx-Rx pair (16 tap-sets, DS=%.0fns, %d taps, genie-aided)\n",
+           cfg->tdlDelaySpreadNs, TDL_MAX_TAPS);
+    printf("TB Size/CW   : %d bits\n", tbsz);
+    printf("Data RE/CW   : %d\n", nd);
+    printf("Trials/SNR   : %d\n\n", cfg->numTrials);
+
+    int   *tb[2], *tb_crc[2], *coded[2], *txbits[2], *dec[2];
+    cx_t  *sym[2];
+    double *allllr[2], *llr[2];
+    cx_t  *rx_hat[2];
+    for (int l = 0; l < 2; l++) {
+        tb[l]     = (int    *)malloc(tbsz  * sizeof(int));
+        tb_crc[l] = (int    *)malloc(K     * sizeof(int));
+        coded[l]  = (int    *)malloc(acsz  * sizeof(int));
+        txbits[l] = (int    *)malloc(padsz * sizeof(int));
+        sym[l]    = (cx_t  *)malloc(nsym   * sizeof(cx_t));
+        allllr[l] = (double *)malloc(padsz * sizeof(double));
+        llr[l]    = (double *)malloc(acsz  * sizeof(double));
+        dec[l]    = (int    *)malloc(K     * sizeof(int));
+        rx_hat[l] = (cx_t  *)malloc(nd     * sizeof(cx_t));
+    }
+    cx_t *nbuf = (cx_t *)malloc(nd * 4 * sizeof(cx_t));
+
+    /* H 캐시: 각 data RE별 상관 적용된 채널 행렬 */
+    cx_t (*H_cache)[4][4] = malloc(nd * sizeof(*H_cache));
+
+    cx_t *taps[4][4];
+    for (int r = 0; r < 4; r++)
+        for (int t = 0; t < 4; t++)
+            taps[r][t] = (cx_t *)malloc(TDL_MAX_TAPS * sizeof(cx_t));
+
+    printf("%-9s  %-12s %-11s  %-12s %-11s  %-12s %-11s  %s\n",
+           "SNR(dB)", "BER_Adapt", "BLER_Adapt",
+           "BER_R1fix", "BLER_R1fix",
+           "BER_R2fix", "BLER_R2fix", "R1%");
+    for (int i = 0; i < 98; i++) printf("-");
+    printf("\n");
+
+    TDLChannel tdl_ch;
+    for (double snr = cfg->snrStart; snr <= cfg->snrEnd + 1e-6; snr += cfg->snrStep) {
+        tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        double N0    = 1.0 / pow(10.0, snr / 10.0);
+        double sigma = sqrt(N0 / 2.0);
+
+        long t_ad = 0, b_ad = 0;
+        long t_r1 = 0, b_r1 = 0;
+        long t_r2 = 0, b_r2 = 0;
+        int  e_ad = 0, e_r1 = 0, e_r2 = 0;
+        int  r1_sel_cnt = 0;
+
+        for (int trial = 0; trial < cfg->numTrials; trial++) {
+
+            /* ① TDL 드로우 + H_cache 계산 + H_avg 산출 */
+            for (int r = 0; r < 4; r++)
+                for (int t = 0; t < 4; t++)
+                    tdl_draw(&tdl_ch, taps[r][t]);
+
+            cx_t H_avg[4][4];
+            for (int r = 0; r < 4; r++)
+                for (int t = 0; t < 4; t++)
+                    H_avg[r][t] = CX_ZERO;
+
+            for (int d = 0; d < nd; d++) {
+                int k = data_pos[d];
+                for (int r = 0; r < 4; r++)
+                    for (int t = 0; t < 4; t++)
+                        H_cache[d][r][t] = tdl_freq_response(&tdl_ch, taps[r][t], k);
+                /* Tx 상관 적용 */
+                mimo_apply_tx_correlation_4x4(H_cache[d], cfg->spatialCorrTx);
+                for (int r = 0; r < 4; r++)
+                    for (int t = 0; t < 4; t++)
+                        H_avg[r][t] += H_cache[d][r][t];
+            }
+            double inv_nd = 1.0 / nd;
+            for (int r = 0; r < 4; r++)
+                for (int t = 0; t < 4; t++)
+                    H_avg[r][t] *= inv_nd;
+
+            /* ② Wideband RI+PMI 선택 (H_avg 기준) */
+            int rank_ad, i1_ad, i13_ad, i2_ad;
+            int i1_r1, i2_r1;
+            int i1_r2, i13_r2, i2_r2;
+            codebook_type1_sp_4port_ri_pmi_select(
+                H_avg, N0,
+                &rank_ad, &i1_ad, &i13_ad, &i2_ad,
+                &i1_r1, &i2_r1,
+                &i1_r2, &i13_r2, &i2_r2);
+            if (rank_ad == 1) r1_sel_cnt++;
+
+            /* ③ CW 인코딩 */
+            for (int l = 0; l < 2; l++) {
+                gen_random_bits(tb[l], tbsz);
+                attach_crc(tb[l], tbsz, CRC24A, tb_crc[l]);
+                ldpc_encode(&ldpc, tb_crc[l], coded[l]);
+                memcpy(txbits[l], coded[l], acsz * sizeof(int));
+                for (int i = acsz; i < padsz; i++) txbits[l][i] = 0;
+                qam_modulate(txbits[l], padsz, mcs.modulation, sym[l]);
+            }
+
+            /* ④ 노이즈 드로우 (3 시나리오 공유) */
+            for (int d = 0; d < nd; d++)
+                for (int r = 0; r < 4; r++)
+                    nbuf[d * 4 + r] = CX_MAKE(randn() * sigma, randn() * sigma);
+
+            /* === 시나리오 R1-fixed === */
+            {
+                cx_t W[4];
+                codebook_type1_sp_4port_rank1(i1_r1, i2_r1, W);
+                double nv_sum = 0.0;
+                for (int d = 0; d < nd; d++) {
+                    cx_t h_eff[4];
+                    for (int r = 0; r < 4; r++) {
+                        h_eff[r] = CX_ZERO;
+                        for (int t = 0; t < 4; t++) h_eff[r] += H_cache[d][r][t] * W[t];
+                    }
+                    cx_t y[4];
+                    for (int r = 0; r < 4; r++)
+                        y[r] = h_eff[r] * sym[0][d] + nbuf[d * 4 + r];
+                    cx_t xh; double nv;
+                    mrc_combine_4rx(h_eff, y, N0, &xh, &nv);
+                    rx_hat[0][d] = xh;
+                    nv_sum += nv;
+                }
+                double env = nv_sum / nd;
+                qam_demap_llr(rx_hat[0], nd, mcs.modulation, env, allllr[0]);
+                int llen = (acsz < nd * bps) ? acsz : nd * bps;
+                memcpy(llr[0], allllr[0], llen * sizeof(double));
+                for (int i = llen; i < acsz; i++) llr[0][i] = 0.0;
+                ldpc_decode(&ldpc, llr[0], 25, dec[0]);
+                int crc_r1 = check_crc(dec[0], K, CRC24A);
+                int be_r1 = 0;
+                for (int i = 0; i < tbsz; i++)
+                    if (tb[0][i] != dec[0][i]) be_r1++;
+                b_r1 += be_r1;
+                t_r1 += tbsz;
+                if (!crc_r1 || be_r1 > 0) e_r1++;
+            }
+
+            /* === 시나리오 R2-fixed === */
+            {
+                cx_t W2[4][2];
+                codebook_type1_sp_4port_rank2(i1_r2, i13_r2, i2_r2, W2);
+                double nv2_sum[2] = {0.0, 0.0};
+                for (int d = 0; d < nd; d++) {
+                    cx_t h_eff2[4][2];
+                    for (int r = 0; r < 4; r++)
+                        for (int l = 0; l < 2; l++) {
+                            h_eff2[r][l] = CX_ZERO;
+                            for (int t = 0; t < 4; t++) h_eff2[r][l] += H_cache[d][r][t] * W2[t][l];
+                        }
+                    cx_t y[4];
+                    for (int r = 0; r < 4; r++)
+                        y[r] = h_eff2[r][0] * sym[0][d] + h_eff2[r][1] * sym[1][d]
+                               + nbuf[d * 4 + r];
+                    cx_t xh2[2]; double nv2[2];
+                    mimo_mmse_detect_4rx2(h_eff2, y, N0, xh2, nv2);
+                    rx_hat[0][d] = xh2[0];
+                    rx_hat[1][d] = xh2[1];
+                    nv2_sum[0] += nv2[0];
+                    nv2_sum[1] += nv2[1];
+                }
+                int blk_r2 = 0;
+                for (int l = 0; l < 2; l++) {
+                    double env = nv2_sum[l] / nd;
+                    qam_demap_llr(rx_hat[l], nd, mcs.modulation, env, allllr[l]);
+                    int llen = (acsz < nd * bps) ? acsz : nd * bps;
+                    memcpy(llr[l], allllr[l], llen * sizeof(double));
+                    for (int i = llen; i < acsz; i++) llr[l][i] = 0.0;
+                    ldpc_decode(&ldpc, llr[l], 25, dec[l]);
+                    int crc_l = check_crc(dec[l], K, CRC24A);
+                    int be_l = 0;
+                    for (int i = 0; i < tbsz; i++)
+                        if (tb[l][i] != dec[l][i]) be_l++;
+                    b_r2 += be_l;
+                    t_r2 += tbsz;
+                    if (!crc_l || be_l > 0) blk_r2++;
+                }
+                if (blk_r2 > 0) e_r2++;
+            }
+
+            /* === 시나리오 Adaptive === */
+            if (rank_ad == 1) {
+                cx_t W[4];
+                codebook_type1_sp_4port_rank1(i1_ad, i2_ad, W);
+                double nv_sum = 0.0;
+                for (int d = 0; d < nd; d++) {
+                    cx_t h_eff[4];
+                    for (int r = 0; r < 4; r++) {
+                        h_eff[r] = CX_ZERO;
+                        for (int t = 0; t < 4; t++) h_eff[r] += H_cache[d][r][t] * W[t];
+                    }
+                    cx_t y[4];
+                    for (int r = 0; r < 4; r++)
+                        y[r] = h_eff[r] * sym[0][d] + nbuf[d * 4 + r];
+                    cx_t xh; double nv;
+                    mrc_combine_4rx(h_eff, y, N0, &xh, &nv);
+                    rx_hat[0][d] = xh;
+                    nv_sum += nv;
+                }
+                double env = nv_sum / nd;
+                qam_demap_llr(rx_hat[0], nd, mcs.modulation, env, allllr[0]);
+                int llen = (acsz < nd * bps) ? acsz : nd * bps;
+                memcpy(llr[0], allllr[0], llen * sizeof(double));
+                for (int i = llen; i < acsz; i++) llr[0][i] = 0.0;
+                ldpc_decode(&ldpc, llr[0], 25, dec[0]);
+                int crc_ad = check_crc(dec[0], K, CRC24A);
+                int be_ad = 0;
+                for (int i = 0; i < tbsz; i++)
+                    if (tb[0][i] != dec[0][i]) be_ad++;
+                b_ad += be_ad;
+                t_ad += tbsz;
+                if (!crc_ad || be_ad > 0) e_ad++;
+            } else {
+                cx_t W2[4][2];
+                codebook_type1_sp_4port_rank2(i1_ad, i13_ad, i2_ad, W2);
+                double nv2_sum[2] = {0.0, 0.0};
+                for (int d = 0; d < nd; d++) {
+                    cx_t h_eff2[4][2];
+                    for (int r = 0; r < 4; r++)
+                        for (int l = 0; l < 2; l++) {
+                            h_eff2[r][l] = CX_ZERO;
+                            for (int t = 0; t < 4; t++) h_eff2[r][l] += H_cache[d][r][t] * W2[t][l];
+                        }
+                    cx_t y[4];
+                    for (int r = 0; r < 4; r++)
+                        y[r] = h_eff2[r][0] * sym[0][d] + h_eff2[r][1] * sym[1][d]
+                               + nbuf[d * 4 + r];
+                    cx_t xh2[2]; double nv2[2];
+                    mimo_mmse_detect_4rx2(h_eff2, y, N0, xh2, nv2);
+                    rx_hat[0][d] = xh2[0];
+                    rx_hat[1][d] = xh2[1];
+                    nv2_sum[0] += nv2[0];
+                    nv2_sum[1] += nv2[1];
+                }
+                int blk_ad = 0;
+                for (int l = 0; l < 2; l++) {
+                    double env = nv2_sum[l] / nd;
+                    qam_demap_llr(rx_hat[l], nd, mcs.modulation, env, allllr[l]);
+                    int llen = (acsz < nd * bps) ? acsz : nd * bps;
+                    memcpy(llr[l], allllr[l], llen * sizeof(double));
+                    for (int i = llen; i < acsz; i++) llr[l][i] = 0.0;
+                    ldpc_decode(&ldpc, llr[l], 25, dec[l]);
+                    int crc_l = check_crc(dec[l], K, CRC24A);
+                    int be_l = 0;
+                    for (int i = 0; i < tbsz; i++)
+                        if (tb[l][i] != dec[l][i]) be_l++;
+                    b_ad += be_l;
+                    t_ad += tbsz;
+                    if (!crc_l || be_l > 0) blk_ad++;
+                }
+                if (blk_ad > 0) e_ad++;
+            }
+
+            (void)trial;
+        }   /* end trial */
+
+        double ber_ad  = t_ad > 0 ? (double)b_ad / t_ad : 0.0;
+        double bler_ad = e_ad / (double)cfg->numTrials;
+        double ber_r1  = t_r1 > 0 ? (double)b_r1 / t_r1 : 0.0;
+        double bler_r1 = e_r1 / (double)cfg->numTrials;
+        double ber_r2  = t_r2 > 0 ? (double)b_r2 / t_r2 : 0.0;
+        double bler_r2 = e_r2 / (double)cfg->numTrials;
+        double r1_rate = r1_sel_cnt * 100.0 / cfg->numTrials;
+
+        printf("%-9.1f  %-12.4e %-11.4f  %-12.4e %-11.4f  %-12.4e %-11.4f  %.1f\n",
+               snr,
+               ber_ad, bler_ad,
+               ber_r1, bler_r1,
+               ber_r2, bler_r2,
+               r1_rate);
+    }   /* end SNR loop */
+
+    printf("\nPDSCH CL 4-port + TDL simulation complete.\n");
+
+    ldpc_free(&ldpc);
+    free(data_pos);
+    free(H_cache);
+    free(nbuf);
+    for (int l = 0; l < 2; l++) {
+        free(tb[l]); free(tb_crc[l]); free(coded[l]); free(txbits[l]);
+        free(sym[l]); free(allllr[l]); free(llr[l]); free(dec[l]);
+        free(rx_hat[l]);
+    }
+    for (int r = 0; r < 4; r++)
+        for (int t = 0; t < 4; t++)
+            free(taps[r][t]);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+ * 4포트 Type I SP 코드북 기반 Closed-Loop PDSCH — HARQ Circular Buffer
+ * 지원 채널: FLAT_FADING / TDL (모두 genie-aided)
+ *
+ * RI+PMI  : 시도 0에서 H_avg 기반 wideband 선택 후 고정
+ *           (5G NR HARQ 재전송은 동일 프리코더 유지)
+ * 채널    : 시도마다 재추첨 (시간 다이버시티)
+ * CW      : rank=1 → CW[0]만 사용, rank=2 → CW[0]+CW[1] 모두 사용
+ * ─────────────────────────────────────────────────────────────────────────── */
+void run_pdsch_cl_4port_harq_simulation(const L1Config *cfg) {
+    int num_rb   = cfg->numRB;
+    int num_data = 6 * num_rb;
+    int *data_pos = (int *)malloc(num_data * sizeof(int));
+    dmrs_data_indices(num_rb, data_pos);
+
+    int is_tdl  = (strcmp(cfg->channelModel, "TDL") == 0);
+    double scs_hz = (double)cfg->scsKHz * 1000.0;
+
+    MCSTableType tbl = (strcmp(cfg->mcsTableType, "TABLE2") == 0) ? MCS_TABLE2 : MCS_TABLE1;
+    MCSEntry mcs = get_mcs_entry(cfg->mcsIndex, tbl);
+    double cr   = get_code_rate(&mcs);
+    int    bps  = mcs.modulationOrder;
+    int    crc_bits = 24;
+
+    int E    = num_data * bps;
+    int tbsz = (int)(E * cr);
+    if (tbsz < 1)    tbsz = 1;
+    if (tbsz > 8424) tbsz = 8424;
+    int K = tbsz + crc_bits;
+
+    LDPCCodec ldpc; ldpc_init(&ldpc, K, HARQ_MOTHER_RATE);
+    int ncb = ldpc.coded_size;
+
+    int is_chase = (strcmp(cfg->harqRvSeq,"CHASE")==0);
+    int rvseq[4] = {0,2,3,1};
+    int rvseq_len = is_chase ? 1 : 4;
+    int max_retx = cfg->harqMaxRetx > 0 ? cfg->harqMaxRetx : 1;
+
+    printf("=== PDSCH CL 4-port (HARQ Circular Buffer %s), %s ===\n",
+           is_chase ? "Chase" : "IR",
+           is_tdl ? "TDL Frequency-Selective Fading" : "Flat Fading");
+    printf("MCS Index    : %d (Table %s)\n", cfg->mcsIndex, cfg->mcsTableType);
+    printf("Modulation   : %s (Qm=%d)\n", mcs.modulation, bps);
+    printf("Target Rate  : %.4f\n", cr);
+    printf("Mother Rate  : %.4f (Ncb=%d)\n", HARQ_MOTHER_RATE, ncb);
+    printf("Num RB       : %d\n", num_rb);
+    printf("Tx/Rx Ants   : 4 / 4\n");
+    printf("Codebook     : TS 38.214 Type I SP (N1=2, O1=4, Ng=2)\n");
+    printf("Rank Range   : 1~2  (시도 0에서 H_avg 기반 선택, 이후 고정)\n");
+    printf("Tx Corr      : rho=%.2f\n", cfg->spatialCorrTx);
+    printf("TB Size/CW   : %d bits\n", tbsz);
+    printf("Max Retx     : %d\n", max_retx);
+    if (is_tdl)
+        printf("Channel      : TDL per Tx-Rx pair (16 tap-sets, DS=%.0fns, %d taps, genie-aided)\n",
+               cfg->tdlDelaySpreadNs, TDL_MAX_TAPS);
+    else
+        printf("Channel      : Flat Fading 4x4 (block-flat, redrawn per HARQ attempt, genie-aided)\n");
+    printf("Trials/SNR   : %d\n\n", cfg->numTrials);
+
+    int   *tb[2], *tb_crc[2], *coded_full[2], *selbits[2], *dec[2];
+    cx_t  *sym[2], *rx_hat[2];
+    double *allllr[2], *soft_buf[2];
+    for (int l = 0; l < 2; l++) {
+        tb[l]         = (int   *)malloc(tbsz    * sizeof(int));
+        tb_crc[l]     = (int   *)malloc(K       * sizeof(int));
+        coded_full[l] = (int   *)malloc(ncb     * sizeof(int));
+        selbits[l]    = (int   *)malloc(E       * sizeof(int));
+        dec[l]        = (int   *)malloc(K       * sizeof(int));
+        sym[l]        = (cx_t  *)malloc(num_data * sizeof(cx_t));
+        rx_hat[l]     = (cx_t  *)malloc(num_data * sizeof(cx_t));
+        allllr[l]     = (double *)malloc(E      * sizeof(double));
+        soft_buf[l]   = (double *)malloc(ncb    * sizeof(double));
+    }
+    cx_t (*H_cache)[4][4] = malloc(num_data * sizeof(*H_cache));
+    cx_t *taps[4][4];
+    for (int r = 0; r < 4; r++)
+        for (int t = 0; t < 4; t++)
+            taps[r][t] = (cx_t *)malloc(TDL_MAX_TAPS * sizeof(cx_t));
+
+    printf("%10s%14s%14s%14s%12s%8s\n",
+           "SNR(dB)", "BER(final)", "BLER(1st)", "BLER(HARQ)", "AvgTx", "R1%");
+    for (int i = 0; i < 72; i++) printf("-");
+    printf("\n");
+
+    TDLChannel tdl_ch;
+    for (double snr = cfg->snrStart; snr <= cfg->snrEnd + 1e-6; snr += cfg->snrStep) {
+        if (is_tdl) tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        double N0    = 1.0 / pow(10.0, snr / 10.0);
+        double sigma = sqrt(N0 / 2.0);
+
+        int total_err=0, total_bits=0, blk_err_final=0, blk_err_1st=0;
+        long long total_attempts = 0;
+        int r1_sel_cnt = 0;
+
+        for (int trial = 0; trial < cfg->numTrials; trial++) {
+
+            for (int l = 0; l < 2; l++) {
+                gen_random_bits(tb[l], tbsz);
+                attach_crc(tb[l], tbsz, CRC24A, tb_crc[l]);
+                ldpc_encode(&ldpc, tb_crc[l], coded_full[l]);
+                for (int i = 0; i < ncb; i++) soft_buf[l][i] = 0.0;
+            }
+
+            /* RI+PMI 선택: 시도 0에서 결정하여 이후 고정 */
+            int rank_fix, i1_fix, i13_fix, i2_fix;
+            int _r1i1, _r1i2, _r2i1, _r2i13, _r2i2;  /* 불필요한 출력용 더미 */
+            cx_t W_fix[4];       /* rank-1용 */
+            cx_t W2_fix[4][2];   /* rank-2용 */
+
+            /* attempt 0 채널을 먼저 그려서 H_avg 계산 → PMI 선택 */
+            cx_t H_flat0[4][4];
+            if (!is_tdl) {
+                mimo_channel_draw_4x4(H_flat0);
+                mimo_apply_tx_correlation_4x4(H_flat0, cfg->spatialCorrTx);
+                codebook_type1_sp_4port_ri_pmi_select(
+                    H_flat0, N0,
+                    &rank_fix, &i1_fix, &i13_fix, &i2_fix,
+                    &_r1i1, &_r1i2, &_r2i1, &_r2i13, &_r2i2);
+            } else {
+                for (int r = 0; r < 4; r++)
+                    for (int t = 0; t < 4; t++)
+                        tdl_draw(&tdl_ch, taps[r][t]);
+                cx_t H_avg[4][4];
+                for (int r = 0; r < 4; r++)
+                    for (int t = 0; t < 4; t++) H_avg[r][t] = CX_ZERO;
+                for (int d = 0; d < num_data; d++) {
+                    int k = data_pos[d];
+                    for (int r = 0; r < 4; r++)
+                        for (int t = 0; t < 4; t++)
+                            H_cache[d][r][t] = tdl_freq_response(&tdl_ch, taps[r][t], k);
+                    mimo_apply_tx_correlation_4x4(H_cache[d], cfg->spatialCorrTx);
+                    for (int r = 0; r < 4; r++)
+                        for (int t = 0; t < 4; t++)
+                            H_avg[r][t] += H_cache[d][r][t];
+                }
+                double inv = 1.0 / num_data;
+                for (int r = 0; r < 4; r++)
+                    for (int t = 0; t < 4; t++) H_avg[r][t] *= inv;
+                codebook_type1_sp_4port_ri_pmi_select(
+                    H_avg, N0,
+                    &rank_fix, &i1_fix, &i13_fix, &i2_fix,
+                    &_r1i1, &_r1i2, &_r2i1, &_r2i13, &_r2i2);
+            }
+            if (rank_fix == 1) {
+                r1_sel_cnt++;
+                codebook_type1_sp_4port_rank1(i1_fix, i2_fix, W_fix);
+            } else {
+                codebook_type1_sp_4port_rank2(i1_fix, i13_fix, i2_fix, W2_fix);
+            }
+            int nCW = rank_fix;   /* rank-1: 1 CW, rank-2: 2 CWs */
+
+            int crc_ok[2]={0,0}, be[2]={0,0}, be_1st[2]={0,0}, crc_1st[2]={0,0};
+            int attempts = 0;
+            int attempt0_done = 1;   /* 채널은 시도 0에서 이미 그려짐 */
+
+            for (int attempt = 0; attempt < max_retx; attempt++) {
+                int rv = rvseq[attempt % rvseq_len];
+
+                for (int l = 0; l < nCW; l++) {
+                    rate_match_select(coded_full[l], ncb, rv, E, selbits[l]);
+                    qam_modulate(selbits[l], E, mcs.modulation, sym[l]);
+                }
+
+                /* 채널: 시도 0은 이미 그려짐, 이후 재추첨 */
+                if (attempt > 0 || !attempt0_done) {
+                    if (!is_tdl) {
+                        mimo_channel_draw_4x4(H_flat0);
+                        mimo_apply_tx_correlation_4x4(H_flat0, cfg->spatialCorrTx);
+                    } else {
+                        for (int r = 0; r < 4; r++)
+                            for (int t = 0; t < 4; t++)
+                                tdl_draw(&tdl_ch, taps[r][t]);
+                        for (int d = 0; d < num_data; d++) {
+                            int k = data_pos[d];
+                            for (int r = 0; r < 4; r++)
+                                for (int t = 0; t < 4; t++)
+                                    H_cache[d][r][t] = tdl_freq_response(&tdl_ch, taps[r][t], k);
+                            mimo_apply_tx_correlation_4x4(H_cache[d], cfg->spatialCorrTx);
+                        }
+                    }
+                }
+                attempt0_done = 0;   /* 다음 재진입 시 재추첨 트리거 */
+
+                double nv_sum[2] = {0.0, 0.0};
+
+                for (int d = 0; d < num_data; d++) {
+                    cx_t tx[2];
+                    for (int l = 0; l < nCW; l++) tx[l] = sym[l][d];
+
+                    if (rank_fix == 1) {
+                        cx_t h_eff[4];
+                        if (!is_tdl) {
+                            for (int r = 0; r < 4; r++) {
+                                h_eff[r] = CX_ZERO;
+                                for (int t = 0; t < 4; t++) h_eff[r] += H_flat0[r][t] * W_fix[t];
+                            }
+                        } else {
+                            for (int r = 0; r < 4; r++) {
+                                h_eff[r] = CX_ZERO;
+                                for (int t = 0; t < 4; t++) h_eff[r] += H_cache[d][r][t] * W_fix[t];
+                            }
+                        }
+                        cx_t y[4];
+                        for (int r = 0; r < 4; r++)
+                            y[r] = h_eff[r] * tx[0] + CX_MAKE(randn()*sigma, randn()*sigma);
+                        cx_t xh; double nv;
+                        mrc_combine_4rx(h_eff, y, N0, &xh, &nv);
+                        rx_hat[0][d] = xh;
+                        nv_sum[0] += nv;
+                    } else {
+                        cx_t h_eff2[4][2];
+                        if (!is_tdl) {
+                            for (int r = 0; r < 4; r++)
+                                for (int l = 0; l < 2; l++) {
+                                    h_eff2[r][l] = CX_ZERO;
+                                    for (int t = 0; t < 4; t++) h_eff2[r][l] += H_flat0[r][t] * W2_fix[t][l];
+                                }
+                        } else {
+                            for (int r = 0; r < 4; r++)
+                                for (int l = 0; l < 2; l++) {
+                                    h_eff2[r][l] = CX_ZERO;
+                                    for (int t = 0; t < 4; t++) h_eff2[r][l] += H_cache[d][r][t] * W2_fix[t][l];
+                                }
+                        }
+                        cx_t y[4];
+                        for (int r = 0; r < 4; r++)
+                            y[r] = h_eff2[r][0]*tx[0] + h_eff2[r][1]*tx[1]
+                                   + CX_MAKE(randn()*sigma, randn()*sigma);
+                        cx_t xh2[2]; double nv2[2];
+                        mimo_mmse_detect_4rx2(h_eff2, y, N0, xh2, nv2);
+                        rx_hat[0][d] = xh2[0]; rx_hat[1][d] = xh2[1];
+                        nv_sum[0] += nv2[0];   nv_sum[1] += nv2[1];
+                    }
+                }
+
+                int ml = tbsz < ldpc.info_size - crc_bits ? tbsz : ldpc.info_size - crc_bits;
+                if (ml < 0) ml = 0;
+                for (int l = 0; l < nCW; l++) {
+                    double env = nv_sum[l] / num_data;
+                    qam_demap_llr(rx_hat[l], num_data, mcs.modulation, env, allllr[l]);
+                    rate_match_combine(soft_buf[l], ncb, rv, E, allllr[l]);
+                    ldpc_decode(&ldpc, soft_buf[l], 25, dec[l]);
+                    crc_ok[l] = check_crc(dec[l], K, CRC24A);
+                    int biterr = 0;
+                    for (int i = 0; i < ml; i++)
+                        if (tb[l][i] != dec[l][i]) biterr++;
+                    be[l] = biterr;
+                    if (attempt == 0) { be_1st[l] = biterr; crc_1st[l] = crc_ok[l]; }
+                }
+
+                attempts = attempt + 1;
+                int all_ok = 1;
+                for (int l = 0; l < nCW; l++) if (!crc_ok[l]) { all_ok = 0; break; }
+                if (all_ok) break;
+            }
+
+            int any_err_1st = 0, any_err_final = 0;
+            for (int l = 0; l < nCW; l++) {
+                total_err  += be[l];
+                total_bits += tbsz;
+                if (!crc_1st[l] || be_1st[l] > 0) any_err_1st   = 1;
+                if (!crc_ok[l]  || be[l]    > 0) any_err_final = 1;
+            }
+            if (any_err_1st)   blk_err_1st++;
+            if (any_err_final) blk_err_final++;
+            total_attempts += attempts;
+        }
+
+        double ber       = total_bits > 0 ? (double)total_err / total_bits : 0.0;
+        double bler_1st  = (double)blk_err_1st   / cfg->numTrials;
+        double bler_final= (double)blk_err_final  / cfg->numTrials;
+        double avg_tx    = (double)total_attempts / cfg->numTrials;
+        double r1_rate   = r1_sel_cnt * 100.0 / cfg->numTrials;
+        printf("%10.1f%14.4e%14.4f%14.4f%12.2f%8.1f\n",
+               snr, ber, bler_1st, bler_final, avg_tx, r1_rate);
+    }
+    printf("\nPDSCH CL 4-port + %s + HARQ simulation complete.\n",
+           is_tdl ? "TDL" : "Flat Fading");
+
+    ldpc_free(&ldpc);
+    free(data_pos);
+    free(H_cache);
+    for (int l = 0; l < 2; l++) {
+        free(tb[l]); free(tb_crc[l]); free(coded_full[l]); free(selbits[l]);
+        free(dec[l]); free(sym[l]); free(rx_hat[l]);
+        free(allllr[l]); free(soft_buf[l]);
+    }
+    for (int r = 0; r < 4; r++)
+        for (int t = 0; t < 4; t++)
+            free(taps[r][t]);
 }

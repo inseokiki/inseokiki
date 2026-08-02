@@ -13,5 +13,6 @@ void run_pusch_simulation(const L1Config *cfg);
 void run_pusch_tdl_simulation(const L1Config *cfg);
 void run_pusch_tdl_dfe_simulation(const L1Config *cfg);
 void run_pusch_tdl_turbo_simulation(const L1Config *cfg);
+void run_pusch_harq_simulation(const L1Config *cfg);
 
 #endif

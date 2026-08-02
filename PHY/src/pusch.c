@@ -8,6 +8,7 @@
 #include "crc.h"
 #include "mcs_table.h"
 #include "ldpc.h"
+#include "rate_matching.h"
 #include "modulation.h"
 #include "channel.h"
 #include "dmrs.h"
@@ -944,4 +945,241 @@ void run_pusch_tdl_turbo_simulation(const L1Config *cfg) {
     free(alpha_cx); free(g); free(E_x); free(Var_x); free(apriori); free(posterior);
     free(alpha);
     free(allllr); free(llr); free(decoded); free(bits_tmp); free(taps);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+ * PUSCH HARQ Circular Buffer (Chase / IR)
+ * 지원 채널: TDL / FLAT_FADING / AWGN
+ *
+ * TDL/Flat : LS 채널 추정 + 선형 보간 (SISO pilot 간격 2 SC → 충분)
+ * AWGN     : h=1 가정 (perfect CSI, 추정 생략)
+ * HARQ     : rate_match_select / rate_match_combine, 시도마다 채널 재추첨
+ * Precode  : cfg->transformPrecoding에 따라 DFT-s-OFDM 지원
+ * ─────────────────────────────────────────────────────────────────────────── */
+void run_pusch_harq_simulation(const L1Config *cfg) {
+    int num_rb   = cfg->numRB;
+    int active   = num_rb * 12;
+
+    MCSTableType tbl = (strcmp(cfg->mcsTableType,"TABLE2")==0) ? MCS_TABLE2 : MCS_TABLE1;
+    MCSEntry mcs = get_mcs_entry(cfg->mcsIndex, tbl);
+    double cr  = get_code_rate(&mcs);
+    int    bps = mcs.modulationOrder;
+    int    crc_bits = 24;
+
+    const uint32_t c_init = 0x87654321u;
+    int num_pilots = 6 * num_rb;
+    int num_data   = 6 * num_rb;
+    int *pilot_pos = (int *)malloc(num_pilots * sizeof(int));
+    int *data_pos  = (int *)malloc(num_data   * sizeof(int));
+    dmrs_pilot_indices(num_rb, pilot_pos);
+    dmrs_data_indices(num_rb, data_pos);
+    cx_t *dmrs_sym = (cx_t *)malloc(num_pilots * sizeof(cx_t));
+    dmrs_sequence(c_init, num_pilots, dmrs_sym);
+
+    int E    = num_data * bps;
+    int tbsz = (int)(E * cr);
+    if (tbsz < 1)    tbsz = 1;
+    if (tbsz > 8424) tbsz = 8424;
+    int K = tbsz + crc_bits;
+
+    LDPCCodec ldpc; ldpc_init(&ldpc, K, HARQ_MOTHER_RATE);
+    int ncb = ldpc.coded_size;
+
+    int is_tdl    = (strcmp(cfg->channelModel, "TDL")         == 0);
+    int is_flat   = (strcmp(cfg->channelModel, "FLAT_FADING") == 0);
+    int precode   = cfg->transformPrecoding;
+    int use_mmse  = (strcmp(cfg->equalizer, "MMSE") == 0);
+    int is_chase  = (strcmp(cfg->harqRvSeq, "CHASE") == 0);
+    int rvseq[4]  = {0,2,3,1};
+    int rvseq_len = is_chase ? 1 : 4;
+    int max_retx  = cfg->harqMaxRetx > 0 ? cfg->harqMaxRetx : 1;
+    double scs_hz = (double)cfg->scsKHz * 1000.0;
+
+    printf("=== PUSCH (HARQ Circular Buffer %s), %s, %s ===\n",
+           is_chase ? "Chase" : "IR",
+           is_tdl ? "TDL" : (is_flat ? "Flat Fading" : "AWGN"),
+           precode ? "DFT-s-OFDM" : "CP-OFDM");
+    printf("MCS Index    : %d (Table %s)\n", cfg->mcsIndex, cfg->mcsTableType);
+    printf("Modulation   : %s (Qm=%d)\n", mcs.modulation, bps);
+    printf("Target Rate  : %.4f\n", cr);
+    printf("Mother Rate  : %.4f (Ncb=%d)\n", HARQ_MOTHER_RATE, ncb);
+    printf("Num RB       : %d\n", num_rb);
+    printf("TB Size      : %d bits\n", tbsz);
+    printf("Max Retx     : %d\n", max_retx);
+    if (is_tdl)
+        printf("Channel      : TDL (DS=%.0fns, %d taps), LS est.\n",
+               cfg->tdlDelaySpreadNs, TDL_MAX_TAPS);
+    printf("Equalizer    : %s with LS channel estimation\n", use_mmse ? "MMSE" : "ZF");
+    printf("Trials/SNR   : %d\n\n", cfg->numTrials);
+
+    int  *tb       = (int  *)malloc(tbsz     * sizeof(int));
+    int  *tb_crc   = (int  *)malloc(K        * sizeof(int));
+    int  *coded_full=(int  *)malloc(ncb      * sizeof(int));
+    int  *selbits  = (int  *)malloc(E        * sizeof(int));
+    int  *decoded  = (int  *)malloc(K        * sizeof(int));
+    cx_t *data_syms= (cx_t *)malloc(num_data * sizeof(cx_t));
+    cx_t *precoded = (cx_t *)malloc(num_data * sizeof(cx_t));
+    cx_t *tx_grid  = (cx_t *)malloc(active   * sizeof(cx_t));
+    cx_t *rx_grid  = (cx_t *)malloc(active   * sizeof(cx_t));
+    cx_t *rx_pilots= (cx_t *)malloc(num_pilots * sizeof(cx_t));
+    cx_t *h_pilots = (cx_t *)malloc(num_pilots * sizeof(cx_t));
+    cx_t *h_full   = (cx_t *)malloc(active    * sizeof(cx_t));
+    cx_t *rx_data  = (cx_t *)malloc(num_data  * sizeof(cx_t));
+    cx_t *h_data   = (cx_t *)malloc(num_data  * sizeof(cx_t));
+    cx_t *eq_data  = (cx_t *)malloc(num_data  * sizeof(cx_t));
+    cx_t *descrambled=(cx_t*)malloc(num_data  * sizeof(cx_t));
+    double *allllr = (double *)malloc(E   * sizeof(double));
+    double *soft_buf=(double *)malloc(ncb * sizeof(double));
+    double *alpha  = (double *)malloc(num_data * sizeof(double));
+    cx_t   *taps   = (cx_t *)malloc(TDL_MAX_TAPS * sizeof(cx_t));
+
+    printf("%10s%14s%14s%14s%12s\n", "SNR(dB)", "BER(final)", "BLER(1st)", "BLER(HARQ)", "AvgTx");
+    for (int i = 0; i < 64; i++) printf("-");
+    printf("\n");
+
+    TDLChannel tdl_ch;
+    FlatFadingChannel flat_ch;
+    AWGNChannel awgn_ch;
+
+    for (double snr = cfg->snrStart; snr <= cfg->snrEnd + 1e-6; snr += cfg->snrStep) {
+        if (is_tdl)  tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        if (is_flat) flat_fading_init(&flat_ch, snr);
+        awgn_init(&awgn_ch, snr);
+        double N0 = 1.0 / pow(10.0, snr / 10.0);
+
+        int total_err=0, total_bits=0, blk_err_final=0, blk_err_1st=0;
+        long long total_attempts = 0;
+
+        for (int trial = 0; trial < cfg->numTrials; trial++) {
+            gen_random_bits(tb, tbsz);
+            attach_crc(tb, tbsz, CRC24A, tb_crc);
+            ldpc_encode(&ldpc, tb_crc, coded_full);
+            for (int i = 0; i < ncb; i++) soft_buf[i] = 0.0;
+
+            int crc_ok=0, be=0, be_1st=0, crc_1st=0;
+            int attempts = 0;
+
+            for (int attempt = 0; attempt < max_retx; attempt++) {
+                int rv = rvseq[attempt % rvseq_len];
+
+                rate_match_select(coded_full, ncb, rv, E, selbits);
+                int nd = num_data;  /* E = nd * bps */
+                qam_modulate(selbits, E, mcs.modulation, data_syms);
+
+                cx_t *tx_data = data_syms;
+                if (precode) { dft_precode(data_syms, nd, precoded); tx_data = precoded; }
+
+                for (int k = 0; k < active; k++) tx_grid[k] = CX_ZERO;
+                for (int p = 0; p < num_pilots; p++) tx_grid[pilot_pos[p]] = dmrs_sym[p];
+                for (int d = 0; d < nd; d++) tx_grid[data_pos[d]] = tx_data[d];
+
+                /* channel apply */
+                if (is_tdl) {
+                    tdl_draw(&tdl_ch, taps);
+                    tdl_channel_apply(&tdl_ch, taps, tx_grid, active, rx_grid, NULL);
+                } else if (is_flat) {
+                    cx_t h_true;
+                    flat_fading_apply(&flat_ch, tx_grid, active, rx_grid, &h_true);
+                } else {
+                    /* AWGN: h=1 */
+                    awgn_add_noise(&awgn_ch, tx_grid, active, 0, rx_grid);
+                }
+
+                /* channel estimation */
+                if (!is_flat && !is_tdl) {
+                    /* AWGN: perfect h=1 */
+                    for (int k = 0; k < active; k++) h_full[k] = 1.0;
+                } else {
+                    for (int p = 0; p < num_pilots; p++) rx_pilots[p] = rx_grid[pilot_pos[p]];
+                    ls_estimate(rx_pilots, dmrs_sym, num_pilots, h_pilots);
+                    interpolate_channel(h_pilots, num_pilots, pilot_pos, active, h_full);
+                }
+
+                for (int d = 0; d < num_data; d++) {
+                    rx_data[d] = rx_grid[data_pos[d]];
+                    h_data[d]  = h_full[data_pos[d]];
+                }
+
+                /* equalize + LLR */
+                double env;
+                cx_t *demod_in = eq_data;
+                if (use_mmse) {
+                    mmse_equalize(rx_data, h_data, num_data, N0, eq_data, alpha);
+                    if (precode) {
+                        idft_precode(eq_data, nd, descrambled);
+                        double abar=0.0, msq=0.0, mvar=0.0;
+                        for (int d=0;d<num_data;d++) abar += alpha[d];
+                        abar /= num_data;
+                        for (int d=0;d<num_data;d++) {
+                            msq  += alpha[d]*alpha[d];
+                            mvar += alpha[d]*(1.0-alpha[d]);
+                        }
+                        msq  /= num_data;
+                        mvar /= num_data;
+                        double var_alpha = msq - abar*abar;
+                        if (abar < 1e-6) abar = 1e-6;
+                        for (int d=0;d<num_data;d++) descrambled[d] /= abar;
+                        demod_in = descrambled;
+                        env = (mvar + var_alpha) / (abar*abar);
+                    } else {
+                        qam_demap_llr_mmse(eq_data, nd, mcs.modulation, h_data, N0, allllr);
+                        env = -1.0;
+                    }
+                } else {
+                    zf_equalize(rx_data, h_data, num_data, eq_data);
+                    if (precode) {
+                        idft_precode(eq_data, nd, descrambled);
+                        demod_in = descrambled;
+                        double inv_sum = 0.0;
+                        for (int d=0;d<num_data;d++) {
+                            double hp = CX_NORM(h_data[d]);
+                            inv_sum += (hp > 1e-10) ? 1.0/hp : 1.0/1e-10;
+                        }
+                        env = N0 * inv_sum / num_data;
+                    } else {
+                        double mhp = 0.0;
+                        for (int d=0;d<num_data;d++) mhp += CX_NORM(h_data[d]);
+                        mhp /= num_data;
+                        env = (mhp > 1e-10) ? N0/mhp : N0;
+                    }
+                }
+                if (env >= 0.0)
+                    qam_demap_llr(demod_in, nd, mcs.modulation, env, allllr);
+
+                rate_match_combine(soft_buf, ncb, rv, E, allllr);
+                ldpc_decode(&ldpc, soft_buf, 25, decoded);
+                crc_ok = check_crc(decoded, K, CRC24A);
+
+                int ml = tbsz < ldpc.info_size - crc_bits ? tbsz : ldpc.info_size - crc_bits;
+                if (ml < 0) ml = 0;
+                be = 0;
+                for (int i = 0; i < ml; i++) if (tb[i] != decoded[i]) be++;
+
+                if (attempt == 0) { be_1st = be; crc_1st = crc_ok; }
+                attempts = attempt + 1;
+                if (crc_ok) break;
+            }
+
+            total_err  += be;
+            total_bits += tbsz;
+            if (!crc_1st || be_1st > 0) blk_err_1st++;
+            if (!crc_ok  || be    > 0) blk_err_final++;
+            total_attempts += attempts;
+        }
+
+        double ber       = total_bits > 0 ? (double)total_err / total_bits : 0.0;
+        double bler_1st  = (double)blk_err_1st   / cfg->numTrials;
+        double bler_final= (double)blk_err_final  / cfg->numTrials;
+        double avg_tx    = (double)total_attempts / cfg->numTrials;
+        printf("%10.1f%14.4e%14.4f%14.4f%12.2f\n", snr, ber, bler_1st, bler_final, avg_tx);
+    }
+    printf("\nPUSCH + HARQ simulation complete.\n");
+
+    ldpc_free(&ldpc);
+    free(pilot_pos); free(data_pos); free(dmrs_sym);
+    free(tb); free(tb_crc); free(coded_full); free(selbits); free(decoded);
+    free(data_syms); free(precoded); free(tx_grid); free(rx_grid);
+    free(rx_pilots); free(h_pilots); free(h_full);
+    free(rx_data); free(h_data); free(eq_data); free(descrambled);
+    free(allllr); free(soft_buf); free(alpha); free(taps);
 }
