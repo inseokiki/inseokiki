@@ -1996,6 +1996,8 @@ void run_pdsch_cl_4port_simulation(const L1Config *cfg) {
     printf("Tx/Rx Ants   : 4 / 4\n");
     printf("Codebook     : TS 38.214 Type I SP (N1=2, O1=4, Ng=2)\n");
     printf("Rank Range   : 1~2  (RI+PMI 자동 선택, 추정 용량 기준)\n");
+    printf("Tx Corr      : rho=%.2f (%s, Kronecker XPOL 2x2 blocks, RX 비상관)\n",
+           cfg->spatialCorrTx, cfg->spatialCorrTx > 0.0 ? "공간상관" : "i.i.d.");
     printf("TB Size/CW   : %d bits\n", tbsz);
     printf("Data RE/CW   : %d  (Genie-aided CSI, pilot 오버헤드 없음)\n", nd);
     printf("Trials/SNR   : %d\n\n", cfg->numTrials);
@@ -2039,9 +2041,10 @@ void run_pdsch_cl_4port_simulation(const L1Config *cfg) {
 
         for (int trial = 0; trial < cfg->numTrials; trial++) {
 
-            /* ① 채널 드로우: H[4][4] */
+            /* ① 채널 드로우: H[4][4], 필요 시 Tx 공간상관(Kronecker) 적용 */
             cx_t H[4][4];
             mimo_channel_draw_4x4(H);
+            mimo_apply_tx_correlation_4x4(H, cfg->spatialCorrTx);
 
             /* ② RI+PMI 선택 (80 후보 전수 탐색)
              *   → 적응형 best + rank-1 best + rank-2 best 동시 반환 */

@@ -105,6 +105,7 @@ void config_parser_init(ConfigParser *p) {
     c->ulpcSinrTargetDb =  10.0;
     c->ulpcPlDb         = 100.0;
     c->ulpcNumSf        = 100;
+    c->spatialCorrTx    = 0.0;
     strncpy(c->iqDumpFile,     "iq_dump.txt", CFG_STR_MAX-1);
     /* modulation and codeRate are set by calc_derived() via MCS table */
 }
@@ -241,6 +242,7 @@ int config_parser_load(ConfigParser *p, const char *filename) {
     c->ulpcSinrTargetDb = kv_dbl(p, "UL_PC_SINR_TARGET_DB", 10.0);
     c->ulpcPlDb         = kv_dbl(p, "UL_PC_PL_DB",         100.0);
     c->ulpcNumSf        = kv_int(p, "UL_PC_NUM_SF",          100);
+    c->spatialCorrTx    = kv_dbl(p, "SPATIAL_CORR_TX",        0.0);
     kv_str(p, "MODULATION",      "QPSK",   c->modulation,     CFG_STR_MAX);
     kv_str(p, "CODING",          "LDPC",   c->coding,         CFG_STR_MAX);
     kv_str(p, "CHANNEL_MODEL",   "AWGN",   c->channelModel,   CFG_STR_MAX);
@@ -306,6 +308,9 @@ void config_parser_print(const ConfigParser *p) {
             else               printf("TB Size      : auto\n");
             if (strcmp(c->mimoMode, "SISO") != 0)
                 printf("MIMO Mode    : %s\n", c->mimoMode);
+            if (strcmp(c->mimoMode, "CL_4PORT") == 0 && c->spatialCorrTx > 0.0)
+                printf("Spatial Corr : Tx rho=%.2f (Kronecker, XPOL 2x2 blocks)\n",
+                       c->spatialCorrTx);
             if (c->harqEnable) {
                 printf("HARQ         : enabled (%s, max %d tx)\n",
                        c->harqRvSeq, c->harqMaxRetx);

@@ -47,7 +47,7 @@ cd BER && make
 | `modulation.c` | QAM 변조 / 복조 / LLR 계산. `qam_soft_symbol()`은 a priori 비트 LLR → 심볼별 소프트 평균/분산(turbo 등화용), `qam_demap_llr`과 같은 PAM 테이블을 재사용해 매핑 방식과 무관하게 정확 |
 | `channel.c` | AWGN / Flat Fading 채널 |
 | `channel_estimation.c` | LS 추정 + 보간 + ZF / MMSE 등화 |
-| `mimo.c` | SU-MIMO 2x2 채널(block-flat Rayleigh) + MRC / ZF / MMSE 검출. 검출 함수(`mimo_zf_detect`/`mimo_mmse_detect`/`mrc_combine`)는 RE 단위 순수 함수라 flat이든 TDL 등 frequency-selective든 그대로 재사용됨 |
+| `mimo.c` | SU-MIMO 2x2/4x4 채널(block-flat Rayleigh) + MRC / ZF / MMSE 검출. 검출 함수(`mimo_zf_detect`/`mimo_mmse_detect`/`mrc_combine`)는 RE 단위 순수 함수라 flat이든 TDL 등 frequency-selective든 그대로 재사용됨. `mimo_apply_tx_correlation_4x4(h, rho)`는 4x4 채널에 Tx 공간상관(Kronecker, XPOL 2x2 블록별 지수상관, 편파 간은 비상관) 적용 — `SPATIAL_CORR_TX`(MIMO_MODE=CL_4PORT 전용)로 제어. 편파 간 완전 독립 가정 때문에 동일편파 상관만으로는 rank-2(교차편파 다이버시티 변형)가 계속 유리해 rank-1 선택률이 ρ→1에서도 낮게 유지됨(실측 확인, 2026-08-02) |
 | `rate_matching.c` | Circular buffer rate matching (RV 기반 k0 오프셋) + HARQ 소프트 컴바이닝 |
 | `tdl.c` | TDL 주파수 선택적 페이딩 (근사 6탭 NLOS PDP, TS 38.901 표 근사치). `tdl_draw()`를 Tx-Rx 안테나 쌍마다 독립 호출하면 MIMO 공간축으로 그대로 확장 가능 (`pdsch.c`의 TDL+MIMO 조합 함수들 참조) |
 | `dft_precode.c` | PUSCH Transform Precoding용 유니터리 M-point DFT/IDFT (O(M²) 직접합산) |

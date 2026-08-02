@@ -80,6 +80,8 @@ typedef struct {
     double ulpcSinrTargetDb;    /* 내부루프 SINR 목표 [dB]               */
     double ulpcPlDb;            /* UE가 측정한 DL 경로손실 (시계열용) [dB] */
     int    ulpcNumSf;           /* 시계열 시뮬레이션 서브프레임 수       */
+    /* ── 4x4 MIMO Tx 공간상관 (Kronecker, XPOL 2x2 블록) ── */
+    double spatialCorrTx;       /* 편파 그룹 내 Tx 상관계수 rho [0,1)     */
 } L1Config;
 
 typedef struct {

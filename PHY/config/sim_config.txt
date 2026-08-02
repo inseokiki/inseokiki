@@ -56,8 +56,18 @@ USE_DMRS = 0
 EQUALIZER = MMSE
 
 # MIMO Mode (PDSCH + USE_DMRS path only): SISO, SIMO_MRC (1x2 receive diversity),
-# SM_2X2 (2-layer spatial multiplexing, detector = EQUALIZER)
+# SM_2X2 (2-layer spatial multiplexing, detector = EQUALIZER), SM_4X4 (4-layer
+# spatial multiplexing, ZF/MMSE per EQUALIZER), CL_4PORT (closed-loop 4-port
+# Type I SP codebook, RI+PMI adaptive between rank 1/2, genie-aided CSI)
 MIMO_MODE = SISO
+
+# Tx-side spatial correlation for MIMO_MODE=CL_4PORT only (Kronecker model,
+# H_corr = H_iid * Rtx^(1/2)): coefficient rho in [0,1) applied within each
+# XPOL polarization pair (ports 0-1, ports 2-3); cross-polarization and RX
+# side stay uncorrelated. 0 = i.i.d. (default, unchanged from before this
+# field existed). NOT the exact TS 38.101-4 Annex B correlation matrices --
+# implementation-defined approximation, see STRUCTURE.md.
+SPATIAL_CORR_TX = 0.0
 
 # HARQ (PDSCH + USE_DMRS path; takes priority over MIMO_MODE if enabled)
 HARQ_ENABLE = 0

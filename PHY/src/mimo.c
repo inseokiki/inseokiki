@@ -156,6 +156,20 @@ void mimo_channel_draw_4x4(cx_t h[4][4]) {
             h[r][t] = CX_MAKE(randn() * inv_sq2, randn() * inv_sq2);
 }
 
+void mimo_apply_tx_correlation_4x4(cx_t h[4][4], double rho) {
+    if (rho <= 0.0) return;
+    if (rho >= 1.0) rho = 1.0 - 1e-9;
+    double a = 0.5 * (sqrt(1.0 + rho) + sqrt(1.0 - rho));
+    double b = 0.5 * (sqrt(1.0 + rho) - sqrt(1.0 - rho));
+    for (int r = 0; r < 4; r++) {
+        cx_t h0 = h[r][0], h1 = h[r][1], h2 = h[r][2], h3 = h[r][3];
+        h[r][0] = a * h0 + b * h1;
+        h[r][1] = b * h0 + a * h1;
+        h[r][2] = a * h2 + b * h3;
+        h[r][3] = b * h2 + a * h3;
+    }
+}
+
 void mimo_channel_apply_4x4(const MIMOChannel *ch, cx_t h[4][4],
                              const cx_t tx[4], cx_t y[4]) {
     double snrlin = pow(10.0, ch->snr_db / 10.0);
