@@ -44,11 +44,14 @@ phy_lab(회사) 쪽 session-end 스킬의 구조를 이식하되, Notion 연동(
 ## 3. lab 백업 동기화
 
 `lab/scripts/backup_sync.py` 호출. Claude가 파일을 직접 복사하지 않고 반드시 이 스크립트를
-통해서만 진행한다.
+통해서만 진행한다. 이 프로젝트는 맥미니와 Windows(WSL2) 두 머신에서 개발하므로, 실행 중인
+머신에 맞는 스크립트 경로와 `--project` 키를 골라야 한다 (`lab/scripts/backup_manifest.yaml`
+참조 — 머신별로 project 키가 분리되어 있음):
 
-```bash
-python3 /home/inseok/study/5g/lab/scripts/backup_sync.py --project inseokiki --apply
-```
+- **맥미니**: `python3 /Users/kang/Desktop/study/scripts/backup_sync.py --project inseokiki-macmini --apply`
+- **Windows(WSL2)**: `python3 /home/inseok/study/5g/lab/scripts/backup_sync.py --project inseokiki-windows --apply`
+
+어느 머신인지 애매하면 실행 전 `hostname`/`pwd`로 먼저 확인한다.
 
 - `--apply`를 바로 써도 안전함 — 스크립트 자체가 신규/원본만-변경(COPY) 파일만 실제
   복사하고, `CONFLICT`(백업만 변경됨/양쪽 변경됨/이력 없이 내용 다름)나
