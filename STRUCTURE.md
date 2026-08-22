@@ -10,16 +10,20 @@ inseokiki/
 │   ├── src/                ← C 소스
 │   ├── include/            ← 헤더
 │   ├── config/             ← 시뮬 설정 파일
-│   ├── build/              ← 오브젝트 파일 (빌드 산출물)
+│   ├── build/              ← 오브젝트 파일 (빌드 산출물, git 미추적)
+│   ├── results/            ← 시뮬 결과물 (png/txt/fig/iq_dump, 재현 가능, git 미추적)
+│   ├── plots/               ← MATLAB 플롯 스크립트 (.m)
 │   ├── c_Makefile
-│   └── lls_sim_c           ← 실행 바이너리
+│   ├── copy.sh              ← results/plots를 Windows MATLAB 폴더로 복사 (개인 경로 포함, git 미추적)
+│   ├── regression_test.sh   ← 48-case 회귀 테스트
+│   └── lls_sim_c            ← 실행 바이너리 (git 미추적)
 │
 ├── BER/                    ← 독립 BER 툴 (PHY 코드 미사용)
 │   ├── src/
 │   ├── include/
 │   ├── config/
 │   ├── Makefile
-│   └── ber_sim             ← 실행 바이너리
+│   └── ber_sim             ← 실행 바이너리 (git 미추적)
 │
 └── 3gpp/                   ← 3GPP 표준 문서
 ```
