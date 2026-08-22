@@ -48,7 +48,7 @@ phy_lab(회사) 쪽 session-end 스킬의 구조를 이식하되, Notion 연동(
 머신에 맞는 스크립트 경로와 `--project` 키를 골라야 한다 (`lab/scripts/backup_manifest.yaml`
 참조 — 머신별로 project 키가 분리되어 있음):
 
-- **맥미니**: `python3 /Users/kang/Desktop/study/scripts/backup_sync.py --project inseokiki-macmini --apply`
+- **맥미니**: `python3 /Users/kang/Desktop/study/5g/lab/scripts/backup_sync.py --project inseokiki-macmini --apply`
 - **Windows(WSL2)**: `python3 /home/inseok/study/5g/lab/scripts/backup_sync.py --project inseokiki-windows --apply`
 
 어느 머신인지 애매하면 실행 전 `hostname`/`pwd`로 먼저 확인한다.
