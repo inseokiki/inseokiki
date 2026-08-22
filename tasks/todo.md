@@ -48,3 +48,4 @@ _(상세 구현/실측 결과는 `docs/analysis/history.md` 참조 — 2026-08-0
 - [x] PBCH/PDCCH에 페이딩 채널(FLAT_FADING/TDL) 변형 추가 (2026-08-02) — LLS 완성도 작업 1단계, 상세는 `docs/analysis/history.md` 참조
 - [x] Group A 조합 공백 전체 완료 (2026-08-03) — SM_4X4+TDL, SM_4X4+HARQ, CL_4PORT+TDL, CL_4PORT+HARQ, PUSCH+HARQ
 - [x] P0 정합성 수정 완료 (2026-08-03) — TABLE3 fallback 제거, config validation 추가, STRUCTURE.md 라우팅 갱신, 48-case 회귀 테스트 스크립트(`PHY/regression_test.sh`) 신규 작성·전체 통과
+- [x] Mac → Tailscale → Windows 4060 PC의 WSL2 원격 개발 경로 구축 (2026-08-03) — WSL OpenSSH 포트 `22299`, Tailscale 전용 연결, SSH 키 인증, Mac 별칭 `KANG_HOME`; 상세는 `docs/analysis/history.md` 참조

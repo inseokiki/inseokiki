@@ -78,6 +78,18 @@
 - **구현 중 발견한 버그(내 코드, 기존 코드 아님) 및 수정**: `qam_demap_llr_mmse()`는 이미 `mmse_equalize()`를 거친 등화 신호를 입력으로 기대하는데(비교 대상인 실수 PAM 레벨이 α로만 스케일되고 채널 위상은 보정 안 됨 — pdsch.c/pusch.c 기존 호출부는 전부 `mmse_equalize()` 먼저 호출 후 그 결과를 넘기고 있었음), PBCH 초안 코드는 원시 rx를 바로 넘겨서 SNR과 무관한 BLER floor(~0.77~0.88)가 발생 — `mmse_equalize()` 선행 호출로 수정 후 재검증, floor 사라지고 단조 감소 확인.
 - **검증**: AWGN 경로 회귀 없음(기존과 동일). FLAT_FADING은 ZF/MMSE 결과가 거의 동일(단일탭 채널에서 이론적으로 당연). TDL은 MMSE가 ZF보다 전 SNR에서 확실히 우세(PDCCH -6dB에서 P_detect 0.22 vs 0.014). 어느 조합에서도 floor 없이 SNR 증가에 따라 단조 개선 확인.
 
+### 원격 개발 환경 — Mac에서 RTX 4060 WSL2로 Tailscale SSH 연결 (2026-08-03)
+Mac을 가벼운 접속 단말로 사용하고 Codex/Claude Code, Git, Sionna 및 GPU 작업은 Windows 4060 PC의 WSL2에서 실행하기 위한 원격 개발 경로를 구축했다. 공유기 포트포워딩이나 공인 인터넷 SSH 노출 없이 Tailscale 사설 Tailnet만 사용한다.
+
+- **서버 환경 확인**: Windows WSL `2.5.9.0`, kernel `6.6.87.2-1`, Ubuntu `24.04.2 LTS`, `systemd` 활성화, WSL2 배포판 정상 실행을 확인했다. WSL 사용자/호스트는 `inseok@KANG`이며 RTX 4060(약 8 GB VRAM)의 WSL CUDA 접근을 확인했다.
+- **OpenSSH 서버**: WSL Ubuntu에 `openssh-server`를 설치하고 `ssh.service`를 활성화했다. 사용자 요구에 따라 기본 포트 22 대신 `22299`를 사용하도록 `/etc/ssh/sshd_config.d/99-custom-port.conf`에 설정했다. Ubuntu 24.04의 `ssh.socket`이 22번 포트를 다시 열지 않도록 socket activation을 비활성화하고 일반 `ssh.service` 방식으로 운용한다.
+- **로컬 검증**: Windows PowerShell에서 `ssh -p 22299 inseok@localhost` 접속에 성공했다. SSH 로그인 셸에서 `nvidia-smi`를 찾지 못한 문제는 WSL 제공 바이너리 `/usr/lib/wsl/lib/nvidia-smi`가 SSH 세션의 `PATH`에 없던 것이 원인이었으며, `/usr/lib/wsl/lib`를 사용자 `PATH`에 추가해 해결했다. WSL에서는 Ubuntu용 `nvidia-utils-*`를 별도 설치하지 않고 Windows NVIDIA 드라이버가 제공하는 WSL 도구를 사용한다.
+- **Tailscale 구성**: Windows 호스트가 아니라 WSL2에 Tailscale을 직접 설치하고 노드 이름을 `sionna-4060-wsl`로 등록했다. Mac에도 macOS용 Tailscale 앱을 설치해 동일 계정/Tailnet으로 연결했다. 확인된 주소는 Mac `100.109.115.82`, WSL `100.76.237.65`이며, 해당 주소는 공개 IP가 아닌 Tailnet 내부 주소다.
+- **Mac SSH 인증/별칭**: Mac의 기존 ED25519 키(`~/.ssh/id_ed25519`) 공개키를 WSL에 등록해 비밀번호 없는 로그인을 구성했다. Mac `~/.ssh/config`에는 `Host KANG_HOME`, `HostName 100.76.237.65`, `User inseok`, `Port 22299`, `IdentityFile ~/.ssh/id_ed25519`, `IdentitiesOnly yes` 및 keepalive 설정을 추가했다.
+- **최종 검증**: Mac에서 `ssh KANG_HOME` 명령으로 WSL2에 정상 접속했다. 최종 경로는 `Mac terminal → Tailscale → WSL2 OpenSSH:22299 → RTX 4060/Sionna 개발 환경`이다.
+
+운용 시에는 Mac과 WSL에서 Tailscale이 연결된 상태인지 확인한 뒤 `ssh KANG_HOME`만 실행하면 된다. 장시간 시뮬레이션은 추후 `tmux` 세션으로 분리하면 Mac 연결이 끊어져도 작업을 유지할 수 있다.
+
 ---
 
 ## 🔄 업데이트 이력 (원본 CLAUDE.md 기준)
@@ -104,3 +116,4 @@
 | 2026-07-22 | PHY LLS: RI+PMI 동시 적응 선택(CL_4PORT) 추가 — 추정 Shannon 용량 기준 80후보 전수탐색, mrc_combine_4rx / mimo_mmse_detect_4rx2 신규, adaptive/R1-fixed/R2-fixed BLER 3열 비교 출력 |
 | 2026-07-22 | PHY LLS: UL Closed-Loop Power Control(ULPC) 추가 — TS 38.213 §7.2.1, TPC {-1,0,+1,+3}dB genie-aided, 시계열 수렴 + PL 스윕 + α=0.8 설계 함의 출력, P_CMAX=23dBm (NR Power Class 3) |
 | 2026-08-02 | `CLAUDE.md` 분리 작업(이 문서 생성) — 상시 컨텍스트/이력/작업/교훈으로 재구성. 원본: `CLAUDE.md.original-20260802.bak` |
+| 2026-08-03 | 원격 개발 환경 구축 — Mac에서 Tailscale과 SSH 별칭 `KANG_HOME`을 통해 Windows RTX 4060 PC의 WSL2(`22299`)에 키 인증으로 접속 |

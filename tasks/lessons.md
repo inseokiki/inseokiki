@@ -12,6 +12,11 @@
 **왜**: 작업 시작 시 `git fetch origin && git status`를 먼저 실행해 원격이 앞서 있는지 확인하는 절차가 없었음. 여러 세션/기기를 오가며 작업하는 구조상, 이 확인 없이는 로컬이 최신이라고 가정하는 것 자체가 위험함.
 **적용**: 기능 자체(PUCCH/PRACH/PUSCH/MIMO/HARQ 등)는 로컬 WSL 작업이 최신이라고 판단해, 원격의 재구조화 히스토리는 `origin/archive/common-lls-sim-refactor` 브랜치로 보존하고 로컬 기준으로 `develop`을 force-push해 정리함. 이후 이 저장소의 `PHY/src`/`PHY/include` 평면 구조가 기준. 이 사고를 계기로 "작업 시작 시 항상 먼저 git fetch/status 확인" 규칙을 `CLAUDE.md`/`AGENTS.md`의 표준 절차로 고정함 — 매번 사용자가 요청하지 않아도 자동으로 수행할 것.
 
+### 2026-08-03 — 종료된 Codex 대화는 복구 불가라고 단정하기 전에 로컬 세션 로그 확인
+**무엇**: 터미널 종료 직전의 Tailscale/SSH 설정 대화를 기억하느냐는 질문에 처음에는 복구할 수 없다고 답했으나, 사용자 요청으로 `~/.codex/history.jsonl`과 `~/.codex/sessions/`를 확인한 결과 이전 세션 전문이 남아 있어 정확한 작업 지점을 복원할 수 있었다.
+**왜**: 현재 모델 컨텍스트에 이전 대화가 없다는 사실과 로컬 디스크에 세션 기록이 없는지를 동일하게 취급했기 때문이다. Codex CLI는 종료된 세션의 입력과 응답을 로컬 JSONL로 보존할 수 있으므로 둘은 구분해야 한다.
+**적용**: 사용자가 직전/과거 Codex 대화 복원을 요청하면 불가능하다고 단정하지 말고, 권한 범위 안에서 먼저 `~/.codex/history.jsonl`의 session ID와 `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`을 읽기 전용으로 검색한다. 복원 시에는 사용자/assistant 메시지만 추출하고 토큰, 인증정보 및 내부 메타데이터는 노출하거나 기록하지 않는다.
+
 <!--
 기록 형식 예시:
 
