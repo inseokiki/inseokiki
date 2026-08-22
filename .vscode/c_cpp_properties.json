@@ -4,15 +4,31 @@
             "name": "Linux",
             "includePath": [
                 "${workspaceFolder}/**",
-                "${workspaceFolder}/**",
-                "${workspaceFolder}/PHY/c_include",
-                "${workspaceFolder}/PHY/c_src"
+                "${workspaceFolder}/PHY/include",
+                "${workspaceFolder}/PHY/src",
+                "${workspaceFolder}/BER/include",
+                "${workspaceFolder}/BER/src"
             ],
             "defines": [],
             "compilerPath": "/usr/bin/gcc",
             "cStandard": "c17",
             "cppStandard": "gnu++17",
             "intelliSenseMode": "linux-gcc-x64"
+        },
+        {
+            "name": "macOS",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "${workspaceFolder}/PHY/include",
+                "${workspaceFolder}/PHY/src",
+                "${workspaceFolder}/BER/include",
+                "${workspaceFolder}/BER/src"
+            ],
+            "defines": [],
+            "compilerPath": "/usr/bin/gcc",
+            "cStandard": "c17",
+            "cppStandard": "gnu++17",
+            "intelliSenseMode": "macos-clang-arm64"
         }
     ],
     "version": 4
