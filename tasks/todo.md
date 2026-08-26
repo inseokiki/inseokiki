@@ -26,7 +26,7 @@ _(현재 진행 중인 작업 없음)_
 ### B. 이번 세션에 확인된 후속 과제
 - [x] CL_4PORT 교차편파(XPD) 누설 상관 모델 추가 — `SPATIAL_CORR_XPOL`, Kronecker R_pol⊗R_ant 확장, 2026-08-27 완료. 부작용으로 `codebook.c` RI/PMI 선택기의 기존 버그(2건) 발견 — 상세는 아래 신규 항목과 `docs/analysis/history.md` 참조
 - [x] UL CLPC에 채널 페이딩/이동성(시변 PL) 추가 — `UL_PC_PL_VAR_STD_DB`/`UL_PC_PL_VAR_CORR`, Gauss-Markov(AR1), 2026-08-27 완료
-- [ ] **(신규, 사용자 확인 필요)** CL_4PORT rank-1/rank-2 코드북 전력 정규화 불일치 — `codebook_type1_sp_4port_rank1()`/`rank2()` 둘 다 컬럼당 `norm=0.5`(‖열‖²=1)를 써서 rank-2 총 송신전력(2)이 rank-1(1)의 2배(+3dB)가 됨. RI 선택기가 이 불공정한 전력 우위 때문에 rank-2를 구조적으로 선호할 가능성 — XPD 누설 상관을 0.9999+까지 올려 채널이 사실상 완전 rank-1이 되는 극단 케이스에서도 rank-1 선택률이 0%로 남는 것으로 발견(2026-08-27). CL_4PORT를 쓰는 기존 시뮬레이션 전체(BLER 실측치, "R1선택률=0%" 2026-08-02 결론 포함)에 영향을 줄 수 있는 근본적인 수정이라 사용자 확인 후 착수
+- [x] CL_4PORT rank-1/rank-2 코드북 전력 정규화 불일치 수정 — `codebook_type1_sp_4port_rank2()`의 컬럼당 `norm`을 `0.5`→`0.5/√2`로 변경해 총 송신전력을 rank-1(‖W‖²=1)과 동일하게 맞춤(레이어당 0.5, 합계 1). 사용자 확인 후 2026-08-27 완료. 수정 후 재검증: iid Rayleigh에서 R1선택률이 SNR에 따라 정상적으로 갈림(저SNR≈90%, 고SNR≈0%, MIMO 이론과 일치), rho=rho_xpol→1(완전 rank-1 채널)에서 전 SNR R1선택률=100%로 정확히 수렴 — 2026-08-02 "R1선택률=0%" 결론과 이번 XPD 극단값 0% 결과 둘 다 이 정규화 버그가 근본 원인이었음이 확정됨. 회귀 48/48 유지. 상세는 `docs/analysis/history.md` 참조
 - [x] `codebook.c` RI/PMI 선택기 2×2 Gramian 역산의 catastrophic cancellation 방어 — `det`가 이론상 항상 `>= N0²`로 양수인데 부동소수점 뺄셈 오차로 음수/근사영이 될 수 있어 `a0/a1`이 허수적으로 1 근처까지 치솟는 결함을 발견·수정(2026-08-27, 상기 XPD 극단값 검증 중 발견). 회귀 48/48 통과, 위 정규화 이슈와는 별개
 
 ### C. 새 영역 확장 (완성도 작업보다 낮은 우선순위)
