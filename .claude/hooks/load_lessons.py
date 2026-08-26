@@ -21,9 +21,11 @@ if not content:
     sys.exit(0)
 
 # 과도한 컨텍스트 주입 방지: 8000자 초과 시 최근 부분만
+# lessons.md는 최신 항목이 위(앞)에 오도록 삽입하는 규칙이므로, 앞부분을 남겨야
+# 최신 교훈이 유지된다. 기존 content[-LIMIT:](끝부분)는 가장 오래된 항목만 남기는 버그였음.
 LIMIT = 8000
 if len(content) > LIMIT:
-    content = "(...앞부분 생략 — 전체는 tasks/lessons.md 참조...)\n" + content[-LIMIT:]
+    content = content[:LIMIT] + "\n(...뒷부분 생략 — 전체는 tasks/lessons.md 참조...)"
 
 print("[자동 주입: tasks/lessons.md — 이 프로젝트에서 과거 실수로부터 기록된 교훈. 작업 전 반드시 반영할 것]")
 print()
