@@ -305,9 +305,25 @@ void codebook_type1_sp_4port_ri_pmi_select(
                     A11 += conj(he[r][1]) * he[r][1];
                 }
 
-                /* A⁻¹ (2×2 직접 역산) */
-                cx_t det = A00 * A11 - A01 * A10;
-                if (cabs(det) < 1e-14) continue;   /* 특이 행렬 → 스킵 */
+                /* A⁻¹ (2×2 직접 역산)
+                 * A = H_eff^H H_eff + N0·I, N0>0 이므로 A는 항상 엄밀히
+                 * 양의 정부호 → det = A00·A11 − |A01|² (허수부는 부동소수점
+                 * 잡음뿐이므로 실수부만 사용)는 항상 min(A의 고유값들)² ≥
+                 * N0² 이상으로 엄밀히 양수여야 한다(H_eff의 두 열이 완전히
+                 * 평행해 rank-2 유효채널이 실질적으로 rank-1로 퇴화하는
+                 * 경우에도 N0·I 항이 최소 N0² 이상을 보장). det가 이 하한
+                 * 근처거나 음수로 계산되면 그건 실제 특이 행렬이 아니라
+                 * A00·A11과 |A01|²이 거의 같은 큰 값이라 뺄셈에서 유효자릿수를
+                 * 잃은 catastrophic cancellation이다 — 이 경우 1/det의 부호가
+                 * 뒤집혀 아래 a0/a1이 허수적으로 1 근처까지 치솟고 log2 항이
+                 * 터무니없이 커지는 버그가 있었다(높은 XPD 누설 상관에서
+                 * H_eff 두 열이 거의 평행해지며 실측됨, 2026-08-27). N0²의
+                 * 작은 배수를 하한으로 두어 이런 후보는 건너뛴다 — 48개
+                 * rank-2 후보가 전부 이 하한에 걸리면 best_cap_r2가 초기값
+                 * -1.0에 머물러 최종 비교에서 자동으로 rank-1로 폴백된다. */
+                double det_re = creal(A00 * A11 - A01 * A10);
+                if (det_re < 1e-6 * N0 * N0) continue;
+                cx_t det = det_re;
                 cx_t id = 1.0 / det;
                 double inv00 = creal( A11 * id);
                 double inv11 = creal( A00 * id);

@@ -90,6 +90,16 @@ Mac을 가벼운 접속 단말로 사용하고 Codex/Claude Code, Git, Sionna �
 
 운용 시에는 Mac과 WSL에서 Tailscale이 연결된 상태인지 확인한 뒤 `ssh KANG_HOME`만 실행하면 된다. 장시간 시뮬레이션은 추후 `tmux` 세션으로 분리하면 Mac 연결이 끊어져도 작업을 유지할 수 있다.
 
+### PHY LLS — CL_4PORT 교차편파(XPD) 누설 상관 + UL CLPC 시변 PL 추가, 2건의 기존 결함 발견 (2026-08-27)
+
+**XPD 누설 상관**: `mimo_apply_tx_correlation_4x4(h, rho, rho_xpol)` — 2026-08-02에 남겼던 후속 과제. Rtx = R_pol ⊗ R_ant(Kronecker product)로 확장, 포트 순서 [pol1_ant0, pol1_ant1, pol2_ant0, pol2_ant1](pol=외곽 인덱스, ant=내곽 인덱스)에서 R_ant(rho)는 기존 동일편파 쌍(포트 0-1, 2-3), 신규 R_pol(rho_xpol)은 동일 안테나 위치의 편파 간(포트 0-2, 1-3)에 적용. `sqrt(A⊗B)=sqrt(A)⊗sqrt(B)`와 `(A⊗I)(I⊗B)=A⊗B` 항등식으로, 기존 rho 믹싱 후 같은 닫힌형 2×2 블록 제곱근을 rho_xpol로 순차 적용하면 정확히 Kronecker 모델이 됨(고유분해 불필요, 손으로 유도해 검증). `SPATIAL_CORR_XPOL` config로 제어, 0=기존과 완전히 동일(회귀 48/48 유지 확인).
+
+**UL CLPC 시변 PL**: `run_ulpc_simulation()` Part 1을 Gauss-Markov(AR1) 정상상태 프로세스로 확장 — `PL(sf) = PL_mean + corr·(PL(sf-1)-PL_mean) + sqrt(1-corr²)·std·randn()`(Gudmundson 1991 그림자페이딩 자기상관 모델의 구현 정의 근사). `UL_PC_PL_VAR_STD_DB`/`UL_PC_PL_VAR_CORR` config 신규, std=0이면 기존 고정 PL과 완전히 동일. 실측(P0=-95dBm, α=0.8, PL 평균100±4dB, corr=0.85): OL SINR은 (1-α)=20%만큼만 PL 변동을 따라가 -2.7~-4.1dB에서 계속 흔들리는 반면, f(i) 수렴 후 CL SINR은 9.3~10.3dB로 목표 10dB 근방에 훨씬 타이트하게 유지됨 — CL이 시변 PL에서도 (1-α)·PL 잔여를 실제로 추종한다는 설계 의도가 그대로 확인됨.
+
+**발견 1 (수정 완료) — `codebook.c` RI/PMI 선택기의 catastrophic cancellation**: XPD 누설 상관을 검증하려고 손으로 완전 rank-1 채널(4개 열이 모두 동일 벡터)을 만들어 `codebook_type1_sp_4port_ri_pmi_select()`의 2×2 Gramian 중간값을 디버그 하네스로 직접 찍어보니, `A = H_eff^H H_eff + N0·I`는 N0>0인 한 항상 `det ≥ N0²`로 엄밀히 양수여야 하는데, `det = A00·A11 − A01·A10`을 그대로 계산하는 기존 코드가 두 큰 값의 차로 유효자릿수를 잃어(H_eff 두 열이 거의 평행해지는 고상관 영역) 부동소수점 오차로 음수가 나올 수 있었음 — 이러면 `1/det`의 부호가 뒤집혀 `a0`/`a1`이 1 근처까지 치솟고 해당 rank-2 후보의 log2 항이 터무니없이 커짐. `det`를 실수부로만 계산하고 `N0²`의 상대 하한(`1e-6·N0²`) 미만이면 해당 후보를 스킵하도록 수정(코드 주석에 유도 과정 기록). 회귀 48/48 유지.
+
+**발견 2 (미수정, 사용자 확인 대기) — rank-1/rank-2 코드북 전력 정규화 불일치**: 위 수정을 반영한 뒤에도 rho=rho_xpol→1(채널이 수학적으로 완전 rank-1)인 극단 케이스에서 rank-1 선택률이 여전히 0%로 유지됨. `codebook_type1_sp_4port_rank1()`은 ‖W‖²=1(코드 내 정규화 증명 주석 존재)인데, `codebook_type1_sp_4port_rank2()`도 동일한 `norm=0.5`를 컬럼마다 독립 적용해 각 레이어가 개별적으로 ‖W2[:,l]‖²=1 — 즉 rank-2의 총 송신전력(두 레이어 합)이 rank-1의 정확히 2배(+3dB)가 되어 RI 선택기의 용량 비교가 애초에 공정하지 않음(3GPP 관례상 rank-2는 레이어당 전력을 P/2로 나눠 총 송신전력이 rank와 무관하게 동일해야 함). 이게 2026-08-02에 기록한 "동일편파 상관만으로는 rank-1이 거의 선택 안 됨" 결론과 이번 XPD 극단값 결과 모두의 실제 근본 원인일 가능성이 높음 — 다만 CL_4PORT를 쓰는 기존 시뮬레이션 전체(BLER 실측치 포함)에 영향을 주는 근본적인 변경이라 이번 라운드에서는 고치지 않고 `tasks/todo.md`에 사용자 확인 대기 항목으로 남김.
+
 ---
 
 ## 🔄 업데이트 이력 (원본 CLAUDE.md 기준)

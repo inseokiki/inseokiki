@@ -24,8 +24,10 @@ _(현재 진행 중인 작업 없음)_
 - [x] PUSCH에 HARQ 재전송 조합 추가 — TDL/flat/AWGN 지원, LS est., 2026-08-03 완료
 
 ### B. 이번 세션에 확인된 후속 과제
-- [ ] CL_4PORT 교차편파(XPD) 누설 상관 모델 추가 — 2026-08-02 검증에서 동일편파 상관만으로는 rank-1이 ρ→1에서도 거의 선택 안 됨을 확인(교차편파 다이버시티 변형이 계속 유리하기 때문, 물리적으로 타당). 진짜 rank-1 전환을 보려면 편파 간 누설(유한 XPD) 상관을 추가해야 함 — `docs/analysis/history.md` 2026-08-02 항목 참조
-- [ ] UL CLPC에 채널 페이딩/이동성(시변 PL) 추가 — 현재 `run_ulpc_simulation()`은 고정 PL 기준(2026-07-22), 시변 경로손실 시나리오로 확장
+- [x] CL_4PORT 교차편파(XPD) 누설 상관 모델 추가 — `SPATIAL_CORR_XPOL`, Kronecker R_pol⊗R_ant 확장, 2026-08-27 완료. 부작용으로 `codebook.c` RI/PMI 선택기의 기존 버그(2건) 발견 — 상세는 아래 신규 항목과 `docs/analysis/history.md` 참조
+- [x] UL CLPC에 채널 페이딩/이동성(시변 PL) 추가 — `UL_PC_PL_VAR_STD_DB`/`UL_PC_PL_VAR_CORR`, Gauss-Markov(AR1), 2026-08-27 완료
+- [ ] **(신규, 사용자 확인 필요)** CL_4PORT rank-1/rank-2 코드북 전력 정규화 불일치 — `codebook_type1_sp_4port_rank1()`/`rank2()` 둘 다 컬럼당 `norm=0.5`(‖열‖²=1)를 써서 rank-2 총 송신전력(2)이 rank-1(1)의 2배(+3dB)가 됨. RI 선택기가 이 불공정한 전력 우위 때문에 rank-2를 구조적으로 선호할 가능성 — XPD 누설 상관을 0.9999+까지 올려 채널이 사실상 완전 rank-1이 되는 극단 케이스에서도 rank-1 선택률이 0%로 남는 것으로 발견(2026-08-27). CL_4PORT를 쓰는 기존 시뮬레이션 전체(BLER 실측치, "R1선택률=0%" 2026-08-02 결론 포함)에 영향을 줄 수 있는 근본적인 수정이라 사용자 확인 후 착수
+- [x] `codebook.c` RI/PMI 선택기 2×2 Gramian 역산의 catastrophic cancellation 방어 — `det`가 이론상 항상 `>= N0²`로 양수인데 부동소수점 뺄셈 오차로 음수/근사영이 될 수 있어 `a0/a1`이 허수적으로 1 근처까지 치솟는 결함을 발견·수정(2026-08-27, 상기 XPD 극단값 검증 중 발견). 회귀 48/48 통과, 위 정규화 이슈와는 별개
 
 ### C. 새 영역 확장 (완성도 작업보다 낮은 우선순위)
 - [ ] MU-MIMO 확장 — 현재 SU-MIMO(SM_2X2/SM_4X4)까지만 구현

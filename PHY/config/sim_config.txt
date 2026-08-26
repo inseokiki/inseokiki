@@ -64,12 +64,23 @@ EQUALIZER = MMSE
 MIMO_MODE = SISO
 
 # Tx-side spatial correlation for MIMO_MODE=CL_4PORT only (Kronecker model,
-# H_corr = H_iid * Rtx^(1/2)): coefficient rho in [0,1) applied within each
-# XPOL polarization pair (ports 0-1, ports 2-3); cross-polarization and RX
-# side stay uncorrelated. 0 = i.i.d. (default, unchanged from before this
-# field existed). NOT the exact TS 38.101-4 Annex B correlation matrices --
+# H_corr = H_iid * Rtx^(1/2), Rtx = R_pol (x) R_ant): coefficient rho in
+# [0,1) applied within each XPOL polarization pair (ports 0-1, ports 2-3).
+# 0 = i.i.d. within polarization (default, unchanged from before this field
+# existed). NOT the exact TS 38.101-4 Annex B correlation matrices --
 # implementation-defined approximation, see STRUCTURE.md.
 SPATIAL_CORR_TX = 0.0
+
+# Cross-polarization correlation (finite XPD leakage) for MIMO_MODE=CL_4PORT,
+# applied between the two polarizations at the same antenna position (ports
+# 0-2, ports 1-3). 0 = infinite XPD / fully independent polarizations
+# (default -- with SPATIAL_CORR_TX alone, same-polarization correlation can
+# never collapse the channel to true rank-1 because the two polarization
+# subspaces stay energy-balanced and independent; a nonzero SPATIAL_CORR_XPOL
+# is required to see genuine rank-1 PMI selection as rho->1). Same
+# implementation-defined-approximation caveat as SPATIAL_CORR_TX -- see
+# STRUCTURE.md and mimo.h.
+SPATIAL_CORR_XPOL = 0.0
 
 # HARQ (PDSCH + USE_DMRS path; takes priority over MIMO_MODE if enabled)
 HARQ_ENABLE = 0
@@ -131,6 +142,29 @@ PRACH_NUM_CS = 13
 # Max true propagation delay (samples) drawn per trial for TA estimation;
 # must be < PRACH_NUM_CS to stay unambiguous within one preamble's zone.
 PRACH_MAX_DELAY_SAMPLES = 8
+
+# UL Closed-Loop Power Control (PHYSICAL_CHANNEL=ULPC only, TS 38.213 §7.2.1)
+UL_PC_P0_DBM = -95.0
+UL_PC_P_CMAX_DBM = 23.0
+UL_PC_ALPHA = 0.8
+UL_PC_NF_DB = 7.0
+UL_PC_SINR_TARGET_DB = 10.0
+# Part 1 (time series) mean/steady-state PL [dB]. With UL_PC_PL_VAR_STD_DB=0
+# this is the fixed PL used for every subframe (original behavior).
+UL_PC_PL_DB = 100.0
+UL_PC_NUM_SF = 100
+# Time-varying PL (channel fading / UE mobility) for Part 1's time series,
+# modeled as a stationary Gauss-Markov (AR(1)) process around UL_PC_PL_DB:
+#   PL(sf) = PL_mean + corr*(PL(sf-1)-PL_mean) + sqrt(1-corr^2)*std*randn()
+# UL_PC_PL_VAR_STD_DB: steady-state std dev [dB]. 0 = fixed PL (default,
+# unchanged from before these fields existed).
+# UL_PC_PL_VAR_CORR: subframe-to-subframe correlation coefficient [0,1)
+# (higher = slower-varying / more mobility-like shadowing). Only matters
+# when UL_PC_PL_VAR_STD_DB > 0. Implementation-defined approximation of the
+# classic Gudmundson (1991) shadow-fading autocorrelation model -- not tied
+# to a specific UE speed/decorrelation distance.
+UL_PC_PL_VAR_STD_DB = 0.0
+UL_PC_PL_VAR_CORR = 0.9
 
 # IQ Symbol Dump (for constellation plot and EVM)
 IQ_DUMP = 1

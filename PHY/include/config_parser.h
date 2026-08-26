@@ -78,10 +78,13 @@ typedef struct {
     double ulpcAlpha;           /* 경로손실 부분 보상 계수 α (0~1)       */
     double ulpcNfDb;            /* gNB 잡음지수 NF [dB]                  */
     double ulpcSinrTargetDb;    /* 내부루프 SINR 목표 [dB]               */
-    double ulpcPlDb;            /* UE가 측정한 DL 경로손실 (시계열용) [dB] */
+    double ulpcPlDb;            /* UE가 측정한 DL 경로손실 (시계열용, 정상상태 평균) [dB] */
     int    ulpcNumSf;           /* 시계열 시뮬레이션 서브프레임 수       */
-    /* ── 4x4 MIMO Tx 공간상관 (Kronecker, XPOL 2x2 블록) ── */
-    double spatialCorrTx;       /* 편파 그룹 내 Tx 상관계수 rho [0,1)     */
+    double ulpcPlVarStdDb;      /* 시변 PL(그림자페이딩/이동성) 정상상태 표준편차 [dB], 0=고정 PL */
+    double ulpcPlVarCorr;       /* 시변 PL의 SF간 상관계수 (Gauss-Markov) [0,1) */
+    /* ── 4x4 MIMO Tx 공간상관 (Kronecker, R_pol (x) R_ant) ── */
+    double spatialCorrTx;       /* 동일편파 내 안테나 간 상관계수 rho [0,1) (R_ant)     */
+    double spatialCorrXpol;     /* 편파 간 상관계수 rho_xpol [0,1) — 유한 XPD 누설 (R_pol) */
 } L1Config;
 
 typedef struct {

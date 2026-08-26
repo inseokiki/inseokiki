@@ -216,6 +216,14 @@ static void validate_config(const L1Config *c) {
     /* 공간 상관 */
     if (c->spatialCorrTx < 0.0 || c->spatialCorrTx >= 1.0)
         CFG_ERR("SPATIAL_CORR_TX=%.4g out of range [0, 1)", c->spatialCorrTx);
+    if (c->spatialCorrXpol < 0.0 || c->spatialCorrXpol >= 1.0)
+        CFG_ERR("SPATIAL_CORR_XPOL=%.4g out of range [0, 1)", c->spatialCorrXpol);
+
+    /* UL CLPC 시변 PL */
+    if (c->ulpcPlVarStdDb < 0.0)
+        CFG_ERR("UL_PC_PL_VAR_STD_DB=%.4g must be >= 0", c->ulpcPlVarStdDb);
+    if (c->ulpcPlVarCorr < 0.0 || c->ulpcPlVarCorr >= 1.0)
+        CFG_ERR("UL_PC_PL_VAR_CORR=%.4g out of range [0, 1)", c->ulpcPlVarCorr);
 
     /* HARQ */
     if (c->harqEnable) {
@@ -301,7 +309,10 @@ int config_parser_load(ConfigParser *p, const char *filename) {
     c->ulpcSinrTargetDb = kv_dbl(p, "UL_PC_SINR_TARGET_DB", 10.0);
     c->ulpcPlDb         = kv_dbl(p, "UL_PC_PL_DB",         100.0);
     c->ulpcNumSf        = kv_int(p, "UL_PC_NUM_SF",          100);
+    c->ulpcPlVarStdDb   = kv_dbl(p, "UL_PC_PL_VAR_STD_DB",    0.0);
+    c->ulpcPlVarCorr    = kv_dbl(p, "UL_PC_PL_VAR_CORR",      0.9);
     c->spatialCorrTx    = kv_dbl(p, "SPATIAL_CORR_TX",        0.0);
+    c->spatialCorrXpol  = kv_dbl(p, "SPATIAL_CORR_XPOL",      0.0);
     kv_str(p, "MODULATION",      "QPSK",   c->modulation,     CFG_STR_MAX);
     kv_str(p, "CODING",          "LDPC",   c->coding,         CFG_STR_MAX);
     kv_str(p, "CHANNEL_MODEL",   "AWGN",   c->channelModel,   CFG_STR_MAX);

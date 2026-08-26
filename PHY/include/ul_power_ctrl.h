@@ -17,7 +17,8 @@
 #include "config_parser.h"
 
 /* UL CLPC 시뮬레이션:
- *   Part 1 — 시계열 (고정 PL): P_tx, SINR, f(i) 수렴 과정 출력
+ *   Part 1 — 시계열 (PL_VAR_STD_DB=0이면 고정 PL, 아니면 Gauss-Markov 시변
+ *            PL로 채널 페이딩/이동성 근사): P_tx, SINR, f(i) 수렴 과정 출력
  *   Part 2 — PL 스윕 (정상상태): OL vs CL 비교, P_CMAX 클램핑 가시화
  *            (PL 범위는 cfg->snrStart ~ snrEnd 재사용) */
 void run_ulpc_simulation(const L1Config *cfg);

@@ -156,17 +156,35 @@ void mimo_channel_draw_4x4(cx_t h[4][4]) {
             h[r][t] = CX_MAKE(randn() * inv_sq2, randn() * inv_sq2);
 }
 
-void mimo_apply_tx_correlation_4x4(cx_t h[4][4], double rho) {
-    if (rho <= 0.0) return;
-    if (rho >= 1.0) rho = 1.0 - 1e-9;
-    double a = 0.5 * (sqrt(1.0 + rho) + sqrt(1.0 - rho));
-    double b = 0.5 * (sqrt(1.0 + rho) - sqrt(1.0 - rho));
-    for (int r = 0; r < 4; r++) {
-        cx_t h0 = h[r][0], h1 = h[r][1], h2 = h[r][2], h3 = h[r][3];
-        h[r][0] = a * h0 + b * h1;
-        h[r][1] = b * h0 + a * h1;
-        h[r][2] = a * h2 + b * h3;
-        h[r][3] = b * h2 + a * h3;
+void mimo_apply_tx_correlation_4x4(cx_t h[4][4], double rho, double rho_xpol) {
+    /* R_ant factor: mixes the two co-located antennas within each
+       polarization (ports 0-1, ports 2-3). */
+    if (rho > 0.0) {
+        if (rho >= 1.0) rho = 1.0 - 1e-9;
+        double a = 0.5 * (sqrt(1.0 + rho) + sqrt(1.0 - rho));
+        double b = 0.5 * (sqrt(1.0 + rho) - sqrt(1.0 - rho));
+        for (int r = 0; r < 4; r++) {
+            cx_t h0 = h[r][0], h1 = h[r][1], h2 = h[r][2], h3 = h[r][3];
+            h[r][0] = a * h0 + b * h1;
+            h[r][1] = b * h0 + a * h1;
+            h[r][2] = a * h2 + b * h3;
+            h[r][3] = b * h2 + a * h3;
+        }
+    }
+
+    /* R_pol factor: mixes the two polarizations at the same antenna
+       position (ports 0-2, ports 1-3) -- finite-XPD leakage. */
+    if (rho_xpol > 0.0) {
+        if (rho_xpol >= 1.0) rho_xpol = 1.0 - 1e-9;
+        double a = 0.5 * (sqrt(1.0 + rho_xpol) + sqrt(1.0 - rho_xpol));
+        double b = 0.5 * (sqrt(1.0 + rho_xpol) - sqrt(1.0 - rho_xpol));
+        for (int r = 0; r < 4; r++) {
+            cx_t h0 = h[r][0], h1 = h[r][1], h2 = h[r][2], h3 = h[r][3];
+            h[r][0] = a * h0 + b * h2;
+            h[r][2] = b * h0 + a * h2;
+            h[r][1] = a * h1 + b * h3;
+            h[r][3] = b * h1 + a * h3;
+        }
     }
 }
 

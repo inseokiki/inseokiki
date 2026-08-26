@@ -21,19 +21,31 @@ void mimo_channel_draw_4x4(cx_t h[4][4]);    /* h[rx][tx], 4 Tx layers -> 4 Rx a
 
 /* Apply TX-side spatial correlation (Kronecker model, H_corr = H_iid * Rtx^(1/2))
    in place to an already-drawn iid channel from mimo_channel_draw_4x4().
-   Rtx is block-diagonal: a 2x2 exponential-correlation block [[1,rho],[rho,1]]
-   per XPOL pair (ports 0-1, ports 2-3, matching codebook.h's port ordering
-   [pol1_ant0, pol1_ant1, pol2_ant0, pol2_ant1]), cross-polarization
-   correlation fixed at 0 (standard dual-pol simplification). rho in [0,1);
-   the 2x2 block square root has a closed form (a=avg, b=half-diff of
-   sqrt(1+-rho)), so no general eigendecomposition is needed. RX side is left
-   uncorrelated -- the gNB's compact array is the relevant correlated side for
-   a CSI-RS codebook study, not the UE. This is a standard textbook Kronecker
-   model (Kermoal et al. 2002; see also Tse & Viswanath, Bjornson "Massive
-   MIMO Networks"), NOT the exact TS 38.101-4 Annex B correlation matrices
-   (implementation-defined approximation, same philosophy as tdl.c's PDP).
-   rho<=0 is a no-op (exactly recovers the iid channel). */
-void mimo_apply_tx_correlation_4x4(cx_t h[4][4], double rho);
+   Rtx = R_pol (x) R_ant (Kronecker product, "(x)" = tensor product), matching
+   codebook.h's port ordering [pol1_ant0, pol1_ant1, pol2_ant0, pol2_ant1]
+   (pol = outer index, ant = inner index):
+     - R_ant = 2x2 exponential-correlation block [[1,rho],[rho,1]] between the
+       two co-located antennas of the SAME polarization (ports 0-1 and 2-3).
+     - R_pol = 2x2 exponential-correlation block [[1,rho_xpol],[rho_xpol,1]]
+       between the two polarizations at the SAME antenna position (ports 0-2
+       and 1-3), representing finite XPD leakage (rho_xpol=0 <=> infinite
+       XPD, i.e. the two polarizations stay fully independent).
+   Because sqrt(A (x) B) = sqrt(A) (x) sqrt(B) for PSD A,B, and (A(x)I)(I(x)B)
+   = A(x)B, applying Rtx^(1/2) reduces to two independent elementary mixing
+   passes (rho across ports {0,1}/{2,3}, then rho_xpol across ports {0,2}/
+   {1,3}) using the SAME closed-form 2x2 block square root for both (a=avg,
+   b=half-diff of sqrt(1+-rho)) -- no general eigendecomposition needed.
+   RX side is left uncorrelated -- the gNB's compact array is the relevant
+   correlated side for a CSI-RS codebook study, not the UE. This is a
+   standard textbook Kronecker model (Kermoal et al. 2002; see also Tse &
+   Viswanath, Bjornson "Massive MIMO Networks"; the polarization factor
+   follows the same dual-pol Kronecker-extension philosophy as Coldrey,
+   "Modeling and Capacity of Polarized MIMO Channels", 2008), NOT the exact
+   TS 38.101-4 Annex B correlation matrices (implementation-defined
+   approximation, same philosophy as tdl.c's PDP). rho<=0 and/or
+   rho_xpol<=0 is a no-op for that factor (rho=rho_xpol=0 exactly recovers
+   the iid channel). */
+void mimo_apply_tx_correlation_4x4(cx_t h[4][4], double rho, double rho_xpol);
 
 /* y[r] = h[r]*tx + n[r], independent AWGN per Rx antenna, Es/N0 = snr_db */
 void mimo_channel_apply_1x2(const MIMOChannel *ch, const cx_t h[2],

@@ -163,6 +163,7 @@ git log --oneline develop..origin/develop   # 원격이 앞서 있으면 확인
 | 2026-08-02 | PHY LLS: CL_4PORT 공간상관(Kronecker, XPOL 2x2 블록) 추가 — 동일편파 상관만으로는 ρ→1에서도 rank-1이 거의 선택 안 됨을 확인(교차편파 다이버시티 변형이 계속 유리, 물리적으로 타당). XPD 누설 상관 확장은 `tasks/todo.md`에 후속 과제로 등록 |
 | 2026-08-02 | 방향 확인: NTN보다 기존 LLS 완성도(채널×기능 조합 공백 메우기) 우선. `tasks/todo.md` A/B/C 그룹으로 재정리 |
 | 2026-08-02 | PHY LLS: PBCH/PDCCH에 FLAT_FADING/TDL 추가(genie-aided CSI) — 완성도 작업 1단계, AWGN 전용이던 마지막 두 채널 해소. 구현 중 `qam_demap_llr_mmse()` 오용(mmse_equalize 선행 누락으로 SNR 무관 BLER floor) 발견·수정 |
+| 2026-08-27 | PHY LLS: CL_4PORT XPD 누설 상관(`SPATIAL_CORR_XPOL`) + UL CLPC 시변 PL(`UL_PC_PL_VAR_*`) 추가. 검증 중 `codebook.c` RI/PMI 선택기의 2×2 Gramian 부동소수점 결함 발견·수정, 그리고 rank-1/rank-2 코드북 전력 정규화 불일치(rank-2가 +3dB 전력 우위) 발견(미수정, 사용자 확인 대기) — 상세는 `docs/analysis/history.md`, `tasks/todo.md` 참조 |
 
 ---
 

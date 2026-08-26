@@ -28,6 +28,19 @@
  *    OL-only : f(i) = 0 고정 (P_0 + α·PL만 적용)
  *    CL      : f(i) 누산 (inner-loop CLPC 적용)
  *
+ *  Part 1 시변 PL (채널 페이딩/이동성, UL_PC_PL_VAR_STD_DB > 0일 때):
+ *    정상상태 Gauss-Markov(AR(1)) 프로세스로 PL(sf)을 UL_PC_PL_DB 주변에서
+ *    변동시킨다 — Gudmundson(1991) 그림자페이딩 자기상관 모델의 구현 정의
+ *    근사(특정 UE 속도/상관거리에 대응시키지 않음):
+ *      PL(sf) = PL_mean + corr·(PL(sf-1) − PL_mean)
+ *               + sqrt(1 − corr²)·std·randn()
+ *    OL/CL 전력식 모두 매 SF의 순간 PL(sf)로 재계산되므로(스펙상 UE가 매
+ *    SF 최신 DL RS로 PL을 다시 추정) α·PL 항 자체는 두 계열 모두 즉시
+ *    추종한다 — 차이는 f(i)뿐이다: CL은 SINR 오차 기반 이산 TPC 누산이라
+ *    PL이 계속 바뀌면 정착(settle)할 시간이 부족해질 수 있고, 이 지연이
+ *    (1-α)·PL 잔여 보상의 실제 한계를 드러낸다. UL_PC_PL_VAR_STD_DB=0이면
+ *    PL(sf)=UL_PC_PL_DB 상수로 고정되어 이 확장 이전과 동일하게 동작한다.
+ *
  *  노이즈 바닥 (gNB 수신단):
  *    N_floor [dBm] = −174 + 10·log10(12·SCS_Hz) + NF
  *    (열잡음 + gNB 잡음지수, 단일 RB 기준)
@@ -35,6 +48,7 @@
  *  Author : Inseok Kang
  * ================================================================ */
 #include "ul_power_ctrl.h"
+#include "utils.h"
 #include <stdio.h>
 #include <math.h>
 #include <string.h>
@@ -70,6 +84,8 @@ void run_ulpc_simulation(const L1Config *cfg) {
     double SINR_tgt  = cfg->ulpcSinrTargetDb;
     double PL_fix    = cfg->ulpcPlDb;
     int    nsf       = cfg->ulpcNumSf;
+    double plVarStd  = cfg->ulpcPlVarStdDb;
+    double plVarCorr = cfg->ulpcPlVarCorr;
 
     /* gNB 수신단 1-RB 노이즈 바닥 */
     double bw_hz    = 12.0 * cfg->scsKHz * 1e3;
@@ -88,44 +104,55 @@ void run_ulpc_simulation(const L1Config *cfg) {
            alpha, 1.0 - alpha);
 
     /* ================================================================
-     * Part 1 — 시계열 (고정 PL)
+     * Part 1 — 시계열 (PL_VAR_STD_DB=0이면 고정 PL, 아니면 Gauss-Markov 시변)
      * ================================================================ */
-    printf("--- Part 1: 시계열 수렴 (고정 PL = %.1f dB) ---\n", PL_fix);
-    printf("OL 전력: P0 + α·PL = %.1f + %.2f·%.1f = %.1f dBm\n",
+    if (plVarStd > 0.0) {
+        printf("--- Part 1: 시계열 수렴 (시변 PL, 평균 %.1f dB, std %.1f dB, corr %.2f) ---\n",
+               PL_fix, plVarStd, plVarCorr);
+    } else {
+        printf("--- Part 1: 시계열 수렴 (고정 PL = %.1f dB) ---\n", PL_fix);
+    }
+    printf("OL 전력(평균 PL 기준): P0 + α·PL = %.1f + %.2f·%.1f = %.1f dBm\n",
            P0, alpha, PL_fix, P0 + alpha * PL_fix);
-    printf("OL SINR: %.1f - %.1f = %.1f dB  (목표 %.1f dB, 잔류 부족 %.1f dB)\n",
+    printf("OL SINR(평균 PL 기준): %.1f - %.1f = %.1f dB  (목표 %.1f dB, 잔류 부족 %.1f dB)\n",
            P0 + alpha * PL_fix - PL_fix, N_floor,
            P0 + alpha * PL_fix - PL_fix - N_floor,
            SINR_tgt,
            SINR_tgt - (P0 + alpha * PL_fix - PL_fix - N_floor));
 
-    double P_OL_fix = P0 + alpha * PL_fix;   /* 개루프 전력 (f=0 기준) */
-
-    printf("\n%-5s  %-11s  %-11s  %-10s  %-10s  %-10s  %s\n",
-           "SF", "P_tx_CL", "P_tx_OL", "SINR_CL", "SINR_OL", "f(i)", "TPC");
-    printf("%-5s  %-11s  %-11s  %-10s  %-10s  %-10s  %s\n",
-           "", "(dBm)", "(dBm)", "(dB)", "(dB)", "(dB)", "(dB)");
-    for (int i = 0; i < 75; i++) printf("-");
+    printf("\n%-5s  %-8s  %-11s  %-11s  %-10s  %-10s  %-10s  %s\n",
+           "SF", "PL(t)", "P_tx_CL", "P_tx_OL", "SINR_CL", "SINR_OL", "f(i)", "TPC");
+    printf("%-5s  %-8s  %-11s  %-11s  %-10s  %-10s  %-10s  %s\n",
+           "", "(dB)", "(dBm)", "(dBm)", "(dB)", "(dB)", "(dB)", "(dB)");
+    for (int i = 0; i < 85; i++) printf("-");
     printf("\n");
 
     double f_acc = 0.0;
+    double pl_t  = PL_fix;
     for (int sf = 0; sf < nsf; sf++) {
-        /* OL 전력 (f=0 고정) */
-        double ptx_ol  = fmin(PCMAX, P_OL_fix);
-        double prx_ol  = ptx_ol  - PL_fix;
+        /* Gauss-Markov 시변 PL 갱신 (plVarStd=0이면 pl_t는 PL_fix로 고정 유지) */
+        if (sf > 0 && plVarStd > 0.0) {
+            pl_t = PL_fix + plVarCorr * (pl_t - PL_fix)
+                 + sqrt(1.0 - plVarCorr * plVarCorr) * plVarStd * randn();
+        }
+        double p_ol_now = P0 + alpha * pl_t;   /* 개루프 전력 (f=0 기준, 순간 PL) */
+
+        /* OL 전력 (f=0 고정, 순간 PL 반영) */
+        double ptx_ol  = fmin(PCMAX, p_ol_now);
+        double prx_ol  = ptx_ol  - pl_t;
         double sinr_ol = prx_ol  - N_floor;
 
-        /* CL 전력 (f(i) 누산) */
-        double ptx_cl  = fmin(PCMAX, P_OL_fix + f_acc);
-        double prx_cl  = ptx_cl  - PL_fix;
+        /* CL 전력 (f(i) 누산, 순간 PL 반영) */
+        double ptx_cl  = fmin(PCMAX, p_ol_now + f_acc);
+        double prx_cl  = ptx_cl  - pl_t;
         double sinr_cl = prx_cl  - N_floor;
 
         /* TPC 결정 후 f(i) 업데이트 (다음 SF에 반영) */
         double sinr_err = SINR_tgt - sinr_cl;
         double delta    = tpc_decide(sinr_err);
 
-        printf("%-5d  %+8.2f dBm  %+8.2f dBm  %+7.2f dB  %+7.2f dB  %+7.2f dB  %+.0f\n",
-               sf, ptx_cl, ptx_ol, sinr_cl, sinr_ol, f_acc, delta);
+        printf("%-5d  %+7.2f  %+8.2f dBm  %+8.2f dBm  %+7.2f dB  %+7.2f dB  %+7.2f dB  %+.0f\n",
+               sf, pl_t, ptx_cl, ptx_ol, sinr_cl, sinr_ol, f_acc, delta);
 
         f_acc += delta;
         /* f(i) 클램프: TS 38.213 §7.2.1 — 구현 정의 (±30 dB 사용) */
@@ -133,10 +160,11 @@ void run_ulpc_simulation(const L1Config *cfg) {
         if (f_acc < -30.0) f_acc = -30.0;
     }
 
-    double sinr_cl_ss = fmin(PCMAX, P_OL_fix + f_acc) - PL_fix - N_floor;
-    printf("\n정상 상태 (SF=%d): f(i)=%.1f dB, P_tx=%.1f dBm, SINR_CL=%.1f dB\n",
-           nsf, f_acc, fmin(PCMAX, P_OL_fix + f_acc), sinr_cl_ss);
-    if (fmin(PCMAX, P_OL_fix + f_acc) >= PCMAX - 0.01)
+    double p_ol_last  = P0 + alpha * pl_t;
+    double sinr_cl_ss = fmin(PCMAX, p_ol_last + f_acc) - pl_t - N_floor;
+    printf("\n정상 상태 (SF=%d): PL=%.1f dB, f(i)=%.1f dB, P_tx=%.1f dBm, SINR_CL=%.1f dB\n",
+           nsf, pl_t, f_acc, fmin(PCMAX, p_ol_last + f_acc), sinr_cl_ss);
+    if (fmin(PCMAX, p_ol_last + f_acc) >= PCMAX - 0.01)
         printf("★ P_CMAX 클램핑 발생 — 이 PL에서 SINR 목표 달성 불가\n");
 
     /* ================================================================

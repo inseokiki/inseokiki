@@ -2375,8 +2375,9 @@ void run_pdsch_cl_4port_simulation(const L1Config *cfg) {
     printf("Tx/Rx Ants   : 4 / 4\n");
     printf("Codebook     : TS 38.214 Type I SP (N1=2, O1=4, Ng=2)\n");
     printf("Rank Range   : 1~2  (RI+PMI 자동 선택, 추정 용량 기준)\n");
-    printf("Tx Corr      : rho=%.2f (%s, Kronecker XPOL 2x2 blocks, RX 비상관)\n",
-           cfg->spatialCorrTx, cfg->spatialCorrTx > 0.0 ? "공간상관" : "i.i.d.");
+    printf("Tx Corr      : rho=%.2f, rho_xpol=%.2f (%s, Kronecker R_pol(x)R_ant, RX 비상관)\n",
+           cfg->spatialCorrTx, cfg->spatialCorrXpol,
+           (cfg->spatialCorrTx > 0.0 || cfg->spatialCorrXpol > 0.0) ? "공간상관" : "i.i.d.");
     printf("TB Size/CW   : %d bits\n", tbsz);
     printf("Data RE/CW   : %d  (Genie-aided CSI, pilot 오버헤드 없음)\n", nd);
     printf("Trials/SNR   : %d\n\n", cfg->numTrials);
@@ -2423,7 +2424,7 @@ void run_pdsch_cl_4port_simulation(const L1Config *cfg) {
             /* ① 채널 드로우: H[4][4], 필요 시 Tx 공간상관(Kronecker) 적용 */
             cx_t H[4][4];
             mimo_channel_draw_4x4(H);
-            mimo_apply_tx_correlation_4x4(H, cfg->spatialCorrTx);
+            mimo_apply_tx_correlation_4x4(H, cfg->spatialCorrTx, cfg->spatialCorrXpol);
 
             /* ② RI+PMI 선택 (80 후보 전수 탐색)
              *   → 적응형 best + rank-1 best + rank-2 best 동시 반환 */
@@ -2686,8 +2687,9 @@ void run_pdsch_cl_4port_tdl_simulation(const L1Config *cfg) {
     printf("Tx/Rx Ants   : 4 / 4\n");
     printf("Codebook     : TS 38.214 Type I SP (N1=2, O1=4, Ng=2)\n");
     printf("Rank Range   : 1~2  (RI+PMI 자동 선택, Wideband H_avg 기준)\n");
-    printf("Tx Corr      : rho=%.2f (%s, Kronecker XPOL 2x2 blocks, RX 비상관)\n",
-           cfg->spatialCorrTx, cfg->spatialCorrTx > 0.0 ? "공간상관" : "i.i.d.");
+    printf("Tx Corr      : rho=%.2f, rho_xpol=%.2f (%s, Kronecker R_pol(x)R_ant, RX 비상관)\n",
+           cfg->spatialCorrTx, cfg->spatialCorrXpol,
+           (cfg->spatialCorrTx > 0.0 || cfg->spatialCorrXpol > 0.0) ? "공간상관" : "i.i.d.");
     printf("Channel      : TDL per Tx-Rx pair (16 tap-sets, DS=%.0fns, %d taps, genie-aided)\n",
            cfg->tdlDelaySpreadNs, TDL_MAX_TAPS);
     printf("TB Size/CW   : %d bits\n", tbsz);
@@ -2756,7 +2758,7 @@ void run_pdsch_cl_4port_tdl_simulation(const L1Config *cfg) {
                     for (int t = 0; t < 4; t++)
                         H_cache[d][r][t] = tdl_freq_response(&tdl_ch, taps[r][t], k);
                 /* Tx 상관 적용 */
-                mimo_apply_tx_correlation_4x4(H_cache[d], cfg->spatialCorrTx);
+                mimo_apply_tx_correlation_4x4(H_cache[d], cfg->spatialCorrTx, cfg->spatialCorrXpol);
                 for (int r = 0; r < 4; r++)
                     for (int t = 0; t < 4; t++)
                         H_avg[r][t] += H_cache[d][r][t];
@@ -3025,7 +3027,7 @@ void run_pdsch_cl_4port_harq_simulation(const L1Config *cfg) {
     printf("Tx/Rx Ants   : 4 / 4\n");
     printf("Codebook     : TS 38.214 Type I SP (N1=2, O1=4, Ng=2)\n");
     printf("Rank Range   : 1~2  (시도 0에서 H_avg 기반 선택, 이후 고정)\n");
-    printf("Tx Corr      : rho=%.2f\n", cfg->spatialCorrTx);
+    printf("Tx Corr      : rho=%.2f, rho_xpol=%.2f\n", cfg->spatialCorrTx, cfg->spatialCorrXpol);
     printf("TB Size/CW   : %d bits\n", tbsz);
     printf("Max Retx     : %d\n", max_retx);
     if (is_tdl)
@@ -3089,7 +3091,7 @@ void run_pdsch_cl_4port_harq_simulation(const L1Config *cfg) {
             cx_t H_flat0[4][4];
             if (!is_tdl) {
                 mimo_channel_draw_4x4(H_flat0);
-                mimo_apply_tx_correlation_4x4(H_flat0, cfg->spatialCorrTx);
+                mimo_apply_tx_correlation_4x4(H_flat0, cfg->spatialCorrTx, cfg->spatialCorrXpol);
                 codebook_type1_sp_4port_ri_pmi_select(
                     H_flat0, N0,
                     &rank_fix, &i1_fix, &i13_fix, &i2_fix,
@@ -3106,7 +3108,7 @@ void run_pdsch_cl_4port_harq_simulation(const L1Config *cfg) {
                     for (int r = 0; r < 4; r++)
                         for (int t = 0; t < 4; t++)
                             H_cache[d][r][t] = tdl_freq_response(&tdl_ch, taps[r][t], k);
-                    mimo_apply_tx_correlation_4x4(H_cache[d], cfg->spatialCorrTx);
+                    mimo_apply_tx_correlation_4x4(H_cache[d], cfg->spatialCorrTx, cfg->spatialCorrXpol);
                     for (int r = 0; r < 4; r++)
                         for (int t = 0; t < 4; t++)
                             H_avg[r][t] += H_cache[d][r][t];
@@ -3143,7 +3145,7 @@ void run_pdsch_cl_4port_harq_simulation(const L1Config *cfg) {
                 if (attempt > 0 || !attempt0_done) {
                     if (!is_tdl) {
                         mimo_channel_draw_4x4(H_flat0);
-                        mimo_apply_tx_correlation_4x4(H_flat0, cfg->spatialCorrTx);
+                        mimo_apply_tx_correlation_4x4(H_flat0, cfg->spatialCorrTx, cfg->spatialCorrXpol);
                     } else {
                         for (int r = 0; r < 4; r++)
                             for (int t = 0; t < 4; t++)
@@ -3153,7 +3155,7 @@ void run_pdsch_cl_4port_harq_simulation(const L1Config *cfg) {
                             for (int r = 0; r < 4; r++)
                                 for (int t = 0; t < 4; t++)
                                     H_cache[d][r][t] = tdl_freq_response(&tdl_ch, taps[r][t], k);
-                            mimo_apply_tx_correlation_4x4(H_cache[d], cfg->spatialCorrTx);
+                            mimo_apply_tx_correlation_4x4(H_cache[d], cfg->spatialCorrTx, cfg->spatialCorrXpol);
                         }
                     }
                 }
