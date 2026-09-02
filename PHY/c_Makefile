@@ -1,5 +1,5 @@
 CC      = gcc
-CFLAGS  = -std=c99 -O2 -Wall -Wextra -Wno-unused-parameter
+CFLAGS  = -std=c99 -O2 -Wall -Wextra -Wno-unused-parameter -MMD -MP
 INCLUDE = -Iinclude
 SRCDIR  = src
 OBJDIR  = build
@@ -32,3 +32,5 @@ lls_sim_c: $(COMMON_OBJS) $(OBJDIR)/main.o
 
 clean:
 	rm -rf $(OBJDIR) lls_sim_c
+
+-include $(COMMON_OBJS:.o=.d) $(OBJDIR)/main.d
