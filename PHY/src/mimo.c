@@ -6,6 +6,7 @@
  * ================================================================ */
 #include "mimo.h"
 #include <math.h>
+#include <stdlib.h>
 
 void mimo_channel_init(MIMOChannel *ch, double snr_db) { ch->snr_db = snr_db; }
 
@@ -156,6 +157,27 @@ void mimo_channel_draw_4x4(cx_t h[4][4]) {
             h[r][t] = CX_MAKE(randn() * inv_sq2, randn() * inv_sq2);
 }
 
+void mimo_channel_draw_4x8(cx_t h[4][8]) {
+    double inv_sq2 = 1.0 / sqrt(2.0);
+    for (int r = 0; r < 4; r++)
+        for (int t = 0; t < 8; t++)
+            h[r][t] = CX_MAKE(randn() * inv_sq2, randn() * inv_sq2);
+}
+
+void mimo_channel_draw_4x16(cx_t h[4][16]) {
+    double inv_sq2 = 1.0 / sqrt(2.0);
+    for (int r = 0; r < 4; r++)
+        for (int t = 0; t < 16; t++)
+            h[r][t] = CX_MAKE(randn() * inv_sq2, randn() * inv_sq2);
+}
+
+void mimo_channel_draw_4x32(cx_t h[4][32]) {
+    double inv_sq2 = 1.0 / sqrt(2.0);
+    for (int r = 0; r < 4; r++)
+        for (int t = 0; t < 32; t++)
+            h[r][t] = CX_MAKE(randn() * inv_sq2, randn() * inv_sq2);
+}
+
 void mimo_apply_tx_correlation_4x4(cx_t h[4][4], double rho, double rho_xpol) {
     /* R_ant factor: mixes the two co-located antennas within each
        polarization (ports 0-1, ports 2-3). */
@@ -184,6 +206,128 @@ void mimo_apply_tx_correlation_4x4(cx_t h[4][4], double rho, double rho_xpol) {
             h[r][2] = b * h0 + a * h2;
             h[r][1] = a * h1 + b * h3;
             h[r][3] = b * h1 + a * h3;
+        }
+    }
+}
+
+/* Cholesky factor L (lower-triangular) of the N1x4 exponential correlation
+ * matrix R[i][j] = rho^|i-j|, i.e. R = L L^T. rho must already be in (0,1). */
+static void chol_exp_corr4(double rho, double L[4][4]) {
+    double R[4][4];
+    for (int i = 0; i < 4; i++)
+        for (int j = 0; j < 4; j++)
+            R[i][j] = pow(rho, abs(i - j));
+
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j <= i; j++) {
+            double sum = R[i][j];
+            for (int k = 0; k < j; k++) sum -= L[i][k] * L[j][k];
+            L[i][j] = (i == j) ? sqrt(sum) : sum / L[j][j];
+        }
+        for (int j = i + 1; j < 4; j++) L[i][j] = 0.0;
+    }
+}
+
+void mimo_apply_tx_correlation_4x8(cx_t h[4][8], double rho, double rho_xpol) {
+    const int N1 = 4;
+
+    /* R_ant factor: mixes the 4 co-located antennas within each
+       polarization (ports 0-3, ports 4-7) via Cholesky factor of the
+       exponential correlation matrix rho^|i-j|. */
+    if (rho > 0.0) {
+        if (rho >= 1.0) rho = 1.0 - 1e-9;
+        double L[4][4];
+        chol_exp_corr4(rho, L);
+        for (int r = 0; r < 4; r++) {
+            for (int g = 0; g < 2; g++) {
+                cx_t old[4];
+                for (int i = 0; i < N1; i++) old[i] = h[r][g * N1 + i];
+                for (int i = 0; i < N1; i++) {
+                    cx_t s = CX_ZERO;
+                    for (int j = 0; j <= i; j++) s += L[i][j] * old[j];
+                    h[r][g * N1 + i] = s;
+                }
+            }
+        }
+    }
+
+    /* R_pol factor: mixes the two polarizations at the same antenna
+       position (ports {0,4},{1,5},{2,6},{3,7}) -- finite-XPD leakage,
+       same closed-form 2x2 block as the N1=2 case, repeated per n1. */
+    if (rho_xpol > 0.0) {
+        if (rho_xpol >= 1.0) rho_xpol = 1.0 - 1e-9;
+        double a = 0.5 * (sqrt(1.0 + rho_xpol) + sqrt(1.0 - rho_xpol));
+        double b = 0.5 * (sqrt(1.0 + rho_xpol) - sqrt(1.0 - rho_xpol));
+        for (int r = 0; r < 4; r++) {
+            for (int n1 = 0; n1 < N1; n1++) {
+                cx_t h0 = h[r][n1], h1 = h[r][N1 + n1];
+                h[r][n1]      = a * h0 + b * h1;
+                h[r][N1 + n1] = b * h0 + a * h1;
+            }
+        }
+    }
+}
+
+void mimo_apply_tx_correlation_4x32(cx_t h[4][32], double rho_h, double rho_v, double rho_xpol) {
+    const int N1 = 4, N2 = 4, HALF = 16;   /* HALF = N1*N2, ports per polarization */
+
+    /* R_horiz factor: mixes the 4 horizontal (n1) positions for each fixed
+       vertical (n2) position, within each polarization group. Port index
+       within a group = n1*N2+n2 (codebook_32port.c convention). */
+    if (rho_h > 0.0) {
+        if (rho_h >= 1.0) rho_h = 1.0 - 1e-9;
+        double L[4][4];
+        chol_exp_corr4(rho_h, L);
+        for (int r = 0; r < 4; r++) {
+            for (int g = 0; g < 2; g++) {
+                for (int n2 = 0; n2 < N2; n2++) {
+                    cx_t old[4];
+                    for (int n1 = 0; n1 < N1; n1++) old[n1] = h[r][g * HALF + n1 * N2 + n2];
+                    for (int n1 = 0; n1 < N1; n1++) {
+                        cx_t s = CX_ZERO;
+                        for (int j = 0; j <= n1; j++) s += L[n1][j] * old[j];
+                        h[r][g * HALF + n1 * N2 + n2] = s;
+                    }
+                }
+            }
+        }
+    }
+
+    /* R_vert factor: mixes the 4 vertical (n2) positions for each fixed
+       horizontal (n1) position, within each polarization group. Commutes
+       with R_horiz above (independent tensor axis), so order doesn't matter. */
+    if (rho_v > 0.0) {
+        if (rho_v >= 1.0) rho_v = 1.0 - 1e-9;
+        double L[4][4];
+        chol_exp_corr4(rho_v, L);
+        for (int r = 0; r < 4; r++) {
+            for (int g = 0; g < 2; g++) {
+                for (int n1 = 0; n1 < N1; n1++) {
+                    cx_t old[4];
+                    for (int n2 = 0; n2 < N2; n2++) old[n2] = h[r][g * HALF + n1 * N2 + n2];
+                    for (int n2 = 0; n2 < N2; n2++) {
+                        cx_t s = CX_ZERO;
+                        for (int j = 0; j <= n2; j++) s += L[n2][j] * old[j];
+                        h[r][g * HALF + n1 * N2 + n2] = s;
+                    }
+                }
+            }
+        }
+    }
+
+    /* R_pol factor: mixes the two polarizations at the same (n1,n2)
+       position -- finite-XPD leakage, same closed-form 2x2 block, applied
+       once per antenna position (16 repetitions). */
+    if (rho_xpol > 0.0) {
+        if (rho_xpol >= 1.0) rho_xpol = 1.0 - 1e-9;
+        double a = 0.5 * (sqrt(1.0 + rho_xpol) + sqrt(1.0 - rho_xpol));
+        double b = 0.5 * (sqrt(1.0 + rho_xpol) - sqrt(1.0 - rho_xpol));
+        for (int r = 0; r < 4; r++) {
+            for (int k = 0; k < HALF; k++) {
+                cx_t h0 = h[r][k], h1 = h[r][HALF + k];
+                h[r][k]        = a * h0 + b * h1;
+                h[r][HALF + k] = b * h0 + a * h1;
+            }
         }
     }
 }
@@ -297,6 +441,75 @@ void mimo_mmse_detect_4rx2(const cx_t h_eff[4][2], const cx_t y[4], double N0,
     x_hat[1]     = xb1 / a1;
     noise_var[0] = (1.0 - a0) / a0;
     noise_var[1] = (1.0 - a1) / a1;
+}
+
+/* Shared 3x3 complex inverse via Gauss-Jordan with partial pivoting
+ * (same structure as inv4x4, just N=3 — used only by mimo_mmse_detect_4rx3). */
+static int inv3x3(const cx_t M[3][3], cx_t inv[3][3]) {
+    cx_t aug[3][6];
+    for (int r = 0; r < 3; r++) {
+        for (int c = 0; c < 3; c++) aug[r][c] = M[r][c];
+        for (int c = 0; c < 3; c++) aug[r][c + 3] = (r == c) ? 1.0 : 0.0;
+    }
+    for (int col = 0; col < 3; col++) {
+        int    pivot_row = col;
+        double max_abs   = cabs(aug[col][col]);
+        for (int r = col + 1; r < 3; r++) {
+            double v = cabs(aug[r][col]);
+            if (v > max_abs) { max_abs = v; pivot_row = r; }
+        }
+        if (max_abs < 1e-14) return -1;
+        if (pivot_row != col)
+            for (int c = 0; c < 6; c++) {
+                cx_t tmp = aug[col][c]; aug[col][c] = aug[pivot_row][c]; aug[pivot_row][c] = tmp;
+            }
+        cx_t piv_inv = 1.0 / aug[col][col];
+        for (int c = 0; c < 6; c++) aug[col][c] *= piv_inv;
+        for (int r = 0; r < 3; r++) {
+            if (r == col) continue;
+            cx_t factor = aug[r][col];
+            for (int c = 0; c < 6; c++) aug[r][c] -= factor * aug[col][c];
+        }
+    }
+    for (int r = 0; r < 3; r++)
+        for (int c = 0; c < 3; c++)
+            inv[r][c] = aug[r][c + 3];
+    return 0;
+}
+
+/* ── 4Rx × 3Layer MMSE 검출 (Rank-3 프리코더 후 H_eff = H·W, 4×3) ────────
+ * mimo_mmse_detect_4rx2()를 3×3 Gramian(inv3x3)으로 그대로 일반화.
+ * 같은 α_l = 1 - N0·Re{(A⁻¹)_ll} 편향 계수, 같은 noise_var 공식.
+ * ─────────────────────────────────────────────────────────────────────────── */
+void mimo_mmse_detect_4rx3(const cx_t h_eff[4][3], const cx_t y[4], double N0,
+                            cx_t x_hat[3], double noise_var[3]) {
+    cx_t A[3][3];
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++) {
+            A[i][j] = (i == j) ? (cx_t)N0 : 0.0;
+            for (int r = 0; r < 4; r++) A[i][j] += conj(h_eff[r][i]) * h_eff[r][j];
+        }
+    }
+    cx_t Ainv[3][3];
+    if (inv3x3(A, Ainv) < 0) {
+        for (int t = 0; t < 3; t++) { x_hat[t] = CX_ZERO; noise_var[t] = N0; }
+        return;
+    }
+
+    cx_t b[3] = {0, 0, 0};
+    for (int i = 0; i < 3; i++)
+        for (int r = 0; r < 4; r++) b[i] += conj(h_eff[r][i]) * y[r];
+
+    cx_t x_biased[3] = {0, 0, 0};
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++) x_biased[i] += Ainv[i][j] * b[j];
+
+    for (int t = 0; t < 3; t++) {
+        double alpha = 1.0 - N0 * creal(Ainv[t][t]);
+        if (alpha < 1e-6) alpha = 1e-6;
+        x_hat[t]     = x_biased[t] / alpha;
+        noise_var[t] = (1.0 - alpha) / alpha;
+    }
 }
 
 void mimo_mmse_detect_4x4(cx_t h[4][4], const cx_t y[4], double N0,

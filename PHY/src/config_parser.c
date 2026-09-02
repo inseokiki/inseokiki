@@ -90,6 +90,14 @@ void config_parser_init(ConfigParser *p) {
     strncpy(c->equalizer,      "ZF",     CFG_STR_MAX-1);
     strncpy(c->mimoMode,       "SISO",   CFG_STR_MAX-1);
     strncpy(c->harqRvSeq,      "IR",     CFG_STR_MAX-1);
+    strncpy(c->eigen16ChanEst, "MMSE",   CFG_STR_MAX-1);
+    strncpy(c->eigen16PrecoderGran, "WIDEBAND", CFG_STR_MAX-1);
+    strncpy(c->chanEstMethod, "NONE", CFG_STR_MAX-1);
+    c->ollaEnable     = 0;
+    c->ollaBlerTarget = 0.1;
+    c->ollaStepDownDb = 0.5;
+    c->ollaSnrGapDb   = 3.0;
+    c->beamMgmtNumRep = 4;
     c->harqEnable = 0; c->harqMaxRetx = 4;
     c->tdlDelaySpreadNs = 300.0;
     c->transformPrecoding = 1;
@@ -106,6 +114,7 @@ void config_parser_init(ConfigParser *p) {
     c->ulpcPlDb         = 100.0;
     c->ulpcNumSf        = 100;
     c->spatialCorrTx    = 0.0;
+    c->spatialCorrTxVert = 0.0;
     strncpy(c->iqDumpFile,     "iq_dump.txt", CFG_STR_MAX-1);
     /* modulation and codeRate are set by calc_derived() via MCS table */
 }
@@ -216,6 +225,8 @@ static void validate_config(const L1Config *c) {
     /* 공간 상관 */
     if (c->spatialCorrTx < 0.0 || c->spatialCorrTx >= 1.0)
         CFG_ERR("SPATIAL_CORR_TX=%.4g out of range [0, 1)", c->spatialCorrTx);
+    if (c->spatialCorrTxVert < 0.0 || c->spatialCorrTxVert >= 1.0)
+        CFG_ERR("SPATIAL_CORR_TX_VERT=%.4g out of range [0, 1)", c->spatialCorrTxVert);
     if (c->spatialCorrXpol < 0.0 || c->spatialCorrXpol >= 1.0)
         CFG_ERR("SPATIAL_CORR_XPOL=%.4g out of range [0, 1)", c->spatialCorrXpol);
 
@@ -231,7 +242,91 @@ static void validate_config(const L1Config *c) {
             CFG_ERR("HARQ_MAX_RETX=%d must be >= 1 when HARQ_ENABLE=1", c->harqMaxRetx);
         if (strcmp(c->harqRvSeq,"IR")!=0 && strcmp(c->harqRvSeq,"CHASE")!=0)
             CFG_ERR("HARQ_RV_SEQUENCE='%s' is invalid; must be IR or CHASE", c->harqRvSeq);
+
+        /* PDSCH MIMO_MODE x HARQ_ENABLE=1 조합 중 main.c dispatch에 전용
+         * 함수가 없는 조합은 예전엔 조용히 run_pdsch_harq_simulation()
+         * (순수 SISO, MIMO_MODE 완전 무시)로 떨어져 "MIMO Mode: MU_MIMO" 등
+         * 헤더를 찍으면서 실제로는 SISO 결과를 내는 오배선이 있었음
+         * (2026-09-01 완성도 점검 중 발견) — main.c의 실제 dispatch
+         * 조건을 그대로 미러링해 여기서 명시적으로 막는다. main.c에 새
+         * MIMO_MODE x HARQ 조합을 추가하면 이 목록도 함께 갱신할 것. */
+        if (strcmp(c->physicalChannel,"PDSCH")==0 && !c->ollaEnable && c->useDmrs) {
+            int mm_harq_supported =
+                strcmp(c->mimoMode,"SISO")==0 ||
+                strcmp(c->mimoMode,"SM_4X4")==0 ||
+                strcmp(c->mimoMode,"CL_4PORT")==0 ||
+                strcmp(c->mimoMode,"CL_8PORT")==0 ||
+                strcmp(c->mimoMode,"CL_32PORT")==0 ||
+                strcmp(c->mimoMode,"MU_MIMO")==0 ||
+                strcmp(c->mimoMode,"BEAM_MGMT")==0 ||
+                (strcmp(c->mimoMode,"SM_2X2")==0   && strcmp(c->channelModel,"TDL")==0) ||
+                (strcmp(c->mimoMode,"SIMO_MRC")==0 && strcmp(c->channelModel,"TDL")==0);
+            if (!mm_harq_supported)
+                CFG_ERR("MIMO_MODE='%s' + HARQ_ENABLE=1 + CHANNEL_MODEL='%s' has no "
+                         "dedicated simulation function — would silently fall back to "
+                         "SISO HARQ. Not yet implemented (see tasks/todo.md).",
+                         c->mimoMode, c->channelModel);
+        }
+
+        /* PUSCH MIMO x HARQ: SM_2X2+TDL(DL SM_2X2 HARQ와 동일하게 TDL 전용
+         * — flat+HARQ는 DL도 아직 없는 후속 과제)와 UL_EIGEN_BF/_2TX/_4TX
+         * (flat/TDL 둘 다, 함수 내부 is_tdl 분기)만 전용 함수가 있음
+         * (2026-09-01, _4TX는 2026-09-02). 그 외 조합은 같은 오배선
+         * 클래스를 재도입하지 않도록 미리 차단. */
+        int pusch_mm_harq_supported =
+            strcmp(c->mimoMode,"SISO")==0 ||
+            strcmp(c->mimoMode,"UL_EIGEN_BF")==0 ||
+            strcmp(c->mimoMode,"UL_EIGEN_BF_2TX")==0 ||
+            strcmp(c->mimoMode,"UL_EIGEN_BF_4TX")==0 ||
+            (strcmp(c->mimoMode,"SM_2X2")==0 && strcmp(c->channelModel,"TDL")==0);
+        if (strcmp(c->physicalChannel,"PUSCH")==0 && !pusch_mm_harq_supported)
+            CFG_ERR("PHYSICAL_CHANNEL=PUSCH + MIMO_MODE='%s' + HARQ_ENABLE=1 + "
+                     "CHANNEL_MODEL='%s' has no dedicated simulation function — would "
+                     "silently fall back to SISO HARQ. Not yet implemented (see "
+                     "tasks/todo.md).", c->mimoMode, c->channelModel);
     }
+
+    /* PUSCH UL SM_2X2: TS 38.211 §6.3.1.4 — Transform Precoding(DFT-s-OFDM)은
+     * 1개 레이어를 초과하는 전송에 사용할 수 없음(스펙 제약, 구현 선택이
+     * 아님) — CP-OFDM 강제. */
+    if (strcmp(c->physicalChannel,"PUSCH")==0 && strcmp(c->mimoMode,"SM_2X2")==0
+        && c->transformPrecoding)
+        CFG_ERR("MIMO_MODE=SM_2X2 (2 layers) + TRANSFORM_PRECODING=1 is invalid — "
+                 "TS 38.211 6.3.1.4 does not allow Transform Precoding with more "
+                 "than 1 layer. Set TRANSFORM_PRECODING=0 (CP-OFDM).");
+
+
+    if (strcmp(c->eigen16ChanEst,"NONE")!=0 && strcmp(c->eigen16ChanEst,"LS")!=0 &&
+        strcmp(c->eigen16ChanEst,"MMSE")!=0 && strcmp(c->eigen16ChanEst,"DFT")!=0)
+        CFG_ERR("EIGEN16_CHAN_EST='%s' is invalid; must be NONE, LS, MMSE, or DFT", c->eigen16ChanEst);
+    if (strcmp(c->eigen16PrecoderGran,"WIDEBAND")!=0 && strcmp(c->eigen16PrecoderGran,"SUBBAND")!=0)
+        CFG_ERR("EIGEN16_PRECODER_GRAN='%s' is invalid; must be WIDEBAND or SUBBAND", c->eigen16PrecoderGran);
+    if (strcmp(c->chanEstMethod,"NONE")!=0 && strcmp(c->chanEstMethod,"LS")!=0 &&
+        strcmp(c->chanEstMethod,"MMSE")!=0 && strcmp(c->chanEstMethod,"DFT")!=0)
+        CFG_ERR("CHAN_EST_METHOD='%s' is invalid; must be NONE, LS, MMSE, or DFT", c->chanEstMethod);
+
+    if (c->ollaEnable) {
+        if (c->ollaBlerTarget <= 0.0 || c->ollaBlerTarget >= 1.0)
+            CFG_ERR("OLLA_BLER_TARGET=%.4g out of range (0, 1)", c->ollaBlerTarget);
+        if (c->ollaStepDownDb <= 0.0)
+            CFG_ERR("OLLA_STEP_DOWN_DB=%.4g must be > 0", c->ollaStepDownDb);
+
+        /* OLLA_ENABLE=1은 main.c에서 다른 모든 PDSCH dispatch보다 우선하며
+         * MIMO_MODE를 직접 스위치한다(SISO/SIMO_MRC/SM_2X2, 2026-09-01
+         * SIMO_MRC/SM_2X2 추가) — 그 외 MIMO_MODE 값은 여전히 전용 함수가
+         * 없어 SISO로 조용히 떨어지는 같은 오배선 클래스를 재도입할 수
+         * 있으므로 명시적으로 차단(HARQ 화이트리스트와 동일 원칙). */
+        int olla_mm_supported =
+            strcmp(c->mimoMode,"SISO")==0 ||
+            strcmp(c->mimoMode,"SIMO_MRC")==0 ||
+            strcmp(c->mimoMode,"SM_2X2")==0;
+        if (!olla_mm_supported)
+            CFG_ERR("OLLA_ENABLE=1 + MIMO_MODE='%s' has no dedicated simulation "
+                     "function — would silently fall back to SISO OLLA. Not yet "
+                     "implemented (see tasks/todo.md).", c->mimoMode);
+    }
+    if (strcmp(c->mimoMode,"BEAM_MGMT")==0 && c->beamMgmtNumRep < 1)
+        CFG_ERR("BEAM_MGMT_NUM_REP=%d must be >= 1", c->beamMgmtNumRep);
 
     /* 리소스 그리드 기본 정합성 */
     if (c->numRB > 0 && c->nfft > 0 && c->numRB * 12 > c->nfft)
@@ -312,7 +407,16 @@ int config_parser_load(ConfigParser *p, const char *filename) {
     c->ulpcPlVarStdDb   = kv_dbl(p, "UL_PC_PL_VAR_STD_DB",    0.0);
     c->ulpcPlVarCorr    = kv_dbl(p, "UL_PC_PL_VAR_CORR",      0.9);
     c->spatialCorrTx    = kv_dbl(p, "SPATIAL_CORR_TX",        0.0);
+    c->spatialCorrTxVert= kv_dbl(p, "SPATIAL_CORR_TX_VERT",   0.0);
     c->spatialCorrXpol  = kv_dbl(p, "SPATIAL_CORR_XPOL",      0.0);
+    kv_str(p, "EIGEN16_CHAN_EST", "MMSE",   c->eigen16ChanEst, CFG_STR_MAX);
+    kv_str(p, "EIGEN16_PRECODER_GRAN", "WIDEBAND", c->eigen16PrecoderGran, CFG_STR_MAX);
+    kv_str(p, "CHAN_EST_METHOD", "NONE", c->chanEstMethod, CFG_STR_MAX);
+    c->ollaEnable     = kv_int(p, "OLLA_ENABLE", 0);
+    c->ollaBlerTarget = kv_dbl(p, "OLLA_BLER_TARGET", 0.1);
+    c->ollaStepDownDb = kv_dbl(p, "OLLA_STEP_DOWN_DB", 0.5);
+    c->ollaSnrGapDb   = kv_dbl(p, "OLLA_SNR_GAP_DB", 3.0);
+    c->beamMgmtNumRep = kv_int(p, "BEAM_MGMT_NUM_REP", 4);
     kv_str(p, "MODULATION",      "QPSK",   c->modulation,     CFG_STR_MAX);
     kv_str(p, "CODING",          "LDPC",   c->coding,         CFG_STR_MAX);
     kv_str(p, "CHANNEL_MODEL",   "AWGN",   c->channelModel,   CFG_STR_MAX);
@@ -379,9 +483,23 @@ void config_parser_print(const ConfigParser *p) {
             else               printf("TB Size      : auto\n");
             if (strcmp(c->mimoMode, "SISO") != 0)
                 printf("MIMO Mode    : %s\n", c->mimoMode);
-            if (strcmp(c->mimoMode, "CL_4PORT") == 0 && c->spatialCorrTx > 0.0)
+            if ((strcmp(c->mimoMode, "CL_4PORT") == 0 || strcmp(c->mimoMode, "CL_8PORT") == 0)
+                && c->spatialCorrTx > 0.0)
                 printf("Spatial Corr : Tx rho=%.2f (Kronecker, XPOL 2x2 blocks)\n",
                        c->spatialCorrTx);
+            if (strcmp(c->mimoMode, "CL_32PORT") == 0
+                && (c->spatialCorrTx > 0.0 || c->spatialCorrTxVert > 0.0))
+                printf("Spatial Corr : Tx rho_h=%.2f rho_v=%.2f (Kronecker 2D, XPOL 2x2 blocks)\n",
+                       c->spatialCorrTx, c->spatialCorrTxVert);
+            if ((strcmp(c->mimoMode, "CL_4PORT") == 0 || strcmp(c->mimoMode, "CL_8PORT") == 0 ||
+                 strcmp(c->mimoMode, "CL_32PORT") == 0) && strcmp(c->channelModel, "TDL") == 0)
+                printf("Chan Est     : %s\n", c->chanEstMethod);
+            if (strcmp(c->mimoMode, "EIGEN_16PORT") == 0 && strcmp(c->channelModel, "TDL") == 0) {
+                printf("Chan Est     : %s\n", c->eigen16ChanEst);
+                printf("Precoder Gran: %s\n", c->eigen16PrecoderGran);
+            }
+            if (strcmp(c->mimoMode, "BEAM_MGMT") == 0)
+                printf("P1 Num Rep   : %d (SSB/CSI-RS 빔당 RSRP 반복 관측 횟수)\n", c->beamMgmtNumRep);
             if (c->harqEnable) {
                 printf("HARQ         : enabled (%s, max %d tx)\n",
                        c->harqRvSeq, c->harqMaxRetx);

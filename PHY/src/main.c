@@ -185,19 +185,40 @@ int main(int argc, char *argv[]) {
         else                                     run_pdcch_fading_simulation(&cfg);
     }
     else if (strcmp(cfg.physicalChannel,"PDSCH" )==0) {
-        if (!cfg.useDmrs) {
+        if (cfg.ollaEnable) {
+            if (strcmp(cfg.mimoMode,"SIMO_MRC")==0)
+                run_pdsch_olla_simo_mrc_simulation(&cfg);
+            else if (strcmp(cfg.mimoMode,"SM_2X2")==0)
+                run_pdsch_olla_sm2x2_simulation(&cfg);
+            else
+                run_pdsch_olla_simulation(&cfg);   /* SISO 시계열 — MIMO_MODE 무관하게 지원 안 되는 값은 config_parser.c가 차단 */
+        } else if (!cfg.useDmrs) {
             run_pdsch_simulation(&cfg);
         } else if (cfg.harqEnable) {
             if (strcmp(cfg.mimoMode,"SM_4X4")==0)
                 run_pdsch_sm4x4_harq_simulation(&cfg);
             else if (strcmp(cfg.mimoMode,"CL_4PORT")==0)
                 run_pdsch_cl_4port_harq_simulation(&cfg);
+            else if (strcmp(cfg.mimoMode,"CL_8PORT")==0)
+                run_pdsch_cl_8port_harq_simulation(&cfg);
+            else if (strcmp(cfg.mimoMode,"CL_32PORT")==0)
+                run_pdsch_cl_32port_harq_simulation(&cfg);
+            else if (strcmp(cfg.mimoMode,"MU_MIMO")==0)
+                run_pdsch_mumimo_harq_simulation(&cfg);   /* flat/TDL 모두 지원 (함수 내부에서 분기) */
+            else if (strcmp(cfg.mimoMode,"BEAM_MGMT")==0)
+                run_pdsch_beam_mgmt_harq_simulation(&cfg);   /* flat/TDL 모두 지원 (함수 내부에서 분기) */
             else if (strcmp(cfg.mimoMode,"SM_2X2")==0 && strcmp(cfg.channelModel,"TDL")==0)
                 run_pdsch_sm2x2_tdl_harq_simulation(&cfg);
             else if (strcmp(cfg.mimoMode,"SIMO_MRC")==0 && strcmp(cfg.channelModel,"TDL")==0)
                 run_pdsch_simo_mrc_tdl_harq_simulation(&cfg);
             else
                 run_pdsch_harq_simulation(&cfg);
+        } else if (strcmp(cfg.mimoMode,"MU_MIMO")==0) {
+            if (strcmp(cfg.channelModel,"TDL")==0) run_pdsch_mumimo_tdl_simulation(&cfg);
+            else                                    run_pdsch_mumimo_simulation(&cfg);
+        } else if (strcmp(cfg.mimoMode,"BEAM_MGMT")==0) {
+            if (strcmp(cfg.channelModel,"TDL")==0) run_pdsch_beam_mgmt_tdl_simulation(&cfg);
+            else                                    run_pdsch_beam_mgmt_simulation(&cfg);   /* UE Rx 빔스위핑/P2·P3 미지원 */
         } else if (strcmp(cfg.mimoMode,"SIMO_MRC")==0) {
             if (strcmp(cfg.channelModel,"TDL")==0) run_pdsch_simo_mrc_tdl_simulation(&cfg);
             else                                    run_pdsch_simo_mrc_simulation(&cfg);
@@ -210,6 +231,21 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(cfg.mimoMode,"CL_4PORT")==0) {
             if (strcmp(cfg.channelModel,"TDL")==0) run_pdsch_cl_4port_tdl_simulation(&cfg);
             else                                    run_pdsch_cl_4port_simulation(&cfg);
+        } else if (strcmp(cfg.mimoMode,"CL_8PORT")==0) {
+            if (strcmp(cfg.channelModel,"TDL")==0) run_pdsch_cl_8port_tdl_simulation(&cfg);
+            else                                    run_pdsch_cl_8port_simulation(&cfg);
+        } else if (strcmp(cfg.mimoMode,"CL_32PORT")==0) {
+            if (strcmp(cfg.channelModel,"TDL")==0) run_pdsch_cl_32port_tdl_simulation(&cfg);
+            else                                    run_pdsch_cl_32port_simulation(&cfg);
+        } else if (strcmp(cfg.mimoMode,"EIGEN_16PORT")==0) {
+            if (strcmp(cfg.channelModel,"TDL")==0) {
+                if (strcmp(cfg.eigen16PrecoderGran,"SUBBAND")==0)
+                    run_pdsch_eigen_16port_subband_simulation(&cfg);
+                else
+                    run_pdsch_eigen_16port_tdl_simulation(&cfg);
+            } else {
+                run_pdsch_eigen_16port_simulation(&cfg);
+            }
         } else if (strcmp(cfg.channelModel,"TDL")==0) {
             run_pdsch_tdl_simulation(&cfg);
         } else {
@@ -220,7 +256,28 @@ int main(int argc, char *argv[]) {
     else if (strcmp(cfg.physicalChannel,"SRS"   )==0) run_srs_simulation(&cfg);
     else if (strcmp(cfg.physicalChannel,"PUSCH" )==0) {
         if (cfg.harqEnable) {
-            run_pusch_harq_simulation(&cfg);
+            if (strcmp(cfg.mimoMode,"SM_2X2")==0 && strcmp(cfg.channelModel,"TDL")==0)
+                run_pusch_sm2x2_tdl_harq_simulation(&cfg);
+            else if (strcmp(cfg.mimoMode,"UL_EIGEN_BF")==0)
+                run_pusch_ul_eigen_bf_harq_simulation(&cfg);   /* flat/TDL 모두 지원 (함수 내부에서 분기) */
+            else if (strcmp(cfg.mimoMode,"UL_EIGEN_BF_2TX")==0)
+                run_pusch_ul_eigen_bf_2tx_harq_simulation(&cfg);   /* flat/TDL 모두 지원 (함수 내부에서 분기) */
+            else if (strcmp(cfg.mimoMode,"UL_EIGEN_BF_4TX")==0)
+                run_pusch_ul_eigen_bf_4tx_harq_simulation(&cfg);   /* flat/TDL 모두 지원 (함수 내부에서 분기) */
+            else
+                run_pusch_harq_simulation(&cfg);   /* SISO 전용 — 그 외 MIMO_MODE 조합은 config_parser.c가 미리 차단 */
+        } else if (strcmp(cfg.mimoMode,"SM_2X2")==0) {
+            if (strcmp(cfg.channelModel,"TDL")==0) run_pusch_sm2x2_tdl_simulation(&cfg);
+            else                                    run_pusch_sm2x2_simulation(&cfg);
+        } else if (strcmp(cfg.mimoMode,"UL_EIGEN_BF")==0) {
+            if (strcmp(cfg.channelModel,"TDL")==0) run_pusch_ul_eigen_bf_tdl_simulation(&cfg);
+            else                                    run_pusch_ul_eigen_bf_simulation(&cfg);
+        } else if (strcmp(cfg.mimoMode,"UL_EIGEN_BF_2TX")==0) {
+            if (strcmp(cfg.channelModel,"TDL")==0) run_pusch_ul_eigen_bf_2tx_tdl_simulation(&cfg);
+            else                                    run_pusch_ul_eigen_bf_2tx_simulation(&cfg);
+        } else if (strcmp(cfg.mimoMode,"UL_EIGEN_BF_4TX")==0) {
+            if (strcmp(cfg.channelModel,"TDL")==0) run_pusch_ul_eigen_bf_4tx_tdl_simulation(&cfg);
+            else                                    run_pusch_ul_eigen_bf_4tx_simulation(&cfg);
         } else if (strcmp(cfg.channelModel,"TDL")==0) {
             if      (cfg.puschTurboEnable) run_pusch_tdl_turbo_simulation(&cfg);
             else if (cfg.puschDfeEnable)   run_pusch_tdl_dfe_simulation(&cfg);

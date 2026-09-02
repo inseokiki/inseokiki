@@ -113,6 +113,26 @@ expect_fail "bad HARQ_RV_SEQUENCE" \
     "PHYSICAL_CHANNEL = PDSCH" "USE_DMRS = 1" "MIMO_MODE = SISO" "CHANNEL_MODEL = AWGN" "CODING = LDPC" "EQUALIZER = MMSE" \
     "HARQ_ENABLE = 1" "HARQ_MAX_RETX = 3" "HARQ_RV_SEQUENCE = TURBO"
 
+expect_fail "SM_2X2 + HARQ + flat fading has no dedicated function (only TDL variant exists)" \
+    "MCS_INDEX = 5" "MCS_TABLE = TABLE1" "SNR_START = 10" "SNR_END = 10" "SNR_STEP = 1" "NUM_TRIALS = 20" \
+    "PHYSICAL_CHANNEL = PDSCH" "USE_DMRS = 1" "MIMO_MODE = SM_2X2" "CHANNEL_MODEL = FLAT_FADING" "CODING = LDPC" "EQUALIZER = MMSE" \
+    "HARQ_ENABLE = 1" "HARQ_MAX_RETX = 3" "HARQ_RV_SEQUENCE = IR"
+
+expect_fail "PUSCH SM_2X2 + Transform Precoding (TS 38.211 6.3.1.4 forbids >1 layer)" \
+    "MCS_INDEX = 5" "MCS_TABLE = TABLE1" "SNR_START = 10" "SNR_END = 10" "SNR_STEP = 1" "NUM_TRIALS = 20" \
+    "PHYSICAL_CHANNEL = PUSCH" "MIMO_MODE = SM_2X2" "CHANNEL_MODEL = FLAT_FADING" "CODING = LDPC" "EQUALIZER = MMSE" \
+    "TRANSFORM_PRECODING = 1"
+
+expect_fail "PUSCH SM_2X2 + HARQ + flat fading has no dedicated function (only TDL variant exists)" \
+    "MCS_INDEX = 5" "MCS_TABLE = TABLE1" "SNR_START = 10" "SNR_END = 10" "SNR_STEP = 1" "NUM_TRIALS = 20" \
+    "PHYSICAL_CHANNEL = PUSCH" "MIMO_MODE = SM_2X2" "CHANNEL_MODEL = FLAT_FADING" "CODING = LDPC" "EQUALIZER = MMSE" \
+    "TRANSFORM_PRECODING = 0" "HARQ_ENABLE = 1" "HARQ_MAX_RETX = 3" "HARQ_RV_SEQUENCE = IR"
+
+expect_fail "OLLA_ENABLE=1 + unsupported MIMO_MODE (SM_4X4) has no dedicated function" \
+    "MCS_INDEX = 5" "MCS_TABLE = TABLE1" "SNR_START = 10" "SNR_END = 10" "SNR_STEP = 1" "NUM_TRIALS = 20" \
+    "PHYSICAL_CHANNEL = PDSCH" "USE_DMRS = 1" "MIMO_MODE = SM_4X4" "CHANNEL_MODEL = AWGN" "CODING = LDPC" "EQUALIZER = MMSE" \
+    "OLLA_ENABLE = 1"
+
 # ──────────────────────────────────────────
 # GROUP 2: MCS table dispatch (P0-1 regression)
 # ──────────────────────────────────────────
@@ -152,6 +172,15 @@ expect_pass "PDSCH SIMO_MRC flat" "BER" \
 expect_pass "PDSCH SIMO_MRC TDL" "BER" \
     "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = SIMO_MRC" "${TDL[@]}"
 
+expect_pass "PDSCH OLLA SISO" "WindowBLER" \
+    "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = SISO" "OLLA_ENABLE = 1"
+
+expect_pass "PDSCH OLLA SIMO_MRC" "WindowBLER" \
+    "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = SIMO_MRC" "OLLA_ENABLE = 1"
+
+expect_pass "PDSCH OLLA SM_2X2" "WindowBLER" \
+    "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = SM_2X2" "OLLA_ENABLE = 1"
+
 expect_pass "PDSCH SM_2X2 flat" "BER" \
     "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = SM_2X2" "CHANNEL_MODEL = FLAT_FADING"
 
@@ -170,6 +199,18 @@ expect_pass "PDSCH CL_4PORT flat" "BER" \
 expect_pass "PDSCH CL_4PORT TDL" "BER" \
     "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = CL_4PORT" "${TDL[@]}"
 
+expect_pass "PDSCH MU_MIMO flat" "BER_U0" \
+    "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = MU_MIMO" "CHANNEL_MODEL = FLAT_FADING"
+
+expect_pass "PDSCH MU_MIMO TDL" "BER_U0" \
+    "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = MU_MIMO" "${TDL[@]}"
+
+expect_pass "PDSCH BEAM_MGMT flat" "P1==Genie" \
+    "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = BEAM_MGMT" "CHANNEL_MODEL = FLAT_FADING"
+
+expect_pass "PDSCH BEAM_MGMT TDL" "P1==Genie" \
+    "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = BEAM_MGMT" "${TDL[@]}"
+
 expect_pass "PDSCH SISO HARQ flat" "BLER(HARQ)" \
     "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = SISO" "CHANNEL_MODEL = FLAT_FADING" "${HQ[@]}"
 
@@ -181,6 +222,18 @@ expect_pass "PDSCH SIMO_MRC HARQ TDL" "BLER(HARQ)" \
 
 expect_pass "PDSCH SM_4X4 HARQ flat" "BLER(HARQ)" \
     "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = SM_4X4" "CHANNEL_MODEL = FLAT_FADING" "${HQ[@]}"
+
+expect_pass "PDSCH MU_MIMO HARQ flat" "BLER(HARQ)" \
+    "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = MU_MIMO" "CHANNEL_MODEL = FLAT_FADING" "${HQ[@]}"
+
+expect_pass "PDSCH MU_MIMO HARQ TDL" "BLER(HARQ)" \
+    "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = MU_MIMO" "${TDL[@]}" "${HQ[@]}"
+
+expect_pass "PDSCH BEAM_MGMT HARQ flat" "BLER(HARQ)" \
+    "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = BEAM_MGMT" "CHANNEL_MODEL = FLAT_FADING" "${HQ[@]}"
+
+expect_pass "PDSCH BEAM_MGMT HARQ TDL" "BLER(HARQ)" \
+    "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = BEAM_MGMT" "${TDL[@]}" "${HQ[@]}"
 
 expect_pass "PDSCH CL_4PORT HARQ TDL" "BLER(HARQ)" \
     "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = CL_4PORT" "${TDL[@]}" "${HQ[@]}"
@@ -205,6 +258,51 @@ expect_pass "PUSCH HARQ AWGN" "BLER(HARQ)" \
 
 expect_pass "PUSCH HARQ TDL" "BLER(HARQ)" \
     "${BASE[@]}" "${PUSCH_COMMON[@]}" "${TDL[@]}" "TRANSFORM_PRECODING = 0" "${HQ[@]}"
+
+expect_pass "PUSCH SM_2X2 flat" "BER" \
+    "${BASE[@]}" "${PUSCH_COMMON[@]}" "CHANNEL_MODEL = FLAT_FADING" "TRANSFORM_PRECODING = 0" "MIMO_MODE = SM_2X2"
+
+expect_pass "PUSCH SM_2X2 TDL" "BER" \
+    "${BASE[@]}" "${PUSCH_COMMON[@]}" "${TDL[@]}" "TRANSFORM_PRECODING = 0" "MIMO_MODE = SM_2X2"
+
+expect_pass "PUSCH SM_2X2 HARQ TDL" "BLER(HARQ)" \
+    "${BASE[@]}" "${PUSCH_COMMON[@]}" "${TDL[@]}" "TRANSFORM_PRECODING = 0" "MIMO_MODE = SM_2X2" "${HQ[@]}"
+
+expect_pass "PUSCH UL_EIGEN_BF flat" "BER_Genie" \
+    "${BASE[@]}" "${PUSCH_COMMON[@]}" "CHANNEL_MODEL = FLAT_FADING" "TRANSFORM_PRECODING = 0" "MIMO_MODE = UL_EIGEN_BF"
+
+expect_pass "PUSCH UL_EIGEN_BF TDL" "BER_Genie" \
+    "${BASE[@]}" "${PUSCH_COMMON[@]}" "${TDL[@]}" "TRANSFORM_PRECODING = 0" "MIMO_MODE = UL_EIGEN_BF"
+
+expect_pass "PUSCH UL_EIGEN_BF HARQ flat" "BLER(HARQ)" \
+    "${BASE[@]}" "${PUSCH_COMMON[@]}" "CHANNEL_MODEL = FLAT_FADING" "TRANSFORM_PRECODING = 0" "MIMO_MODE = UL_EIGEN_BF" "${HQ[@]}"
+
+expect_pass "PUSCH UL_EIGEN_BF HARQ TDL" "BLER(HARQ)" \
+    "${BASE[@]}" "${PUSCH_COMMON[@]}" "${TDL[@]}" "TRANSFORM_PRECODING = 0" "MIMO_MODE = UL_EIGEN_BF" "${HQ[@]}"
+
+expect_pass "PUSCH UL_EIGEN_BF_2TX flat" "BER_Genie" \
+    "${BASE[@]}" "${PUSCH_COMMON[@]}" "CHANNEL_MODEL = FLAT_FADING" "TRANSFORM_PRECODING = 0" "MIMO_MODE = UL_EIGEN_BF_2TX"
+
+expect_pass "PUSCH UL_EIGEN_BF_2TX TDL" "BER_Genie" \
+    "${BASE[@]}" "${PUSCH_COMMON[@]}" "${TDL[@]}" "TRANSFORM_PRECODING = 0" "MIMO_MODE = UL_EIGEN_BF_2TX"
+
+expect_pass "PUSCH UL_EIGEN_BF_2TX HARQ flat" "BLER(HARQ)" \
+    "${BASE[@]}" "${PUSCH_COMMON[@]}" "CHANNEL_MODEL = FLAT_FADING" "TRANSFORM_PRECODING = 0" "MIMO_MODE = UL_EIGEN_BF_2TX" "${HQ[@]}"
+
+expect_pass "PUSCH UL_EIGEN_BF_2TX HARQ TDL" "BLER(HARQ)" \
+    "${BASE[@]}" "${PUSCH_COMMON[@]}" "${TDL[@]}" "TRANSFORM_PRECODING = 0" "MIMO_MODE = UL_EIGEN_BF_2TX" "${HQ[@]}"
+
+expect_pass "PUSCH UL_EIGEN_BF_4TX flat" "BER_Genie" \
+    "${BASE[@]}" "${PUSCH_COMMON[@]}" "CHANNEL_MODEL = FLAT_FADING" "TRANSFORM_PRECODING = 0" "MIMO_MODE = UL_EIGEN_BF_4TX"
+
+expect_pass "PUSCH UL_EIGEN_BF_4TX TDL" "BER_Genie" \
+    "${BASE[@]}" "${PUSCH_COMMON[@]}" "${TDL[@]}" "TRANSFORM_PRECODING = 0" "MIMO_MODE = UL_EIGEN_BF_4TX"
+
+expect_pass "PUSCH UL_EIGEN_BF_4TX HARQ flat" "BLER(HARQ)" \
+    "${BASE[@]}" "${PUSCH_COMMON[@]}" "CHANNEL_MODEL = FLAT_FADING" "TRANSFORM_PRECODING = 0" "MIMO_MODE = UL_EIGEN_BF_4TX" "${HQ[@]}"
+
+expect_pass "PUSCH UL_EIGEN_BF_4TX HARQ TDL" "BLER(HARQ)" \
+    "${BASE[@]}" "${PUSCH_COMMON[@]}" "${TDL[@]}" "TRANSFORM_PRECODING = 0" "MIMO_MODE = UL_EIGEN_BF_4TX" "${HQ[@]}"
 
 # ──────────────────────────────────────────
 # GROUP 5: control/reference channels

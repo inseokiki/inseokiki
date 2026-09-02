@@ -83,8 +83,22 @@ typedef struct {
     double ulpcPlVarStdDb;      /* 시변 PL(그림자페이딩/이동성) 정상상태 표준편차 [dB], 0=고정 PL */
     double ulpcPlVarCorr;       /* 시변 PL의 SF간 상관계수 (Gauss-Markov) [0,1) */
     /* ── 4x4 MIMO Tx 공간상관 (Kronecker, R_pol (x) R_ant) ── */
-    double spatialCorrTx;       /* 동일편파 내 안테나 간 상관계수 rho [0,1) (R_ant)     */
+    double spatialCorrTx;       /* 동일편파 내 안테나 간 상관계수 rho [0,1) (R_ant, 4/8포트는
+                                    1D 전체, 32포트는 수평(N1) 축) */
+    double spatialCorrTxVert;   /* CL_32PORT 전용: 수직(N2) 축 상관계수 rho_v [0,1) (R_vert) */
     double spatialCorrXpol;     /* 편파 간 상관계수 rho_xpol [0,1) — 유한 XPD 누설 (R_pol) */
+    /* ── EIGEN_16PORT 채널추정 방식 (imperfect CSI 연구용) ── */
+    char   eigen16ChanEst[CFG_STR_MAX];  /* NONE(genie)/LS/MMSE/DFT */
+    char   eigen16PrecoderGran[CFG_STR_MAX]; /* WIDEBAND/SUBBAND 프리코더 방향 그래뉼래러티 */
+    /* ── CL_4/8/32PORT 코드북 RI+PMI 설계용 채널추정 방식 (imperfect CSI) ── */
+    char   chanEstMethod[CFG_STR_MAX];   /* NONE(genie)/LS/MMSE/DFT — TDL 변형에만 적용 */
+    /* ── OLLA (Outer Loop Link Adaptation) ── */
+    int    ollaEnable;
+    double ollaBlerTarget;   /* 목표 BLER (0,1), 기본 0.1 */
+    double ollaStepDownDb;   /* NACK 시 오프셋 감소량 [dB], 기본 0.5 */
+    double ollaSnrGapDb;     /* Shannon 대비 구현 마진 [dB], 기본 3.0 */
+    /* ── 빔 관리(Beam Management) P1 절차 ── */
+    int    beamMgmtNumRep;  /* SSB/CSI-RS 빔당 RSRP 반복 관측 횟수, 기본 4 */
 } L1Config;
 
 typedef struct {
