@@ -190,6 +190,8 @@ int main(int argc, char *argv[]) {
                 run_pdsch_olla_simo_mrc_simulation(&cfg);
             else if (strcmp(cfg.mimoMode,"SM_2X2")==0)
                 run_pdsch_olla_sm2x2_simulation(&cfg);
+            else if (strcmp(cfg.mimoMode,"SM_4X4")==0)
+                run_pdsch_olla_sm4x4_simulation(&cfg);
             else
                 run_pdsch_olla_simulation(&cfg);   /* SISO 시계열 — MIMO_MODE 무관하게 지원 안 되는 값은 config_parser.c가 차단 */
         } else if (!cfg.useDmrs) {
@@ -217,8 +219,9 @@ int main(int argc, char *argv[]) {
             if (strcmp(cfg.channelModel,"TDL")==0) run_pdsch_mumimo_tdl_simulation(&cfg);
             else                                    run_pdsch_mumimo_simulation(&cfg);
         } else if (strcmp(cfg.mimoMode,"BEAM_MGMT")==0) {
-            if (strcmp(cfg.channelModel,"TDL")==0) run_pdsch_beam_mgmt_tdl_simulation(&cfg);
-            else                                    run_pdsch_beam_mgmt_simulation(&cfg);   /* UE Rx 빔스위핑/P2·P3 미지원 */
+            if (cfg.beamMgmtRxSweep)               run_pdsch_beam_mgmt_p123_simulation(&cfg);   /* UE Rx 빔스위핑 P3 + gNB Tx 재정제 P2, AWGN 전용 */
+            else if (strcmp(cfg.channelModel,"TDL")==0) run_pdsch_beam_mgmt_tdl_simulation(&cfg);
+            else                                    run_pdsch_beam_mgmt_simulation(&cfg);
         } else if (strcmp(cfg.mimoMode,"SIMO_MRC")==0) {
             if (strcmp(cfg.channelModel,"TDL")==0) run_pdsch_simo_mrc_tdl_simulation(&cfg);
             else                                    run_pdsch_simo_mrc_simulation(&cfg);
@@ -258,6 +261,8 @@ int main(int argc, char *argv[]) {
         if (cfg.harqEnable) {
             if (strcmp(cfg.mimoMode,"SM_2X2")==0 && strcmp(cfg.channelModel,"TDL")==0)
                 run_pusch_sm2x2_tdl_harq_simulation(&cfg);
+            else if (strcmp(cfg.mimoMode,"SM_2X2")==0)
+                run_pusch_sm2x2_harq_simulation(&cfg);
             else if (strcmp(cfg.mimoMode,"UL_EIGEN_BF")==0)
                 run_pusch_ul_eigen_bf_harq_simulation(&cfg);   /* flat/TDL 모두 지원 (함수 내부에서 분기) */
             else if (strcmp(cfg.mimoMode,"UL_EIGEN_BF_2TX")==0)

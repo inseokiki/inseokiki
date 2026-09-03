@@ -1,6 +1,6 @@
 /* ================================================================
  *  crc.h
- *  CRC-24A / CRC-24C generation and checking
+ *  CRC-24A / CRC-24B / CRC-24C generation and checking
  *
  *  Author : Inseok Kang
  * ================================================================ */
@@ -12,7 +12,9 @@
 typedef enum {
     CRC24A = 0,   /* PDSCH TB: poly 0x864CFB */
     CRC24C = 1,   /* PBCH/PDCCH: poly 0xB2B117 */
-    CRC16  = 2    /* large TB:  poly 0x1021 */
+    CRC16  = 2,   /* large TB:  poly 0x1021 */
+    CRC24B = 3    /* code block (TS 38.212 5.2.2, C>1 only): poly 0x800063,
+                     confirmed via 3gpp-server MCP TS 38.212 v18.8.0 5.1 image9 */
 } CRCType;
 
 int  get_crc_length(CRCType type);

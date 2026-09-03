@@ -99,6 +99,8 @@ typedef struct {
     double ollaSnrGapDb;     /* Shannon 대비 구현 마진 [dB], 기본 3.0 */
     /* ── 빔 관리(Beam Management) P1 절차 ── */
     int    beamMgmtNumRep;  /* SSB/CSI-RS 빔당 RSRP 반복 관측 횟수, 기본 4 */
+    int    beamMgmtRxSweep; /* 1이면 P1->P3(UE Rx 빔 정제)->P2(gNB Tx 빔
+                                재정제) 절차 사용, 기본 0(P1만, 기존 동작) */
 } L1Config;
 
 typedef struct {

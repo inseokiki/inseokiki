@@ -32,10 +32,8 @@ static int zc_to_ils(int Zc) {
     return -1;   /* unreachable given nr_select_bg_zc()'s contract */
 }
 
-void nr_select_bg_zc(int block_size, double code_rate,
-                      int *bg, int *Zc, int *Kb,
-                      int *base_rows, int *base_info_cols, int *base_cols,
-                      int *filler_size) {
+void nr_select_bg(int B, double code_rate, int *bg, int *Kcb, int *Kb,
+                   int *base_rows, int *base_info_cols, int *base_cols) {
     /* A = payload bits before the outer CRC. This project attaches a
      * fixed 24-bit CRC24A everywhere (crc_bits=24 hardcoded at every
      * call site), unlike the spec's conditional CRC16(A<=3824)/CRC24A
@@ -45,43 +43,71 @@ void nr_select_bg_zc(int block_size, double code_rate,
      * low-rate MCS entries -- the only way to reach BG2 -- always pair
      * with low modulation order, keeping A far below the boundary in
      * practice). */
-    double A = (double)block_size - 24.0;
+    double A = (double)B - 24.0;
     double R = code_rate;
 
     if (A <= 292.0 || (A <= 3824.0 && R <= 0.67) || R <= 0.25) {
         *bg = 2;
+        *Kcb = 3840;
         *base_rows = BG2_ROWS; *base_info_cols = BG2_INFO_COLS; *base_cols = BG2_COLS;
-        if (block_size > 640)      *Kb = 10;
-        else if (block_size > 560) *Kb = 9;
-        else if (block_size > 192) *Kb = 8;
-        else                       *Kb = 6;
+        /* TS 38.212 5.2.2: Kb depends on B (the pre-segmentation bit
+         * sequence length), not on the per-code-block K' -- same for
+         * every code block of one transport block. */
+        if (B > 640)      *Kb = 10;
+        else if (B > 560) *Kb = 9;
+        else if (B > 192) *Kb = 8;
+        else              *Kb = 6;
     } else {
         *bg = 1;
+        *Kcb = 8448;
         *base_rows = BG1_ROWS; *base_info_cols = BG1_INFO_COLS; *base_cols = BG1_COLS;
         *Kb = 22;
     }
+}
 
-    /* minimum Zc (over all 51 values across the 8 sets) with Kb*Zc >= block_size */
+void nr_select_zc(int Kb, int Kprime, int base_info_cols,
+                   int *Zc, int *K, int *filler_size) {
+    /* minimum Zc (over all 51 values across the 8 sets) with Kb*Zc >= Kprime */
     int best_zc = -1;
     for (int s = 0; s < ZC_NUM_SETS; s++) {
         for (int i = 0; i < ZC_SET_LEN[s]; i++) {
             int zc = ZC_SETS[s][i];
-            if ((long)(*Kb) * zc >= block_size) {
+            if ((long)Kb * zc >= Kprime) {
                 if (best_zc < 0 || zc < best_zc) best_zc = zc;
             }
         }
     }
     if (best_zc < 0) {
+        /* Kb*384 (the largest available Zc) still falls short of Kprime --
+         * unreachable once the caller has correctly bounded Kprime to
+         * <=Kcb-L via TS 38.212 5.2.2 segmentation (nr_seg_compute()),
+         * since Kb*384 >= Kcb by construction of the Kb table. Kept as a
+         * hard diagnostic rather than a silent clamp for any caller that
+         * bypasses nr_seg_compute() with an out-of-range Kprime. */
         fprintf(stderr,
-                "ldpc_nr: block_size=%d code_rate=%.4f selected BG%d (Kb=%d) but no "
-                "lifting size Zc<=384 satisfies Kb*Zc>=block_size -- this would require "
-                "TS 38.212 5.2.2 multi-code-block segmentation (BG%d Kcb=%d), which is "
-                "out of scope for this simulator (see tasks/todo.md P0-2c). Not supported.\n",
-                block_size, code_rate, *bg, *Kb, *bg, *bg == 1 ? 8448 : 3840);
+                "ldpc_nr: Kb=%d Kprime=%d -- no lifting size Zc<=384 satisfies "
+                "Kb*Zc>=Kprime. Not supported.\n", Kb, Kprime);
         exit(1);
     }
     *Zc = best_zc;
-    *filler_size = (*base_info_cols) * (*Zc) - block_size;
+    *K = base_info_cols * best_zc;
+    *filler_size = *K - Kprime;
+}
+
+void nr_select_bg_zc(int block_size, double code_rate,
+                      int *bg, int *Zc, int *Kb,
+                      int *base_rows, int *base_info_cols, int *base_cols,
+                      int *filler_size) {
+    /* Single-code-block convenience wrapper (C=1, L=0, so B'=K'=block_size)
+     * -- used by every existing caller in this project today. Splits into
+     * nr_select_bg()+nr_select_zc() internally so the TB-level BG/Kb
+     * selection logic has exactly one implementation, shared with
+     * nr_sch.c's multi-code-block path (see nr_sch.h). */
+    int Kcb;
+    nr_select_bg(block_size, code_rate, bg, &Kcb, Kb,
+                 base_rows, base_info_cols, base_cols);
+    int K;
+    nr_select_zc(*Kb, block_size, *base_info_cols, Zc, &K, filler_size);
 }
 
 void build_H_nr(LDPCCodec *ldpc) {

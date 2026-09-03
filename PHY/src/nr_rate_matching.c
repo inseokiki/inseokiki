@@ -29,6 +29,16 @@ int nr_ldpc_k0(int bg, int Zc, int Ncb, int rv) {
     return (int)((numer / denom) * Zc);
 }
 
+void nr_ldpc_er_alloc(int G, int Nl, int Qm, int C, int *E) {
+    int Gp   = G / (Nl * Qm);
+    int base = Gp / C;
+    int rem  = Gp % C;
+    for (int r = 0; r < C; r++) {
+        int units = (r <= C - rem - 1) ? base : base + 1;
+        E[r] = Nl * Qm * units;
+    }
+}
+
 static int is_filler(int idx, int filler_start, int filler_end) {
     return idx >= filler_start && idx < filler_end;
 }

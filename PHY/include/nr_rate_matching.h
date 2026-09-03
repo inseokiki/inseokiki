@@ -8,10 +8,13 @@
  *  untouched (Polar has no BG/Zc/filler concept). This module is used
  *  only by PDSCH/PUSCH LDPC paths (ldpc_nr.h).
  *
- *  Scope: single code block (C=1, matches ldpc_nr.h's scope -- no TS
- *  38.212 5.2.2 segmentation), and Ncb=N (mother codeword length, no
- *  limited-buffer-rate-matching/LBRM -- this project does not model
- *  the higher-layer parameters LBRM depends on).
+ *  Scope: Ncb=N (mother codeword length, no limited-buffer-rate-
+ *  matching/LBRM -- this project does not model the higher-layer
+ *  parameters LBRM depends on). nr_ldpc_er_alloc() (2026-09-03, P0-2c
+ *  follow-up) adds TS 38.212 5.4.2.1's per-code-block output length E_r
+ *  for the C>1 case (see nr_sch.h); this project does not model CBGTI
+ *  (code-block-group-based (re)transmission), so every code block is
+ *  always scheduled (C'=C, no E_r=0 case).
  *
  *  Author : Inseok Kang
  * ================================================================ */
@@ -27,6 +30,26 @@
  * (verified directly against TS 38.212 v18.8.0 5.4.2.1 Table 5.4.2.1-2
  * images, 2026-09-02). */
 int nr_ldpc_k0(int bg, int Zc, int Ncb, int rv);
+
+/* TS 38.212 5.4.2.1 per-code-block rate-matched output length E_r, for
+ * all C code blocks of one transport block (this project's C'=C, no
+ * CBGTI). G = total number of coded bits available for the TB
+ * (assumed, as throughout this project's existing single-CB E
+ * computation, to already be an exact multiple of Nl*Qm); Nl = number
+ * of transmission layers, Qm = modulation order. Writes E[C].
+ *
+ * TS 38.212 confirmed formula (3gpp-server MCP TS 38.212 v18.8.0
+ * 5.4.2.1 image336/337/338, 2026-09-03): with Gp=G/(Nl*Qm) and
+ * rem=Gp mod C, the first (C-rem) code blocks (r<=C-rem-1) get
+ * floor(Gp/C) units, the remaining rem code blocks get ceil(Gp/C)
+ * units, each unit scaled by Nl*Qm -- self-consistent by construction:
+ * (C-rem)*floor(Gp/C) + rem*ceil(Gp/C) == Gp. The source images for
+ * the floor (337) and ceil (338) branches render visually near-
+ * identically at this crop size (unlike the earlier confirmed absence
+ * of a bracket entirely for nr_sch.h's K'=B'/C, which was unambiguous);
+ * the floor/ceil assignment here is corroborated by this exact-sum
+ * self-consistency check, not the raw image alone. */
+void nr_ldpc_er_alloc(int G, int Nl, int Qm, int C, int *E);
 
 /* TS 38.212 5.4.2.1 bit-selection procedure: walks the length-Ncb
  * circular buffer starting at k0(rv), SKIPPING filler-bit positions

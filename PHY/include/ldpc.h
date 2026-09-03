@@ -58,6 +58,19 @@ typedef struct {
 } LDPCCodec;
 
 void ldpc_init(LDPCCodec *ldpc, int block_size, double code_rate);
+
+/* Initializes an LDPCCodec from already-resolved TS 38.212 5.2.2/6.2.2
+ * parameters, skipping ldpc_init()'s single-code-block nr_select_bg_zc()
+ * search. Used by nr_sch.c (P0-2c multi-code-block segmentation): BG/Kb/Zc
+ * are resolved once at the transport-block level (nr_select_bg() +
+ * nr_select_zc(), see ldpc_nr.h) and shared by every code block of that
+ * TB, so info_size here is Kprime (this code block's info bits, incl. its
+ * own CRC24B if segmented, excl. filler) rather than the TB size. */
+void ldpc_init_resolved(LDPCCodec *ldpc, int info_size, double code_rate,
+                         int bg, int Zc, int Kb,
+                         int base_rows, int base_info_cols, int base_cols,
+                         int filler_size);
+
 void ldpc_free(LDPCCodec *ldpc);
 
 /* encode: info_bits[info_size] -> coded[coded_size] */

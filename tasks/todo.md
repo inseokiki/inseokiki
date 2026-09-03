@@ -8,20 +8,32 @@
 
 ## 진행 중
 
-- [ ] `docs/analysis/phy_development_direction_validation.md` 후속 단계
-  — P0-2(BP decoder edge-message 교정), P0-1(NR BG1/BG2 QC-LDPC 이식),
-  P0-3(표준 BG/`Zc` 기반 rate matching) 전부 2026-09-02 완료. 다음
-  후보는 P0-2c(다중 코드블록 세그멘테이션, `Kb·Zc<block_size`일 때
-  현재 `exit(1)`로 막혀 있음) — 문서 Section 6 Phase 2 참조, 착수 전
-  사용자 확인 필요.
-- [ ] OLLA를 SM_4X4/CL_XPORT로 추가 확장 — SISO/SIMO_MRC/SM_2X2는
-  완료(2026-09-01). SM_4X4(4레이어)/CL_XPORT(RI+PMI 적응)는 "레이어가
-  몇 개든 같은 MCS 공유 + 결합 ACK" 패턴을 그대로 확장할 수 있지만,
-  CL_XPORT는 매 트라이얼 RI/PMI 재선택과 OLLA 오프셋을 어떻게 결합할지
-  (RI 선택 임계값에도 반영할지, MCS만 조정할지) 추가 설계가 필요.
-- [ ] PUSCH UL MIMO를 flat+HARQ/K>2/다중 Rx 안테나/코드북 기반(SM_4X4
-  상당)으로 확장 — SM_2X2 TDL+HARQ는 완료(2026-09-01, DL과 동일하게
-  flat+HARQ는 아직 없음 — 둘 다 후속 과제).
+- [ ] Polar 코드(PBCH/PDCCH/PUCCH 제어채널) 표준 정합화 — 2026-09-03
+  상태 점검에서 확인. LDPC는 P0-1~P0-3+P0-2c로 표준 정합화가 거의
+  끝났지만, `polar.c`는 아직 착수 전: (1) 극성화 시퀀스가 TS 38.212
+  Table 5.3.1.2-1(고정 1024-엔트리 신뢰도 시퀀스)이 아니라
+  `generate_frozen_bits()`의 일반 Bhattacharyya 파라미터 재귀로 매번
+  계산 — AWGN에서 근사적 경향은 맞지만 스펙이 규정한 정확한 시퀀스와
+  bit-exact 일치 보장 없음. (2) 디코더가 SC(Successive Cancellation)
+  뿐이고 CA-SCL(CRC-Aided SCL)이 없음 — 실제 UE/gNB는 짧은 블록
+  (PBCH/PDCCH)에서 CA-SCL을 씀. Rate matching의 shortening 위치 처리
+  (§5.4.1.1)는 스펙 절차를 따르도록 이미 구현돼 있어(2026-07-13 버그
+  수정 이력) 이 부분은 구조적으로 맞음. `docs/analysis/
+  phy_development_direction_validation.md`의 "Phase 3. Polar chain
+  정합화"가 이 항목에 해당 — 착수 전 우선순위/범위(PBCH만 먼저 할지,
+  CA-SCL까지 포함할지) 확인 필요.
+- [ ] OLLA를 CL_XPORT로 추가 확장 — SISO/SIMO_MRC/SM_2X2/SM_4X4는
+  완료(SM_4X4는 2026-09-03, 아래 "완료" 참조). CL_XPORT(RI+PMI 적응)는
+  매 트라이얼 RI/PMI 재선택과 OLLA 오프셋을 어떻게 결합할지(RI 선택
+  임계값에도 반영할지, MCS만 조정할지) 추가 설계가 필요 — 단순 레이어
+  수 확장(SM_4X4)과 달리 착수 전 사용자 확인 필요.
+- [ ] PUSCH UL MIMO를 K>2/다중 Rx 안테나/코드북 기반(SM_4X4 상당)으로
+  확장 — flat+HARQ는 완료(2026-09-03, 아래 "완료" 참조). K>2는 DL
+  SM_4X4처럼 코드워드 배열로 확장 가능하지만, UL은 코드북 기반
+  프리코딩(CL_4PORT 상당)이 아예 없어서(UL_EIGEN_BF는 비-코드북 Rx
+  빔포밍이라 별개 축) 새 UL 코드북 설계부터 필요 — DL의 codebook.c를
+  그대로 재사용할 수 있는지 UL/DL 코드북 정의가 대칭인지부터 확인
+  필요.
 - [ ] AWGN 환경 전체 시뮬레이션 데이터 정리(Tx/Rx 모듈 검증용) —
   사용자 요청(2026-09-02), "어느정도 시험되면"이라는 조건부 — 현재는
   아직 시점이 아님. 착수 시 정확한 범위(어떤 채널/모드를 포함할지,
@@ -34,13 +46,204 @@
   고아 파일(2026-07-15 이후 방치, 독립 실행형 BER 툴 시도로 보임).
   STRUCTURE.md 갱신 중 발견(2026-09-01). 삭제할지 `c_Makefile`에
   편입할지 결정 필요.
-- [ ] 빔 관리를 UE Rx 빔 스위핑/P2·P3(빔 정제) 절차로 확장 — TDL/HARQ는
-  완료(2026-09-01). UE Rx 빔 스위핑을 추가하려면 UE 측 배열/빔
-  코드북이 별도로 필요하고, P2(Tx 빔 정제)/P3(Rx 빔 정제)는 P1로
-  좁힌 후보군 안에서의 미세 탐색이라 별도 절차 설계가 필요.
+- [ ] 빔 관리 P1->P3->P2(2026-09-03 완료, 아래 "완료" 참조)를 TDL/HARQ와
+  결합 — 현재는 AWGN 전용(`BEAM_MGMT_RX_SWEEP=1`+`CHANNEL_MODEL=TDL`
+  또는 `HARQ_ENABLE=1`은 `config_parser.c`가 명시적으로 차단 중).
+  기존 `run_pdsch_beam_mgmt_tdl_simulation()`/`_harq_simulation()`과
+  같은 패턴(TDL은 선택된 빔의 데이터 전송에만 적용, HARQ는 빔 선택
+  자체는 트라이얼당 1회 고정)을 그대로 적용 가능할 것으로 보이나
+  착수 전 확인 필요.
 
 ## 완료 (최근)
 
+- [x] 빔 관리 P1 -> P3(UE Rx 빔 정제) -> P2(gNB Tx 빔 재정제) — 2026-09-03
+  완료. 사용자 확인된 설계대로 UE를 더 이상 단일/광각 안테나로 취급하지
+  않고 4소자 ULA + 자체 DFT 빔 코드북(오버샘플링 x2, 8후보)을 갖는다고
+  모델링(`beam_mgmt.h`/`.c` 신규: `beam_mgmt_ue_steer()` — UE 결합
+  가중치, `beam_mgmt_true_channel_mimo()` — gNB(32)→UE(4) rank-1 LOS
+  MIMO 채널, `beam_mgmt_p3_sweep()` — P1이 고정한 Tx 빔 위에서 UE Rx
+  빔 8개 스위핑, `beam_mgmt_p2_effective_channel()` — P3가 고른 Rx
+  빔으로 결합한 유효채널을 만들어 기존 `beam_mgmt_p1_sweep()`을 그대로
+  재사용해 P2(Tx 재정제) 구현, 별도 함수 불필요). 신규
+  `run_pdsch_beam_mgmt_p123_simulation()`(`pdsch.c`) — Genie(이상적
+  상한)/No-Rx-Sweep(정제 안 함 기준선)/P3+P2 Refined 세 기준 비교.
+  `BEAM_MGMT_RX_SWEEP`(신규 설정, 기본 0) + `config_parser.c` 화이트
+  리스트(TDL/HARQ와의 결합은 아직 차단, 위 "진행 중" 참조), `main.c`
+  dispatch 배선.
+  **구현 중 발견·수정한 버그 2건**: (1) UE 측 "진짜 채널" 위상 생성에
+  실수로 결합 가중치용 `1/sqrt(N_UE)` 정규화를 그대로 재사용 —
+  물리적으로는 각 UE 소자가 독립적으로 같은 신호 전력을 받아야 하는데
+  이 중복 정규화로 배열이득(N_UE배)이 통째로 사라짐(실행 결과 정제
+  이득이 정제 안 함 기준선과 거의 같게 나와 발견). 원인 채널 생성과
+  결합 가중치 생성을 별개 함수(`ue_array_manifold()` 신규 static,
+  크기 정규화 없음)로 분리해 해결. (2) `beam_mgmt_p1_sweep()`의
+  `inner_prod32()`가 채널에 켤레(conj)를 취하는 관례인데, P3 스윕과
+  `pdsch.c`의 최종 유효채널 계산(heff_refined/heff_noswp) 3곳 모두
+  이 켤레를 빠뜨림 — 전부 conj 추가로 수정. **검증**: 첫 실행에서
+  실제로 이 버그들이 만든 비정상 결과(정제 후 이득이 SNR 무관 <0.15
+  근처에 고정, Genie는 5dB부터 BLER=0인데 Refined는 15dB에도
+  BLER≈1)를 확인하고 원인을 끝까지 추적해 수정 — 표면 결과만 보고
+  넘어가지 않음. 수정 후: AvgGain_P3P2가 모든 SNR에서 AvgGain_NoSweep
+  보다 뚜렷이 높고(-5dB 0.02 vs 0.007, 15dB 2.10 vs 0.99) SNR에 따라
+  단조 증가, BLER_Refined도 SNR에 따라 단조 감소(1.0→0.20, 0~15dB) —
+  Genie보다는 여전히 나쁜데(Tx+Rx 양쪽 실측잡음+양자화가 겹치고 UE
+  코드북이 8후보로 gNB 1024후보보다 훨씬 성겨 당연히 예상되는 격차,
+  이 프로젝트의 다른 Genie-vs-실측 비교들과 같은 패턴) 정제 자체의
+  효과는 명확히 입증됨. ASan/UBSan 클린(malloc/free 짝 맞추기 실수
+  1건을 배선 직후 자체 발견·수정 — 이전 함수 cleanup 코드 유실+신규
+  함수 cleanup 중복으로 메모리 누수/double-free 위험이 있었음, ASan으로
+  최종 확인). `regression_test.sh`에 positive 1건("PDSCH BEAM_MGMT
+  P1-P3-P2")+negative 1건(TDL 결합 차단 확인) 추가, **90/90 통과**,
+  clean 빌드 경고 없음(기존 5건 무관 경고만 유지).
+
+- [x] OLLA를 SM_4X4로 확장 — 2026-09-03 완료. 기존
+  `run_pdsch_olla_sm2x2_simulation()`의 "레이어 수 무관 동일 MCS 공유 +
+  결합 ACK(전 레이어 성공해야 ACK)" 패턴을 그대로 4레이어로 확장,
+  4x4 채널/검출은 `run_pdsch_sm4x4_simulation()`의 배열 기반(NL=4)
+  구조 재사용. 신규 `run_pdsch_olla_sm4x4_simulation()`
+  (`pdsch.c`) — 트라이얼마다 MCS가 바뀔 수 있어 LDPC/`nr_seg_compute`를
+  트라이얼 안에서 매번 재초기화(SM_2X2 OLLA와 동일 관례). 새 설계
+  결정 없이 두 기존 패턴을 그대로 합성. `config_parser.c`
+  `olla_mm_supported`에 SM_4X4 추가, `main.c` dispatch 배선.
+  **검증**: clean 빌드 경고 0건, `regression_test.sh`의 기존
+  negative test 대상을 SM_4X4→CL_4PORT로 교체(CL_XPORT는 여전히
+  미지원이라 negative 커버리지 유지)하고 SM_4X4용 positive test 신규
+  추가 — **88/88 통과**. 수동 실행(12dB, MCS Table1): Open-Loop이
+  BLER=0.90(목표 0.10)으로 크게 벗어나고 OLLA가 오프셋을 -10.56dB까지
+  낮춰 BLER=0.16까지 수렴, 평균 MCS 19→6.16 — 기존 SM_2X2/SIMO_MRC
+  OLLA에서 이미 확인된 "Shannon+3dB gap이 이 프로젝트 LDPC 코덱엔
+  낙관적" 특성과 동일한 패턴(버그 아님, 4레이어 결합 ACK라 수렴이 더
+  어려운 것도 예상대로).
+- [x] PUSCH UL SM_2X2에 flat+HARQ 추가 — 2026-09-03 완료. 기존엔
+  SM_2X2+TDL+HARQ만 있고 flat+HARQ 조합 함수가 없어 `config_parser.c`가
+  명시적으로 CFG_ERR 차단 중이었음(DL도 동일한 공백이 있지만 이번
+  요청은 PUSCH/UL 한정이라 DL은 손대지 않음). 신규
+  `run_pusch_sm2x2_harq_simulation()` — 기존 `run_pusch_sm2x2_tdl_harq_
+  simulation()`의 다중 코드블록 HARQ 구조(코드워드 A/B 각각 seg.C개
+  영구 soft-combining 버퍼, attempt마다 두 코드워드 모두 재전송)를
+  그대로 쓰고 채널만 TDL 대신 `run_pusch_sm2x2_simulation()`의 평탄
+  2x2 MIMO 채널로 교체. **설계 확인**: flat 채널도 attempt마다
+  재드로우(기존 `run_pdsch_mumimo_harq_simulation()`의 `is_tdl` 분기가
+  flat일 때도 `mumimo_channel_draw()`를 attempt 루프 안에서 매번
+  호출하는 선례를 그대로 따름 — "flat"은 RE 전체에 걸쳐 평탄하다는
+  뜻이지 재전송 간 고정이라는 뜻이 아니라서, 이렇게 해야 HARQ가 실제
+  시간 다이버시티 이득을 가짐). `config_parser.c`의 `pusch_mm_harq_
+  supported` 화이트리스트에서 SM_2X2의 TDL 전용 제약 제거, `main.c`
+  dispatch에 SM_2X2+HARQ+non-TDL 분기 추가.
+  **검증**: clean 빌드 경고 0건, `regression_test.sh`의 기존 negative
+  test("PUSCH SM_2X2 + HARQ + flat fading has no dedicated function")를
+  positive test("PUSCH SM_2X2 HARQ flat")로 교체, **87/87 통과**(negative
+  1건 제거+positive 1건 추가로 총 개수 유지). 수동 실행: C=1(NUM_RB=51,
+  MCS10) BLER(1st) 1.0→0.085·BLER(HARQ) 0.635→0.0(0~15dB), AvgTx
+  2.83→1.09 — 정상 waterfall. C=2(NUM_RB=261, MCS27, 균등분할)도
+  BLER(HARQ) 1.0→0.6→0.02(5~25dB), AvgTx 3.00→1.90 — 물리적으로 타당.
+  이 확장은 P0-2c 이후 첫 신규 기능이라 처음부터 `nr_sch` 다중
+  코드블록 구조로 작성(레거시 단일-CB 코드 거치지 않음).
+- [x] P0-2c 최종 완료: `nr_sch` 다중 코드블록 세그멘테이션을 HARQ 있는
+  나머지 14곳(`pdsch.c` 9개: harq/simo_mrc_tdl_harq/sm2x2_tdl_harq/
+  sm4x4_harq/cl_4port_harq/cl_8port_harq/cl_32port_harq/mumimo_harq/
+  beam_mgmt_harq, `pusch.c` 5개: harq/sm2x2_tdl_harq/ul_eigen_bf_harq/
+  ul_eigen_bf_2tx_harq/ul_eigen_bf_4tx_harq)로 확장 — 2026-09-03 완료.
+  이걸로 8424비트 TBS 클램프가 있던 `run_pdsch_*`/`run_pusch_*` 50개
+  함수(파일럿 1 + 비HARQ 35 + HARQ 14) 전부가 다중 코드블록을 지원.
+  **설계**: 사용자와 사전 확인한 방향대로 — 트라이얼당 코드블록 C개를
+  각 1회 인코딩(공유 LDPC 파라미터라 인스턴스 1개 재사용), 코드블록별
+  영구 soft-combining 버퍼 C개(재전송 attempt 간 유지, 트라이얼
+  시작 시에만 초기화), attempt마다 C개 코드블록을 전부 함께
+  재전송(이 프로젝트는 CBGTI/부분 재전송 미모델링 — 기존 단일-CB HARQ의
+  "TB 단위 ACK/NACK"를 그대로 확장), 코드블록별 CRC24B 검사 + TB
+  재조립 후 CRC24A 검사를 모두 통과해야 종료.
+  다시 두 fork(`pdsch.c`/`pusch.c` 파일 단위 분리)에 병렬 위임 — 이번엔
+  세션 초반 반영한 CLAUDE.md "검증 범위 원칙"(targeted 기본, 전체
+  회귀는 마지막에 1회)도 함께 적용.
+  **부수 발견**: 이 macOS 환경엔 `flock` CLI가 없음(Linux 전제였던
+  지시가 실패) — fork들이 각각 Python `fcntl.flock`/`mkdir` 기반 원자적
+  락으로 대체해 빌드 디렉터리 경합을 직접 우회.
+  **검증**: 두 fork 완료 후 메인 세션이 clean 전체 재빌드(경고 0건,
+  기존 3건 무관 경고만 유지) + `regression_test.sh` **87/87 통과**를
+  직접 재확인. `pdsch.c` 9개는 fork 자체가 이미 세션 시작 시점
+  바이너리 대비 C=1 bit-for-bit 동일 확인 완료. `pusch.c` 5개는 fork가
+  (병렬 pdsch.c fork가 아직 편집 중이라 링크 불가로) 검증을 못 끝내
+  메인 세션이 직접 이어받음 — `git stash`로 pdsch.c만 세션 시작 시점
+  커밋으로 되돌려 5개 함수 전부 C=1 출력을 캡처한 뒤 복원·재빌드해
+  재실행, **5개 전부 BER/BLER/AvgTx bit-for-bit 완전 동일** 확인.
+  C>1 물리적 타당성도 메인 세션이 직접 추가 확인: SISO PUSCH HARQ
+  (NUM_RB=261·MCS27, C=2) BLER(HARQ) 1.0→0.0·AvgTx 3.00→2.00 정상
+  수렴, UL_EIGEN_BF_2TX HARQ(랭크적응+HARQ+다중CB 동시 적용, 가장 복잡한
+  pusch.c 케이스, NUM_RB=261·MCS27, C=2) BLER(HARQ)이 전 SNR에서 0.0
+  (재전송으로 저SNR도 복구)·AvgTx 2.12→1.00·AvgRank=2.00 일관 — 전부
+  물리적으로 타당. `pdsch.c` 쪽은 fork가 SISO HARQ/CL_32PORT HARQ(가장
+  복잡한 케이스)로 C>1 검증 이미 완료.
+  **남은 것**: K'=B'/C 비정수분할 시 반올림 규칙 미확정(`nr_sch.h`
+  `nr_seg_compute()` 문서 주석 참조, 사용자 확인 후 `exit(1)` 유지가
+  현재 정책) — 이 50개 함수 전부에 여전히 적용되는 제약. 이 시뮬레이터의
+  기본 RB/MCS 조합으로는 TBS가 8448비트를 넘는 경우가 드물어(수동으로
+  NUM_RB/MCS를 크게 올려야 C>1 도달) 실사용 경로에서 이 제약을 만날
+  일은 현재 거의 없음.
+- [x] P0-2c 후속: `nr_sch` 다중 코드블록 세그멘테이션을 HARQ 없는
+  나머지 35개 `run_pdsch_*`/`run_pusch_*` 함수로 확장 — 2026-09-03
+  완료. 파일럿(`run_pdsch_simulation()`, 아래 항목) 이후 남은 8424비트
+  TBS 클램프가 걸린 함수 중 HARQ 없는 것 전부(`pdsch.c` 23개:
+  dmrs/simo_mrc(+tdl)/sm2x2(+tdl)/sm4x4(+tdl)/tdl/cl_4port(+tdl)/
+  cl_8port(+tdl)/cl_32port(+tdl)/eigen_16port(+tdl/subband)/
+  olla(+simo_mrc/sm2x2)/mumimo(+tdl)/beam_mgmt(+tdl), `pusch.c` 12개:
+  기본/tdl/tdl_dfe/tdl_turbo/sm2x2(+tdl)/ul_eigen_bf 1・2・4Tx(+tdl)).
+  두 fork(subagent)에 파일 단위로 병렬 위임(`pdsch.c` 담당/`pusch.c`
+  담당, 파일 겹침 없이 충돌 방지 — 동시 `make`/실행 파일 경합은
+  `flock`으로 직렬화 지시). 각 함수: 8424 클램프 제거 →
+  `nr_seg_compute()`/`ldpc_init_resolved()` → 코드블록 루프(encode+
+  rate-match→concat) → 수신측 코드블록별 combine+decode+CRC24B 검사→
+  재조립+CRC24A. `pusch.c`에 `nr_sch.h` include 신규 추가.
+  **검증**: 두 fork 완료 후 메인 세션에서 clean 전체 재빌드(경고 0건,
+  기존 3건 무관 경고만 유지) + `regression_test.sh` **87/87 통과**
+  (기존 커버리지 전무하던 CL_8PORT/CL_32PORT/EIGEN_16PORT에 신규 7개
+  항목 추가 포함). 추가로 메인 세션이 직접: `git stash`로 세션 시작
+  시점(커밋 `3e65fb1`) 바이너리를 복원해 `run_pusch_simulation`/
+  `run_pusch_tdl_turbo_simulation`(가장 단순 vs 가장 복잡한 pusch.c
+  케이스) C=1 BER·BLER가 수정 전/후 **bit-for-bit 완전 동일**함을
+  재확인, `run_pusch_simulation`을 NUM_RB=261·MCS27(TABLE2)로 B=11622
+  (C=2, 균등분할)까지 밀어붙여 30dB(BLER=0.02)→40/50dB(BLER=0.0)로
+  정상 수렴함을 확인(pdsch.c 쪽은 CL_4PORT/CL_32PORT로 fork 자체가
+  C>1 실행 검증 완료). 비정수분할 B(예: NUM_RB=260)에서 `exit(1)`
+  가드도 이 함수들 안에서 정상 발동 확인.
+  **남은 것**: HARQ 있는 14곳(위 "진행 중" 섹션 참조) — 코드블록별
+  soft-combining 버퍼 재설계가 필요해 이번 그룹과 별개 과제.
+- [x] P0-2c: TS 38.212 §5.2.2 다중 코드블록 세그멘테이션 + CRC24B,
+  §5.4.2.1 `E_r` 배분, §5.5 concatenation — 2026-09-03 완료(모듈) +
+  파일럿 통합 완료.
+  신규 `nr_sch.h`/`.c`(`nr_seg_compute()` — C/L/B'/K'/Zc/K/filler_size
+  산출, `nr_seg_split()` — 코드블록 분할+CRC24B, `nr_seg_concat()` —
+  §5.5), `nr_rate_matching.c`에 `nr_ldpc_er_alloc()`(§5.4.2.1 floor/
+  ceil 자기정합 분배) 추가. `crc.h`에 CRC24B(poly `0x800063`, TS
+  38.212 §5.1 3gpp-server MCP로 확인) 추가. 기존 `ldpc_nr.c`의
+  `nr_select_bg_zc()`(TB 레벨 BG/Kb 선택 + 코드블록 레벨 Zc 탐색이
+  섞여있던 단일 함수)를 `nr_select_bg()`+`nr_select_zc()`로 분리(동작
+  100% 동일, `ldpc_init_resolved()` 신규로 이미 해석된 파라미터로
+  바로 초기화 가능하게 함 — 세그멘테이션된 K'로 BG를 잘못 재판정하는
+  것 방지).
+  **미해결 스펙 디테일(사용자 확인 후 현재 정책 확정)**: K'=B'/C가
+  스펙 원문 이미지에 반올림 기호 없이 그대로 나오는데, B가 C로 안
+  나누어떨어지면(예: B=8449) 대수적으로 정수가 안 나옴 — 1차 소스
+  (3gpp-server MCP TS 38.212 v18.8.0 §5.2.2 이미지)와 2차 소스
+  (WebSearch/WebFetch 교차검증) 모두 반올림 규칙을 확정 못함. 추정으로
+  밀어붙이지 않고, `nr_seg_compute()`는 B'가 C로 정확히 나누어떨어지는
+  경우만 처리하고 아니면 진단 메시지와 함께 `exit(1)` — 사용자가 이
+  정책 유지를 명시적으로 선택.
+  **파일럿 통합**: `pdsch.c`의 `run_pdsch_simulation()`(HARQ 없는 가장
+  단순한 non-DMRS 함수)을 다중 코드블록 구조로 재작성 — 8424비트 TBS
+  클램프 제거, encode/decode를 코드블록 C개 루프로 교체.
+  **검증**: `nr_sch` standalone 하네스(scratch, 25개 체크) — 단일 CB가
+  레거시 `nr_select_bg_zc()`와 bit-for-bit 일치, C=2 균등분할 케이스의
+  segment→encode→CB별 rate matching(서로 다른 `E_r` 포함)→concat→
+  combine→decode 전체 라운드트립 성공, 비정수분할 케이스 `exit(1)`
+  정상 발동. 파일럿 통합 후: TB_SIZE=3000(C=1) 수정 전/후 BER·BLER
+  bit-for-bit 동일 확인, TB_SIZE=8426(C=2) 300트라이얼×5 SNR 포인트
+  깨끗한 waterfall(0dB BLER=1.0→8dB BLER=0.0) 확인, TB_SIZE=20000
+  (비정수분할)에서 `exit(1)` 진단이 실제 파이프라인에서도 정상 발동.
+  `regression_test.sh`에 이 함수 전용 신규 항목 2개(C=1/C=2, 기존엔
+  이 함수 커버리지 전무) 추가, 80/80 통과. `make clean && make` 경고
+  없음(기존 3건 무관 경고만 유지). 나머지 49개 함수로의 확장은 위
+  "진행 중" 섹션 참조.
 - [x] TS 38.212 §5.4.2.1 표준 rate matching(P0-3) — 2026-09-02 완료.
   P0-1(NR BG1/BG2 QC-LDPC) 직후 남아있던 마지막 비표준 지점 — LDPC를
   쓰는 51개 `run_pdsch_*`/`run_pusch_*` 함수 중 HARQ 14곳은 균등

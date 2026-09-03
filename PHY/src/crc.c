@@ -13,6 +13,7 @@ static unsigned int get_poly(CRCType type) {
         case CRC24A: return 0x864CFB;
         case CRC24C: return 0xB2B117;
         case CRC16:  return 0x1021;
+        case CRC24B: return 0x800063;
         default:     return 0;
     }
 }
@@ -22,6 +23,7 @@ int get_crc_length(CRCType type) {
         case CRC24A: return 24;
         case CRC24C: return 24;
         case CRC16:  return 16;
+        case CRC24B: return 24;
         default:     return 0;
     }
 }

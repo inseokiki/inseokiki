@@ -16,13 +16,28 @@
 #define FILLER_FORCE_LLR 100.0
 
 void ldpc_init(LDPCCodec *ldpc, int block_size, double code_rate) {
-    ldpc->info_size = block_size;
+    int bg, Zc, Kb, base_rows, base_info_cols, base_cols, filler_size;
+    nr_select_bg_zc(block_size, code_rate, &bg, &Zc, &Kb,
+                     &base_rows, &base_info_cols, &base_cols, &filler_size);
+    ldpc_init_resolved(ldpc, block_size, code_rate, bg, Zc, Kb,
+                        base_rows, base_info_cols, base_cols, filler_size);
+}
+
+void ldpc_init_resolved(LDPCCodec *ldpc, int info_size, double code_rate,
+                         int bg, int Zc, int Kb,
+                         int base_rows, int base_info_cols, int base_cols,
+                         int filler_size) {
+    ldpc->info_size = info_size;
     ldpc->code_rate = code_rate;
-    nr_select_bg_zc(block_size, code_rate, &ldpc->bg, &ldpc->Zc, &ldpc->Kb,
-                     &ldpc->base_rows, &ldpc->base_info_cols, &ldpc->base_cols,
-                     &ldpc->filler_size);
-    ldpc->num_parity = ldpc->base_rows * ldpc->Zc;
-    ldpc->coded_size = ldpc->base_cols * ldpc->Zc;
+    ldpc->bg = bg;
+    ldpc->Zc = Zc;
+    ldpc->Kb = Kb;
+    ldpc->base_rows = base_rows;
+    ldpc->base_info_cols = base_info_cols;
+    ldpc->base_cols = base_cols;
+    ldpc->filler_size = filler_size;
+    ldpc->num_parity = base_rows * Zc;
+    ldpc->coded_size = base_cols * Zc;
     build_H_nr(ldpc);
     ldpc_encode_prepare_nr(ldpc);
 }

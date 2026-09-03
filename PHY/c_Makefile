@@ -8,7 +8,7 @@ COMMON_SRCS = utils.c config_parser.c mcs_table.c crc.c \
               polar_rate_match.c modulation.c ofdm.c \
               channel.c channel_estimation.c dmrs.c mimo.c rate_matching.c nr_rate_matching.c tdl.c \
               dft_precode.c pucch_seq.c \
-              ldpc.c ldpc_tables.c ldpc_nr.c polar.c csi_rs.c srs.c prach.c codebook.c codebook_8port.c codebook_32port.c \
+              ldpc.c ldpc_tables.c ldpc_nr.c nr_sch.c polar.c csi_rs.c srs.c prach.c codebook.c codebook_8port.c codebook_32port.c \
               eigen_16port.c olla.c mumimo.c beam_mgmt.c ul_eigen_bf.c \
               pbch.c pdcch.c pdsch.c pusch.c pucch.c ul_power_ctrl.c
 

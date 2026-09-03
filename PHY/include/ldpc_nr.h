@@ -4,15 +4,23 @@
  *  selection, lifted parity-check construction, structured encoding.
  *
  *  Internal to the LDPC module: not part of ldpc.h's public API.
- *  ldpc.c dispatches into these functions; callers elsewhere in the
- *  project never include this header directly.
+ *  ldpc.c dispatches into these functions for its single-code-block
+ *  path; nr_sch.c (see nr_sch.h, P0-2c) also includes this header
+ *  directly for its multi-code-block path, since one transport block's
+ *  code blocks all share one bg/Kb/Zc/K and so one LDPCCodec instance.
+ *  No other caller in the project includes this header directly.
  *
  *  Scope (2026-09-02, per docs/analysis/phy_development_direction_
- *  validation.md P0-1): single code block only (no TS 38.212 5.2.2
- *  segmentation -- every existing caller already caps block_size at
- *  8424 bits, so C=1 always holds for this project today). Standard
- *  BG-aware rate matching (5.4.2 k0) is a separate follow-up (P0-3);
- *  this module's coded_size is the full "mother" codeword length.
+ *  validation.md P0-1): this module itself always builds/encodes a
+ *  SINGLE code block (info_size=K' bits in, coded_size=base_cols*Zc
+ *  out) -- TS 38.212 5.2.2 segmentation into multiple code blocks is
+ *  nr_sch.c's job (P0-2c), layered on top, not part of this module.
+ *  Every ldpc_init() caller in the project still passes block_size
+ *  capped at 8424 bits (so C=1, block_size=K'=B) for its own single
+ *  code block today; nr_sch.c is not yet wired into any of them (see
+ *  nr_sch.h scope note). Standard BG-aware rate matching (5.4.2 k0) is
+ *  a separate follow-up (P0-3); this module's coded_size is the full
+ *  "mother" codeword length.
  *
  *  Author : Inseok Kang
  * ================================================================ */
@@ -21,19 +29,28 @@
 
 #include "ldpc.h"
 
-/* TS 38.212 5.2.2/6.2.2 base graph + lifting size selection.
- * block_size = K (includes the caller's outer 24-bit CRC, this
- * project's universal convention -- see ldpc_nr.c for the resulting
- * A=block_size-24 boundary note), code_rate = target rate R used only
- * for BG selection (TS 38.212 6.2.2: A<=292, or A<=3824 && R<=0.67, or
- * R<=0.25 -> BG2, else BG1).
- *
- * Writes bg(1/2), Zc(lifting size), Kb, base_rows, base_info_cols,
- * base_cols, filler_size(=base_info_cols*Zc-block_size, always >=0).
- * If no (Kb,Zc) combination satisfies Kb*Zc>=block_size (i.e. this
- * single code block would need TS 38.212 5.2.2 segmentation, out of
- * scope here), prints a diagnostic to stderr and exit(1)s rather than
- * silently clamping -- see module header. */
+/* TS 38.212 6.2.2 base graph selection, TB level. B = pre-segmentation
+ * bit sequence length (includes the caller's outer 24-bit CRC, this
+ * project's universal convention), code_rate = target rate R (A<=292,
+ * or A<=3824 && R<=0.67, or R<=0.25 -> BG2, else BG1, A=B-24).
+ * Writes bg(1/2), Kcb(8448 BG1 / 3840 BG2), Kb (BG1: fixed 22; BG2:
+ * B-based per TS 38.212 5.2.2 -- same for every code block of this TB,
+ * see nr_sch.h), base_rows, base_info_cols, base_cols. */
+void nr_select_bg(int B, double code_rate, int *bg, int *Kcb, int *Kb,
+                   int *base_rows, int *base_info_cols, int *base_cols);
+
+/* TS 38.212 5.2.2 lifting size selection, per code block. Kprime = this
+ * code block's info bits (incl. its own CRC24B if segmented, excl.
+ * filler). Writes Zc(lifting size), K(=base_info_cols*Zc),
+ * filler_size(=K-Kprime, always >=0). If no Table 5.3.2-1 Zc<=384
+ * satisfies Kb*Zc>=Kprime, prints a diagnostic to stderr and exit(1)s
+ * rather than silently clamping -- see module header. */
+void nr_select_zc(int Kb, int Kprime, int base_info_cols,
+                   int *Zc, int *K, int *filler_size);
+
+/* Single-code-block convenience wrapper: nr_select_bg()+nr_select_zc()
+ * with C=1 (so Kprime=block_size). Used by every caller of ldpc_init()
+ * in this project today (see module scope note above). */
 void nr_select_bg_zc(int block_size, double code_rate,
                       int *bg, int *Zc, int *Kb,
                       int *base_rows, int *base_info_cols, int *base_cols,

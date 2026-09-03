@@ -123,15 +123,16 @@ expect_fail "PUSCH SM_2X2 + Transform Precoding (TS 38.211 6.3.1.4 forbids >1 la
     "PHYSICAL_CHANNEL = PUSCH" "MIMO_MODE = SM_2X2" "CHANNEL_MODEL = FLAT_FADING" "CODING = LDPC" "EQUALIZER = MMSE" \
     "TRANSFORM_PRECODING = 1"
 
-expect_fail "PUSCH SM_2X2 + HARQ + flat fading has no dedicated function (only TDL variant exists)" \
-    "MCS_INDEX = 5" "MCS_TABLE = TABLE1" "SNR_START = 10" "SNR_END = 10" "SNR_STEP = 1" "NUM_TRIALS = 20" \
-    "PHYSICAL_CHANNEL = PUSCH" "MIMO_MODE = SM_2X2" "CHANNEL_MODEL = FLAT_FADING" "CODING = LDPC" "EQUALIZER = MMSE" \
-    "TRANSFORM_PRECODING = 0" "HARQ_ENABLE = 1" "HARQ_MAX_RETX = 3" "HARQ_RV_SEQUENCE = IR"
 
-expect_fail "OLLA_ENABLE=1 + unsupported MIMO_MODE (SM_4X4) has no dedicated function" \
+expect_fail "OLLA_ENABLE=1 + unsupported MIMO_MODE (CL_4PORT) has no dedicated function" \
     "MCS_INDEX = 5" "MCS_TABLE = TABLE1" "SNR_START = 10" "SNR_END = 10" "SNR_STEP = 1" "NUM_TRIALS = 20" \
-    "PHYSICAL_CHANNEL = PDSCH" "USE_DMRS = 1" "MIMO_MODE = SM_4X4" "CHANNEL_MODEL = AWGN" "CODING = LDPC" "EQUALIZER = MMSE" \
+    "PHYSICAL_CHANNEL = PDSCH" "USE_DMRS = 1" "MIMO_MODE = CL_4PORT" "CHANNEL_MODEL = AWGN" "CODING = LDPC" "EQUALIZER = MMSE" \
     "OLLA_ENABLE = 1"
+
+expect_fail "BEAM_MGMT_RX_SWEEP=1 + TDL has no dedicated function (AWGN only)" \
+    "MCS_INDEX = 5" "MCS_TABLE = TABLE1" "SNR_START = 10" "SNR_END = 10" "SNR_STEP = 1" "NUM_TRIALS = 20" \
+    "PHYSICAL_CHANNEL = PDSCH" "USE_DMRS = 1" "MIMO_MODE = BEAM_MGMT" "CHANNEL_MODEL = TDL" "CODING = LDPC" "EQUALIZER = MMSE" \
+    "BEAM_MGMT_RX_SWEEP = 1"
 
 # ──────────────────────────────────────────
 # GROUP 2: MCS table dispatch (P0-1 regression)
@@ -181,6 +182,9 @@ expect_pass "PDSCH OLLA SIMO_MRC" "WindowBLER" \
 expect_pass "PDSCH OLLA SM_2X2" "WindowBLER" \
     "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = SM_2X2" "OLLA_ENABLE = 1"
 
+expect_pass "PDSCH OLLA SM_4X4" "WindowBLER" \
+    "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = SM_4X4" "OLLA_ENABLE = 1"
+
 expect_pass "PDSCH SM_2X2 flat" "BER" \
     "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = SM_2X2" "CHANNEL_MODEL = FLAT_FADING"
 
@@ -199,6 +203,27 @@ expect_pass "PDSCH CL_4PORT flat" "BER" \
 expect_pass "PDSCH CL_4PORT TDL" "BER" \
     "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = CL_4PORT" "${TDL[@]}"
 
+expect_pass "PDSCH CL_8PORT flat" "BER" \
+    "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = CL_8PORT" "CHANNEL_MODEL = FLAT_FADING"
+
+expect_pass "PDSCH CL_8PORT TDL" "BER" \
+    "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = CL_8PORT" "${TDL[@]}"
+
+expect_pass "PDSCH CL_32PORT flat" "BER" \
+    "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = CL_32PORT" "CHANNEL_MODEL = FLAT_FADING"
+
+expect_pass "PDSCH CL_32PORT TDL" "BER" \
+    "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = CL_32PORT" "${TDL[@]}"
+
+expect_pass "PDSCH EIGEN_16PORT flat" "BER" \
+    "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = EIGEN_16PORT" "CHANNEL_MODEL = FLAT_FADING"
+
+expect_pass "PDSCH EIGEN_16PORT TDL" "BER" \
+    "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = EIGEN_16PORT" "${TDL[@]}"
+
+expect_pass "PDSCH EIGEN_16PORT TDL subband" "BER" \
+    "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = EIGEN_16PORT" "${TDL[@]}" "EIGEN16_PRECODER_GRAN = SUBBAND"
+
 expect_pass "PDSCH MU_MIMO flat" "BER_U0" \
     "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = MU_MIMO" "CHANNEL_MODEL = FLAT_FADING"
 
@@ -207,6 +232,9 @@ expect_pass "PDSCH MU_MIMO TDL" "BER_U0" \
 
 expect_pass "PDSCH BEAM_MGMT flat" "P1==Genie" \
     "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = BEAM_MGMT" "CHANNEL_MODEL = FLAT_FADING"
+
+expect_pass "PDSCH BEAM_MGMT P1-P3-P2 (UE Rx sweep)" "P2==P1" \
+    "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = BEAM_MGMT" "CHANNEL_MODEL = AWGN" "BEAM_MGMT_RX_SWEEP = 1"
 
 expect_pass "PDSCH BEAM_MGMT TDL" "P1==Genie" \
     "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = BEAM_MGMT" "${TDL[@]}"
@@ -238,6 +266,21 @@ expect_pass "PDSCH BEAM_MGMT HARQ TDL" "BLER(HARQ)" \
 expect_pass "PDSCH CL_4PORT HARQ TDL" "BLER(HARQ)" \
     "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = CL_4PORT" "${TDL[@]}" "${HQ[@]}"
 
+# run_pdsch_simulation() (PHYSICAL_CHANNEL=PDSCH, USE_DMRS unset/0, OLLA
+# off) -- the non-DMRS legacy benchmark, P0-2c (2026-09-03) pilot for TS
+# 38.212 5.2.2 multi-code-block segmentation. TB_SIZE=8426 -> B=8450
+# (BG1, Kcb=8448) segments into C=2 code blocks that divide evenly
+# (nr_seg_compute()'s exit(1) guard for the non-divisible case, see
+# nr_sch.h, is not hit here). Not reached by any other PDSCH entry above
+# (all set USE_DMRS=1), so these are this function's only coverage.
+expect_pass "PDSCH legacy AWGN C=1" "BER" \
+    "${BASE[@]}" "MCS_INDEX = 10" "MCS_TABLE = TABLE1" \
+    "PHYSICAL_CHANNEL = PDSCH" "CHANNEL_MODEL = AWGN" "TB_SIZE = 3000"
+
+expect_pass "PDSCH legacy AWGN C=2 segmentation" "Code Blocks: C=2" \
+    "${BASE[@]}" "MCS_INDEX = 10" "MCS_TABLE = TABLE1" \
+    "PHYSICAL_CHANNEL = PDSCH" "CHANNEL_MODEL = AWGN" "TB_SIZE = 8426"
+
 # ──────────────────────────────────────────
 # GROUP 4: PUSCH dispatch
 # ──────────────────────────────────────────
@@ -267,6 +310,9 @@ expect_pass "PUSCH SM_2X2 TDL" "BER" \
 
 expect_pass "PUSCH SM_2X2 HARQ TDL" "BLER(HARQ)" \
     "${BASE[@]}" "${PUSCH_COMMON[@]}" "${TDL[@]}" "TRANSFORM_PRECODING = 0" "MIMO_MODE = SM_2X2" "${HQ[@]}"
+
+expect_pass "PUSCH SM_2X2 HARQ flat" "BLER(HARQ)" \
+    "${BASE[@]}" "${PUSCH_COMMON[@]}" "CHANNEL_MODEL = FLAT_FADING" "TRANSFORM_PRECODING = 0" "MIMO_MODE = SM_2X2" "${HQ[@]}"
 
 expect_pass "PUSCH UL_EIGEN_BF flat" "BER_Genie" \
     "${BASE[@]}" "${PUSCH_COMMON[@]}" "CHANNEL_MODEL = FLAT_FADING" "TRANSFORM_PRECODING = 0" "MIMO_MODE = UL_EIGEN_BF"

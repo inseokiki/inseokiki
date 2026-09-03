@@ -38,6 +38,43 @@
 #define BM_CAND_M    16   /* i1_2 격자 크기 (CB32_M_COUNT 재사용) */
 #define BM_CAND_N2   4    /* i2 격자 크기 (CB32_I2_R1 재사용) */
 
+/* UE 측 Rx 빔 스위핑/P2·P3(빔 정제) 확장 (2026-09-03). UE는 N_UE소자
+ * 1D ULA(단순화 — 실제 UE 배열 형상은 구현/단말마다 다름, 구현 정의)에
+ * 자체 DFT 빔 코드북(오버샘플링 O_UE=2)을 갖는다고 모델링. gNB 32소자
+ * 쪽과 별개의, UE 도착각(AoA) 방향 r_true로 파라미터화. */
+#define BM_UE_N      4    /* UE Rx ULA 소자 수 */
+#define BM_UE_O      2    /* UE 빔 코드북 오버샘플링 */
+#define BM_UE_CAND   (BM_UE_N * BM_UE_O)   /* UE Rx 후보 빔 수 (=8) */
+
+/* UE 측 N_UE소자 ULA, 연속값 idx(격자 무관) 방향의 단일경로 steering
+ * vector: w[u] = (1/sqrt(N_UE))*exp(j*2*pi*idx*u/(O_UE*N_UE)). ||w||=1.
+ * idx가 정수 후보 인덱스(0..BM_UE_CAND-1)면 코드북 후보 자체, 연속값이면
+ * 참 UE AoA 방향(r_true) 생성에도 동일 함수 재사용. */
+void beam_mgmt_ue_steer(double idx, cx_t w[BM_UE_N]);
+
+/* gNB(32)->UE(N_UE) 전체 rank-1 LOS MIMO 채널: H_full[u][g] =
+ * w_ue_true[u] * H_true[g] (u=UE 소자, g=gNB 소자) — 단일 경로가 양쪽
+ * 배열에 동시에 실리는 물리적으로 자연스러운 rank-1 외적. 두 스티어링
+ * 벡터 모두 단위노름이라 ||H_full||_F=1. H_true는
+ * beam_mgmt_true_channel()의 출력을 그대로 재사용. */
+void beam_mgmt_true_channel_mimo(const cx_t H_true[32], double r_true,
+                                  cx_t H_full[BM_UE_N][32]);
+
+/* P3 절차: gNB Tx 빔 W_tx(P1에서 이미 선택, 고정)를 통해 UE가 자신의
+ * Rx 빔 후보 BM_UE_CAND개를 스위핑 — 후보마다 num_rep회 관측한
+ * RSRP=|w_ue^H·H_full·W_tx|²·Ptx+n 평균해 최댓값 선택. 출력: 선택된 UE
+ * 빔 인덱스와 그 순간 노이즈 없는 진짜 결합이득. */
+void beam_mgmt_p3_sweep(const cx_t H_full[BM_UE_N][32], const cx_t W_tx[32],
+                         double N0, int num_rep, int *sel_ue_idx, double *sel_gain);
+
+/* P2 절차의 입력 준비: P3에서 고른 UE Rx 빔 w_ue(고정)로 결합한 유효
+ * 32차원 채널 h_eff[g]=sum_u conj(w_ue[u])·H_full[u][g]를 만든다 — 이
+ * h_eff를 그대로 beam_mgmt_p1_sweep()에 다시 넣으면 P2(더 나은 결합
+ * SNR로 gNB Tx 빔 재탐색)가 별도 함수 없이 기존 P1 스윕 재사용으로
+ * 구현된다. */
+void beam_mgmt_p2_effective_channel(const cx_t H_full[BM_UE_N][32],
+                                     const cx_t w_ue[BM_UE_N], cx_t h_eff[32]);
+
 /* 연속값 (l_true, m_true, n_true) 방향의 32소자 참 채널(LOS steering
  * vector, 단일 Rx 안테나) 생성 — codebook_32port.h의 v_{l,m} 공식을
  * 정수 격자가 아닌 실수값으로 일반화. ||H_true||²=1로 정규화. */

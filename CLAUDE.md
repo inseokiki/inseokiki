@@ -54,6 +54,21 @@ git log --oneline develop..origin/develop   # 원격이 앞서 있으면 확인
 
 ---
 
+## 🧪 검증(회귀 테스트) 범위 원칙
+
+`lab/HARNESS_ANALYSIS.md` L-02(2026-09-03) 반영. 작은/국소적 코드 수정에서 `PHY/regression_test.sh` 전체(현재 87개 케이스)를
+매번 돌리는 게 기본값이 아니다 — **기본은 금일 변경한 파일·기능과 직접 관련된 case만 골라 실행(targeted)**.
+
+- 공용 API·config parser·LDPC/modulation/channel 같은 공유 계층을 건드렸어도, 곧바로 전체 회귀로 확대하지 않는다.
+  실제 변경된 인터페이스의 호출부를 찾아 영향받는 채널·모드의 대표 case(고정 seed, 적은 SNR 포인트/trial)만 먼저 돌린다.
+- targeted 실행에서 예상 밖 회귀가 나오면 관련 그룹부터 단계적으로 범위를 넓힌다 — 이때도 자동으로 전체 87개로
+  점프하지 않는다.
+- 전체 회귀는 다음 경우에만 실행한다: (1) 사용자가 명시적으로 전체 검증을 요청, (2) merge/release 전 최종 확인.
+- 이 원칙은 검증 자체를 생략해도 된다는 뜻이 아니다 — 범위를 좁히는 것이지 "검증했다고 주장하려면 실행 근거가
+  있어야 한다"는 CLAUDE.md 검증 기준은 그대로 적용된다.
+
+---
+
 ## 📐 답변 원칙 (Claude에게)
 
 ### 최우선 원칙
@@ -174,6 +189,7 @@ git log --oneline develop..origin/develop   # 원격이 앞서 있으면 확인
 | 2026-08-02 | 방향 확인: NTN보다 기존 LLS 완성도(채널×기능 조합 공백 메우기) 우선. `tasks/todo.md` A/B/C 그룹으로 재정리 |
 | 2026-08-02 | PHY LLS: PBCH/PDCCH에 FLAT_FADING/TDL 추가(genie-aided CSI) — 완성도 작업 1단계, AWGN 전용이던 마지막 두 채널 해소. 구현 중 `qam_demap_llr_mmse()` 오용(mmse_equalize 선행 누락으로 SNR 무관 BLER floor) 발견·수정 |
 | 2026-08-27 | PHY LLS: CL_4PORT XPD 누설 상관(`SPATIAL_CORR_XPOL`) + UL CLPC 시변 PL(`UL_PC_PL_VAR_*`) 추가. 검증 중 `codebook.c` RI/PMI 선택기의 2×2 Gramian 부동소수점 결함과 rank-1/rank-2 코드북 전력 정규화 불일치(rank-2가 +3dB 전력 우위) 2건 발견 — 둘 다 사용자 확인 후 수정 완료. 재검증 결과 R1선택률이 SNR/상관도에 따라 물리적으로 타당하게 동작함(완전 rank-1 채널에서 R1선택률=100% 확인) — 상세는 `docs/analysis/history.md`, `tasks/todo.md` 참조 |
+| 2026-09-03 | `lab/HARNESS_ANALYSIS.md` L-02 반영 — "검증(회귀 테스트) 범위 원칙" 섹션 신규 추가. 국소 수정마다 `regression_test.sh` 전체(87개)를 매번 도는 대신 금일 변경 관련 case만 먼저 도는 targeted를 기본값으로, 전체 회귀는 사용자 명시 요청/merge·release 전으로 한정 |
 
 ---
 

@@ -98,6 +98,7 @@ void config_parser_init(ConfigParser *p) {
     c->ollaStepDownDb = 0.5;
     c->ollaSnrGapDb   = 3.0;
     c->beamMgmtNumRep = 4;
+    c->beamMgmtRxSweep = 0;
     c->harqEnable = 0; c->harqMaxRetx = 4;
     c->tdlDelaySpreadNs = 300.0;
     c->transformPrecoding = 1;
@@ -268,17 +269,17 @@ static void validate_config(const L1Config *c) {
                          c->mimoMode, c->channelModel);
         }
 
-        /* PUSCH MIMO x HARQ: SM_2X2+TDL(DL SM_2X2 HARQ와 동일하게 TDL 전용
-         * — flat+HARQ는 DL도 아직 없는 후속 과제)와 UL_EIGEN_BF/_2TX/_4TX
-         * (flat/TDL 둘 다, 함수 내부 is_tdl 분기)만 전용 함수가 있음
-         * (2026-09-01, _4TX는 2026-09-02). 그 외 조합은 같은 오배선
-         * 클래스를 재도입하지 않도록 미리 차단. */
+        /* PUSCH MIMO x HARQ: SM_2X2(flat/TDL 둘 다, 2026-09-03부터 flat도
+         * 전용 함수 있음)와 UL_EIGEN_BF/_2TX/_4TX(flat/TDL 둘 다, 함수
+         * 내부 is_tdl 분기)만 전용 함수가 있음(2026-09-01, _4TX는
+         * 2026-09-02). 그 외 조합은 같은 오배선 클래스를 재도입하지
+         * 않도록 미리 차단. */
         int pusch_mm_harq_supported =
             strcmp(c->mimoMode,"SISO")==0 ||
             strcmp(c->mimoMode,"UL_EIGEN_BF")==0 ||
             strcmp(c->mimoMode,"UL_EIGEN_BF_2TX")==0 ||
             strcmp(c->mimoMode,"UL_EIGEN_BF_4TX")==0 ||
-            (strcmp(c->mimoMode,"SM_2X2")==0 && strcmp(c->channelModel,"TDL")==0);
+            strcmp(c->mimoMode,"SM_2X2")==0;
         if (strcmp(c->physicalChannel,"PUSCH")==0 && !pusch_mm_harq_supported)
             CFG_ERR("PHYSICAL_CHANNEL=PUSCH + MIMO_MODE='%s' + HARQ_ENABLE=1 + "
                      "CHANNEL_MODEL='%s' has no dedicated simulation function — would "
@@ -319,7 +320,8 @@ static void validate_config(const L1Config *c) {
         int olla_mm_supported =
             strcmp(c->mimoMode,"SISO")==0 ||
             strcmp(c->mimoMode,"SIMO_MRC")==0 ||
-            strcmp(c->mimoMode,"SM_2X2")==0;
+            strcmp(c->mimoMode,"SM_2X2")==0 ||
+            strcmp(c->mimoMode,"SM_4X4")==0;
         if (!olla_mm_supported)
             CFG_ERR("OLLA_ENABLE=1 + MIMO_MODE='%s' has no dedicated simulation "
                      "function — would silently fall back to SISO OLLA. Not yet "
@@ -327,6 +329,17 @@ static void validate_config(const L1Config *c) {
     }
     if (strcmp(c->mimoMode,"BEAM_MGMT")==0 && c->beamMgmtNumRep < 1)
         CFG_ERR("BEAM_MGMT_NUM_REP=%d must be >= 1", c->beamMgmtNumRep);
+    /* BEAM_MGMT_RX_SWEEP(P1->P3->P2, UE Rx 빔 정제, 2026-09-03)은 아직
+     * AWGN 전용 함수만 있음(TDL/HARQ와의 결합은 후속 과제) — 같은
+     * 오배선 클래스 재도입 방지를 위해 명시적으로 미리 차단. */
+    if (c->beamMgmtRxSweep) {
+        if (strcmp(c->mimoMode,"BEAM_MGMT")!=0)
+            CFG_ERR("BEAM_MGMT_RX_SWEEP=1 requires MIMO_MODE=BEAM_MGMT.");
+        if (c->harqEnable || strcmp(c->channelModel,"TDL")==0)
+            CFG_ERR("BEAM_MGMT_RX_SWEEP=1 + HARQ_ENABLE=1/CHANNEL_MODEL=TDL has no "
+                     "dedicated simulation function — AWGN/flat only for now. Not yet "
+                     "implemented (see tasks/todo.md).");
+    }
 
     /* 리소스 그리드 기본 정합성 */
     if (c->numRB > 0 && c->nfft > 0 && c->numRB * 12 > c->nfft)
@@ -417,6 +430,7 @@ int config_parser_load(ConfigParser *p, const char *filename) {
     c->ollaStepDownDb = kv_dbl(p, "OLLA_STEP_DOWN_DB", 0.5);
     c->ollaSnrGapDb   = kv_dbl(p, "OLLA_SNR_GAP_DB", 3.0);
     c->beamMgmtNumRep = kv_int(p, "BEAM_MGMT_NUM_REP", 4);
+    c->beamMgmtRxSweep = kv_int(p, "BEAM_MGMT_RX_SWEEP", 0);
     kv_str(p, "MODULATION",      "QPSK",   c->modulation,     CFG_STR_MAX);
     kv_str(p, "CODING",          "LDPC",   c->coding,         CFG_STR_MAX);
     kv_str(p, "CHANNEL_MODEL",   "AWGN",   c->channelModel,   CFG_STR_MAX);

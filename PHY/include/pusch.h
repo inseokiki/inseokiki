@@ -17,6 +17,7 @@ void run_pusch_harq_simulation(const L1Config *cfg);
 void run_pusch_sm2x2_simulation(const L1Config *cfg);
 void run_pusch_sm2x2_tdl_simulation(const L1Config *cfg);
 void run_pusch_sm2x2_tdl_harq_simulation(const L1Config *cfg);
+void run_pusch_sm2x2_harq_simulation(const L1Config *cfg);
 void run_pusch_ul_eigen_bf_simulation(const L1Config *cfg);
 void run_pusch_ul_eigen_bf_tdl_simulation(const L1Config *cfg);
 void run_pusch_ul_eigen_bf_harq_simulation(const L1Config *cfg);

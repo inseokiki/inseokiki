@@ -9,6 +9,7 @@
 #include "mcs_table.h"
 #include "ldpc.h"
 #include "nr_rate_matching.h"
+#include "nr_sch.h"
 #include "modulation.h"
 #include "channel.h"
 #include "dmrs.h"
@@ -60,13 +61,23 @@ void run_pusch_simulation(const L1Config *cfg) {
     int max_dbits = num_data * bps;
     int tbsz = (int)(max_dbits * cr);
     if (tbsz < 1) tbsz = 1;
-    if (tbsz > 8424) tbsz = 8424;
 
-    int K = tbsz + crc_bits;
-    LDPCCodec ldpc; ldpc_init(&ldpc, K, cr);
+    /* TS 38.212 5.2.2 code block segmentation (P0-2c, 2026-09-03) --
+     * see run_pdsch_simulation() (pdsch.c) for the pattern this mirrors. */
+    int B = tbsz + crc_bits;
+    NRSegInfo seg;
+    nr_seg_compute(B, cr, &seg);
+    int payload = seg.Kprime - seg.L;
+    int K = B;   /* legacy name kept below for filler/print-only uses */
+    LDPCCodec ldpc;
+    ldpc_init_resolved(&ldpc, seg.Kprime, cr, seg.bg, seg.Zc, seg.Kb,
+                        seg.base_rows, seg.base_info_cols, seg.base_cols,
+                        seg.filler_size);
     int acsz = ldpc.coded_size;
-    int E    = num_data * bps;   /* TS 38.212 5.4.2.1 rate-matched output length
-                                     (C=1, single code block -- E=G exactly) */
+    int E    = num_data * bps;   /* TS 38.212 5.4.2.1 total rate-matched
+                                     output length G, per codeword */
+    int *Er = (int *)malloc(seg.C * sizeof(int));
+    nr_ldpc_er_alloc(E, /*Nl=*/1, bps, seg.C, Er);
 
     int use_mmse = (strcmp(cfg->equalizer,"MMSE")==0);
     int use_ray  = (strcmp(cfg->channelModel,"AWGN")!=0);
@@ -88,7 +99,10 @@ void run_pusch_simulation(const L1Config *cfg) {
 
     int *tb      = (int *)malloc(tbsz  * sizeof(int));
     int *tb_crc  = (int *)malloc(K     * sizeof(int));
+    int *cb_bits = (int *)malloc((size_t)seg.C * seg.Kprime * sizeof(int));
     int *coded   = (int *)malloc(acsz  * sizeof(int));
+    int **rm     = (int **)malloc(seg.C * sizeof(int *));
+    for (int r = 0; r < seg.C; r++) rm[r] = (int *)malloc(Er[r] * sizeof(int));
     int *selbits = (int *)malloc(E     * sizeof(int));
     cx_t *data_syms  = (cx_t *)malloc(num_data     * sizeof(cx_t));
     cx_t *precoded   = (cx_t *)malloc(num_data     * sizeof(cx_t));
@@ -103,7 +117,8 @@ void run_pusch_simulation(const L1Config *cfg) {
     cx_t *descrambled= (cx_t *)malloc(num_data      * sizeof(cx_t));
     double *allllr   = (double *)malloc(E            * sizeof(double));
     double *soft_buf = (double *)malloc(acsz         * sizeof(double));
-    int    *decoded  = (int *)malloc(K               * sizeof(int));
+    int    *decoded_cb = (int *)malloc(ldpc.info_size * sizeof(int));
+    int    *decoded_tb = (int *)malloc(B              * sizeof(int));
 
     printf("%12s%15s%15s\n", "SNR (dB)", "BER", "BLER");
     for (int i=0;i<42;i++) printf("-");
@@ -122,10 +137,15 @@ void run_pusch_simulation(const L1Config *cfg) {
             /* TX */
             gen_random_bits(tb, tbsz);
             attach_crc(tb, tbsz, CRC24A, tb_crc);
-            ldpc_encode(&ldpc, tb_crc, coded);
-            nr_ldpc_rate_match_select(coded, acsz, ldpc.bg, ldpc.Zc,
-                                       ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                       /*rv=*/0, E, selbits);
+            nr_seg_split(tb_crc, &seg, cb_bits);
+            for (int r = 0; r < seg.C; r++) {
+                const int *info = cb_bits + (size_t)r * seg.Kprime;
+                ldpc_encode(&ldpc, info, coded);
+                nr_ldpc_rate_match_select(coded, acsz, ldpc.bg, ldpc.Zc,
+                                           ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                           /*rv=*/0, Er[r], rm[r]);
+            }
+            nr_seg_concat(&seg, (const int *const *)rm, Er, selbits);
             qam_modulate(selbits, E, mcs.modulation, data_syms);
 
             cx_t *tx_data = data_syms;
@@ -189,16 +209,22 @@ void run_pusch_simulation(const L1Config *cfg) {
                 double env = (mhp > 1e-10) ? N0/mhp : N0;
                 qam_demap_llr(demod_in, num_data, mcs.modulation, env, allllr);
             }
-            memset(soft_buf, 0, acsz * sizeof(double));
-            nr_ldpc_rate_match_combine(soft_buf, acsz, ldpc.bg, ldpc.Zc,
-                                        ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                        /*rv=*/0, E, allllr);
-
-            ldpc_decode(&ldpc, soft_buf, 25, decoded);
-            int crc_ok = check_crc(decoded, K, CRC24A);
-            int be=0, ml=tbsz < ldpc.info_size-crc_bits ? tbsz : ldpc.info_size-crc_bits;
-            if (ml<0) ml=0;
-            for (int i=0;i<ml;i++) if (tb[i]!=decoded[i]) be++;
+            int roff = 0;
+            int cb_crc_ok = 1;
+            for (int r = 0; r < seg.C; r++) {
+                memset(soft_buf, 0, acsz * sizeof(double));
+                nr_ldpc_rate_match_combine(soft_buf, acsz, ldpc.bg, ldpc.Zc,
+                                            ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                            /*rv=*/0, Er[r], allllr + roff);
+                roff += Er[r];
+                ldpc_decode(&ldpc, soft_buf, 25, decoded_cb);
+                if (seg.C > 1 && !check_crc(decoded_cb, seg.Kprime, CRC24B))
+                    cb_crc_ok = 0;
+                memcpy(decoded_tb + (size_t)r * payload, decoded_cb, payload * sizeof(int));
+            }
+            int crc_ok = cb_crc_ok && check_crc(decoded_tb, B, CRC24A);
+            int be = 0;
+            for (int i=0;i<tbsz;i++) if (tb[i]!=decoded_tb[i]) be++;
             total_err  += be;
             total_bits += tbsz;
             if (!crc_ok || be > 0) blk_err++;
@@ -211,11 +237,13 @@ void run_pusch_simulation(const L1Config *cfg) {
 
     ldpc_free(&ldpc);
     free(pilot_pos); free(data_pos); free(dmrs_sym);
-    free(tb); free(tb_crc); free(coded); free(selbits);
+    free(tb); free(tb_crc); free(cb_bits); free(coded);
+    for (int r = 0; r < seg.C; r++) free(rm[r]);
+    free(rm); free(Er); free(selbits);
     free(data_syms); free(precoded); free(tx_grid); free(rx_grid);
     free(rx_pilots); free(h_pilots); free(h_full);
     free(rx_data); free(h_data); free(eq_data); free(descrambled);
-    free(allllr); free(soft_buf); free(decoded);
+    free(allllr); free(soft_buf); free(decoded_cb); free(decoded_tb);
 }
 
 /* PUSCH over a TDL frequency-selective channel, ZF or MMSE.
@@ -274,13 +302,23 @@ void run_pusch_tdl_simulation(const L1Config *cfg) {
     int max_dbits = num_data * bps;
     int tbsz = (int)(max_dbits * cr);
     if (tbsz < 1) tbsz = 1;
-    if (tbsz > 8424) tbsz = 8424;
 
-    int K = tbsz + crc_bits;
-    LDPCCodec ldpc; ldpc_init(&ldpc, K, cr);
+    /* TS 38.212 5.2.2 code block segmentation (P0-2c, 2026-09-03) --
+     * see run_pdsch_simulation() (pdsch.c) for the pattern this mirrors. */
+    int B = tbsz + crc_bits;
+    NRSegInfo seg;
+    nr_seg_compute(B, cr, &seg);
+    int payload = seg.Kprime - seg.L;
+    int K = B;   /* legacy name kept below for filler/print-only uses */
+    LDPCCodec ldpc;
+    ldpc_init_resolved(&ldpc, seg.Kprime, cr, seg.bg, seg.Zc, seg.Kb,
+                        seg.base_rows, seg.base_info_cols, seg.base_cols,
+                        seg.filler_size);
     int acsz = ldpc.coded_size;
-    int E    = num_data * bps;   /* TS 38.212 5.4.2.1 rate-matched output length
-                                     (C=1, single code block -- E=G exactly) */
+    int E    = num_data * bps;   /* TS 38.212 5.4.2.1 total rate-matched
+                                     output length G, per codeword */
+    int *Er = (int *)malloc(seg.C * sizeof(int));
+    nr_ldpc_er_alloc(E, /*Nl=*/1, bps, seg.C, Er);
 
     int precode  = cfg->transformPrecoding;
     int use_mmse = (strcmp(cfg->equalizer,"MMSE")==0);
@@ -300,7 +338,10 @@ void run_pusch_tdl_simulation(const L1Config *cfg) {
 
     int *tb      = (int *)malloc(tbsz  * sizeof(int));
     int *tb_crc  = (int *)malloc(K     * sizeof(int));
+    int *cb_bits = (int *)malloc((size_t)seg.C * seg.Kprime * sizeof(int));
     int *coded   = (int *)malloc(acsz  * sizeof(int));
+    int **rm     = (int **)malloc(seg.C * sizeof(int *));
+    for (int r = 0; r < seg.C; r++) rm[r] = (int *)malloc(Er[r] * sizeof(int));
     int *selbits = (int *)malloc(E     * sizeof(int));
     cx_t *data_syms  = (cx_t *)malloc(num_data     * sizeof(cx_t));
     cx_t *precoded   = (cx_t *)malloc(num_data     * sizeof(cx_t));
@@ -315,7 +356,8 @@ void run_pusch_tdl_simulation(const L1Config *cfg) {
     cx_t *descrambled= (cx_t *)malloc(num_data      * sizeof(cx_t));
     double *allllr   = (double *)malloc(E            * sizeof(double));
     double *soft_buf = (double *)malloc(acsz         * sizeof(double));
-    int    *decoded  = (int *)malloc(K               * sizeof(int));
+    int    *decoded_cb = (int *)malloc(ldpc.info_size * sizeof(int));
+    int    *decoded_tb = (int *)malloc(B              * sizeof(int));
     cx_t   *taps     = (cx_t *)malloc(TDL_MAX_TAPS    * sizeof(cx_t));
     double *alpha    = (double *)malloc(num_data      * sizeof(double));
 
@@ -332,10 +374,15 @@ void run_pusch_tdl_simulation(const L1Config *cfg) {
         for (int trial=0; trial<cfg->numTrials; trial++) {
             gen_random_bits(tb, tbsz);
             attach_crc(tb, tbsz, CRC24A, tb_crc);
-            ldpc_encode(&ldpc, tb_crc, coded);
-            nr_ldpc_rate_match_select(coded, acsz, ldpc.bg, ldpc.Zc,
-                                       ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                       /*rv=*/0, E, selbits);
+            nr_seg_split(tb_crc, &seg, cb_bits);
+            for (int r = 0; r < seg.C; r++) {
+                const int *info = cb_bits + (size_t)r * seg.Kprime;
+                ldpc_encode(&ldpc, info, coded);
+                nr_ldpc_rate_match_select(coded, acsz, ldpc.bg, ldpc.Zc,
+                                           ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                           /*rv=*/0, Er[r], rm[r]);
+            }
+            nr_seg_concat(&seg, (const int *const *)rm, Er, selbits);
             qam_modulate(selbits, E, mcs.modulation, data_syms);
 
             cx_t *tx_data = data_syms;
@@ -409,16 +456,22 @@ void run_pusch_tdl_simulation(const L1Config *cfg) {
             if (env >= 0.0)
                 qam_demap_llr(demod_in, num_data, mcs.modulation, env, allllr);
 
-            memset(soft_buf, 0, acsz * sizeof(double));
-            nr_ldpc_rate_match_combine(soft_buf, acsz, ldpc.bg, ldpc.Zc,
-                                        ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                        /*rv=*/0, E, allllr);
-
-            ldpc_decode(&ldpc, soft_buf, 25, decoded);
-            int crc_ok = check_crc(decoded, K, CRC24A);
-            int be=0, ml=tbsz < ldpc.info_size-crc_bits ? tbsz : ldpc.info_size-crc_bits;
-            if (ml<0) ml=0;
-            for (int i=0;i<ml;i++) if (tb[i]!=decoded[i]) be++;
+            int roff = 0;
+            int cb_crc_ok = 1;
+            for (int r = 0; r < seg.C; r++) {
+                memset(soft_buf, 0, acsz * sizeof(double));
+                nr_ldpc_rate_match_combine(soft_buf, acsz, ldpc.bg, ldpc.Zc,
+                                            ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                            /*rv=*/0, Er[r], allllr + roff);
+                roff += Er[r];
+                ldpc_decode(&ldpc, soft_buf, 25, decoded_cb);
+                if (seg.C > 1 && !check_crc(decoded_cb, seg.Kprime, CRC24B))
+                    cb_crc_ok = 0;
+                memcpy(decoded_tb + (size_t)r * payload, decoded_cb, payload * sizeof(int));
+            }
+            int crc_ok = cb_crc_ok && check_crc(decoded_tb, B, CRC24A);
+            int be = 0;
+            for (int i=0;i<tbsz;i++) if (tb[i]!=decoded_tb[i]) be++;
             total_err  += be;
             total_bits += tbsz;
             if (!crc_ok || be > 0) blk_err++;
@@ -431,11 +484,13 @@ void run_pusch_tdl_simulation(const L1Config *cfg) {
 
     ldpc_free(&ldpc);
     free(pilot_pos); free(data_pos); free(dmrs_sym);
-    free(tb); free(tb_crc); free(coded); free(selbits);
+    free(tb); free(tb_crc); free(cb_bits); free(coded);
+    for (int r = 0; r < seg.C; r++) free(rm[r]);
+    free(rm); free(Er); free(selbits);
     free(data_syms); free(precoded); free(tx_grid); free(rx_grid);
     free(rx_pilots); free(h_pilots); free(h_full);
     free(rx_data); free(h_data); free(eq_data); free(descrambled);
-    free(allllr); free(soft_buf); free(decoded); free(taps); free(alpha);
+    free(allllr); free(soft_buf); free(decoded_cb); free(decoded_tb); free(taps); free(alpha);
 }
 
 /* PUSCH+TDL, MMSE+DFT-precoding, with an added block decision-feedback
@@ -496,13 +551,23 @@ void run_pusch_tdl_dfe_simulation(const L1Config *cfg) {
     int max_dbits = num_data * bps;
     int tbsz = (int)(max_dbits * cr);
     if (tbsz < 1) tbsz = 1;
-    if (tbsz > 8424) tbsz = 8424;
 
-    int K = tbsz + crc_bits;
-    LDPCCodec ldpc; ldpc_init(&ldpc, K, cr);
+    /* TS 38.212 5.2.2 code block segmentation (P0-2c, 2026-09-03) --
+     * see run_pdsch_simulation() (pdsch.c) for the pattern this mirrors. */
+    int B = tbsz + crc_bits;
+    NRSegInfo seg;
+    nr_seg_compute(B, cr, &seg);
+    int payload = seg.Kprime - seg.L;
+    int K = B;   /* legacy name kept below for filler/print-only uses */
+    LDPCCodec ldpc;
+    ldpc_init_resolved(&ldpc, seg.Kprime, cr, seg.bg, seg.Zc, seg.Kb,
+                        seg.base_rows, seg.base_info_cols, seg.base_cols,
+                        seg.filler_size);
     int acsz = ldpc.coded_size;
-    int E    = num_data * bps;   /* TS 38.212 5.4.2.1 rate-matched output length
-                                     (C=1, single code block -- E=G exactly) */
+    int E    = num_data * bps;   /* TS 38.212 5.4.2.1 total rate-matched
+                                     output length G, per codeword */
+    int *Er = (int *)malloc(seg.C * sizeof(int));
+    nr_ldpc_er_alloc(E, /*Nl=*/1, bps, seg.C, Er);
 
     double scs_hz = (double)cfg->scsKHz * 1000.0;
 
@@ -520,7 +585,10 @@ void run_pusch_tdl_dfe_simulation(const L1Config *cfg) {
 
     int *tb      = (int *)malloc(tbsz  * sizeof(int));
     int *tb_crc  = (int *)malloc(K     * sizeof(int));
+    int *cb_bits = (int *)malloc((size_t)seg.C * seg.Kprime * sizeof(int));
     int *coded   = (int *)malloc(acsz  * sizeof(int));
+    int **rm     = (int **)malloc(seg.C * sizeof(int *));
+    for (int r = 0; r < seg.C; r++) rm[r] = (int *)malloc(Er[r] * sizeof(int));
     int *selbits = (int *)malloc(E     * sizeof(int));
     cx_t *data_syms  = (cx_t *)malloc(num_data     * sizeof(cx_t));
     cx_t *precoded   = (cx_t *)malloc(num_data     * sizeof(cx_t));
@@ -541,7 +609,9 @@ void run_pusch_tdl_dfe_simulation(const L1Config *cfg) {
     double *alpha    = (double *)malloc(num_data    * sizeof(double));
     double *allllr   = (double *)malloc(E            * sizeof(double));
     double *soft_buf = (double *)malloc(acsz         * sizeof(double));
-    int    *decoded  = (int *)malloc(K               * sizeof(int));
+    int    *decoded_cb  = (int *)malloc(ldpc.info_size * sizeof(int));
+    int    *decoded_tb_nodfe = (int *)malloc(B * sizeof(int));
+    int    *decoded_tb_dfe   = (int *)malloc(B * sizeof(int));
     int    *bits_tmp = (int *)malloc(num_data*bps     * sizeof(int));
     cx_t   *taps     = (cx_t *)malloc(TDL_MAX_TAPS    * sizeof(cx_t));
 
@@ -559,10 +629,15 @@ void run_pusch_tdl_dfe_simulation(const L1Config *cfg) {
         for (int trial=0; trial<cfg->numTrials; trial++) {
             gen_random_bits(tb, tbsz);
             attach_crc(tb, tbsz, CRC24A, tb_crc);
-            ldpc_encode(&ldpc, tb_crc, coded);
-            nr_ldpc_rate_match_select(coded, acsz, ldpc.bg, ldpc.Zc,
-                                       ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                       /*rv=*/0, E, selbits);
+            nr_seg_split(tb_crc, &seg, cb_bits);
+            for (int r = 0; r < seg.C; r++) {
+                const int *info = cb_bits + (size_t)r * seg.Kprime;
+                ldpc_encode(&ldpc, info, coded);
+                nr_ldpc_rate_match_select(coded, acsz, ldpc.bg, ldpc.Zc,
+                                           ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                           /*rv=*/0, Er[r], rm[r]);
+            }
+            nr_seg_concat(&seg, (const int *const *)rm, Er, selbits);
             qam_modulate(selbits, E, mcs.modulation, data_syms);
 
             int nd = num_data;   /* rate matching now provides exactly
@@ -604,19 +679,27 @@ void run_pusch_tdl_dfe_simulation(const L1Config *cfg) {
             for (int d=0;d<nd;d++) demod_nodfe[d] = y_raw[d] / abar_safe;
             double env_nodfe = (mvar + var_alpha) / (abar_safe*abar_safe);
             qam_demap_llr(demod_nodfe, nd, mcs.modulation, env_nodfe, allllr);
-            memset(soft_buf, 0, acsz * sizeof(double));
-            nr_ldpc_rate_match_combine(soft_buf, acsz, ldpc.bg, ldpc.Zc,
-                                        ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                        /*rv=*/0, E, allllr);
-            ldpc_decode(&ldpc, soft_buf, 25, decoded);
-            int crc_nodfe = check_crc(decoded, K, CRC24A);
-            int ml = tbsz < ldpc.info_size-crc_bits ? tbsz : ldpc.info_size-crc_bits;
-            if (ml<0) ml=0;
-            int be_nodfe=0;
-            for (int i=0;i<ml;i++) if (tb[i]!=decoded[i]) be_nodfe++;
-            err_nodfe  += be_nodfe;
-            bits_nodfe += tbsz;
-            if (!crc_nodfe || be_nodfe > 0) blk_nodfe++;
+            {
+                int roff = 0;
+                int cb_crc_ok = 1;
+                for (int r = 0; r < seg.C; r++) {
+                    memset(soft_buf, 0, acsz * sizeof(double));
+                    nr_ldpc_rate_match_combine(soft_buf, acsz, ldpc.bg, ldpc.Zc,
+                                                ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                                /*rv=*/0, Er[r], allllr + roff);
+                    roff += Er[r];
+                    ldpc_decode(&ldpc, soft_buf, 25, decoded_cb);
+                    if (seg.C > 1 && !check_crc(decoded_cb, seg.Kprime, CRC24B))
+                        cb_crc_ok = 0;
+                    memcpy(decoded_tb_nodfe + (size_t)r * payload, decoded_cb, payload * sizeof(int));
+                }
+                int crc_nodfe = cb_crc_ok && check_crc(decoded_tb_nodfe, B, CRC24A);
+                int be_nodfe=0;
+                for (int i=0;i<tbsz;i++) if (tb[i]!=decoded_tb_nodfe[i]) be_nodfe++;
+                err_nodfe  += be_nodfe;
+                bits_nodfe += tbsz;
+                if (!crc_nodfe || be_nodfe > 0) blk_nodfe++;
+            }
 
             /* --- path 2: DFE -- cancel the residual ISI, then re-decode --- */
             for (int d=0;d<nd;d++) alpha_cx[d] = CX_MAKE(alpha[d], 0.0);
@@ -637,17 +720,27 @@ void run_pusch_tdl_dfe_simulation(const L1Config *cfg) {
             }
             double env_dfe = mvar / (abar_safe*abar_safe);
             qam_demap_llr(y_dfe, nd, mcs.modulation, env_dfe, allllr);
-            memset(soft_buf, 0, acsz * sizeof(double));
-            nr_ldpc_rate_match_combine(soft_buf, acsz, ldpc.bg, ldpc.Zc,
-                                        ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                        /*rv=*/0, E, allllr);
-            ldpc_decode(&ldpc, soft_buf, 25, decoded);
-            int crc_dfe = check_crc(decoded, K, CRC24A);
-            int be_dfe=0;
-            for (int i=0;i<ml;i++) if (tb[i]!=decoded[i]) be_dfe++;
-            err_dfe  += be_dfe;
-            bits_dfe += tbsz;
-            if (!crc_dfe || be_dfe > 0) blk_dfe++;
+            {
+                int roff = 0;
+                int cb_crc_ok = 1;
+                for (int r = 0; r < seg.C; r++) {
+                    memset(soft_buf, 0, acsz * sizeof(double));
+                    nr_ldpc_rate_match_combine(soft_buf, acsz, ldpc.bg, ldpc.Zc,
+                                                ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                                /*rv=*/0, Er[r], allllr + roff);
+                    roff += Er[r];
+                    ldpc_decode(&ldpc, soft_buf, 25, decoded_cb);
+                    if (seg.C > 1 && !check_crc(decoded_cb, seg.Kprime, CRC24B))
+                        cb_crc_ok = 0;
+                    memcpy(decoded_tb_dfe + (size_t)r * payload, decoded_cb, payload * sizeof(int));
+                }
+                int crc_dfe = cb_crc_ok && check_crc(decoded_tb_dfe, B, CRC24A);
+                int be_dfe=0;
+                for (int i=0;i<tbsz;i++) if (tb[i]!=decoded_tb_dfe[i]) be_dfe++;
+                err_dfe  += be_dfe;
+                bits_dfe += tbsz;
+                if (!crc_dfe || be_dfe > 0) blk_dfe++;
+            }
         }
         double ber_nodfe  = bits_nodfe > 0 ? (double)err_nodfe/bits_nodfe : 0.0;
         double bler_nodfe = (double)blk_nodfe / cfg->numTrials;
@@ -660,13 +753,16 @@ void run_pusch_tdl_dfe_simulation(const L1Config *cfg) {
 
     ldpc_free(&ldpc);
     free(pilot_pos); free(data_pos); free(dmrs_sym);
-    free(tb); free(tb_crc); free(coded); free(selbits);
+    free(tb); free(tb_crc); free(cb_bits); free(coded);
+    for (int r = 0; r < seg.C; r++) free(rm[r]);
+    free(rm); free(Er); free(selbits);
     free(data_syms); free(precoded); free(tx_grid); free(rx_grid);
     free(rx_pilots); free(h_pilots); free(h_full);
     free(rx_data); free(h_data); free(eq_data);
     free(y_raw); free(demod_nodfe); free(x_hat0); free(y_dfe);
     free(alpha_cx); free(g); free(alpha);
-    free(allllr); free(soft_buf); free(decoded); free(bits_tmp); free(taps);
+    free(allllr); free(soft_buf); free(decoded_cb);
+    free(decoded_tb_nodfe); free(decoded_tb_dfe); free(bits_tmp); free(taps);
 }
 
 /* PUSCH+TDL, MMSE+DFT-precoding, turbo equalization: replaces the hard
@@ -732,13 +828,23 @@ void run_pusch_tdl_turbo_simulation(const L1Config *cfg) {
     int max_dbits = num_data * bps;
     int tbsz = (int)(max_dbits * cr);
     if (tbsz < 1) tbsz = 1;
-    if (tbsz > 8424) tbsz = 8424;
 
-    int K = tbsz + crc_bits;
-    LDPCCodec ldpc; ldpc_init(&ldpc, K, cr);
+    /* TS 38.212 5.2.2 code block segmentation (P0-2c, 2026-09-03) --
+     * see run_pdsch_simulation() (pdsch.c) for the pattern this mirrors. */
+    int B = tbsz + crc_bits;
+    NRSegInfo seg;
+    nr_seg_compute(B, cr, &seg);
+    int payload = seg.Kprime - seg.L;
+    int K = B;   /* legacy name kept below for filler/print-only uses */
+    LDPCCodec ldpc;
+    ldpc_init_resolved(&ldpc, seg.Kprime, cr, seg.bg, seg.Zc, seg.Kb,
+                        seg.base_rows, seg.base_info_cols, seg.base_cols,
+                        seg.filler_size);
     int acsz = ldpc.coded_size;
-    int E    = num_data * bps;   /* TS 38.212 5.4.2.1 rate-matched output length
-                                     (C=1, single code block -- E=G exactly) */
+    int E    = num_data * bps;   /* TS 38.212 5.4.2.1 total rate-matched
+                                     output length G, per codeword */
+    int *Er = (int *)malloc(seg.C * sizeof(int));
+    nr_ldpc_er_alloc(E, /*Nl=*/1, bps, seg.C, Er);
 
     double scs_hz = (double)cfg->scsKHz * 1000.0;
     int turbo_iters = cfg->puschTurboIters > 0 ? cfg->puschTurboIters : 3;
@@ -757,7 +863,10 @@ void run_pusch_tdl_turbo_simulation(const L1Config *cfg) {
 
     int *tb      = (int *)malloc(tbsz  * sizeof(int));
     int *tb_crc  = (int *)malloc(K     * sizeof(int));
+    int *cb_bits = (int *)malloc((size_t)seg.C * seg.Kprime * sizeof(int));
     int *coded   = (int *)malloc(acsz  * sizeof(int));
+    int **rm     = (int **)malloc(seg.C * sizeof(int *));
+    for (int r = 0; r < seg.C; r++) rm[r] = (int *)malloc(Er[r] * sizeof(int));
     int *selbits = (int *)malloc(E     * sizeof(int));
     cx_t *data_syms  = (cx_t *)malloc(num_data     * sizeof(cx_t));
     cx_t *precoded   = (cx_t *)malloc(num_data     * sizeof(cx_t));
@@ -784,7 +893,10 @@ void run_pusch_tdl_turbo_simulation(const L1Config *cfg) {
     double *alpha    = (double *)malloc(num_data    * sizeof(double));
     double *allllr   = (double *)malloc(E            * sizeof(double));
     double *soft_buf = (double *)malloc(acsz         * sizeof(double));
-    int    *decoded  = (int *)malloc(K               * sizeof(int));
+    int    *decoded_cb = (int *)malloc(ldpc.info_size * sizeof(int));
+    int    *decoded_tb_nodfe = (int *)malloc(B * sizeof(int));
+    int    *decoded_tb_dfe   = (int *)malloc(B * sizeof(int));
+    int    *decoded_tb_turbo = (int *)malloc(B * sizeof(int));
     int    *bits_tmp = (int *)malloc(num_data*bps     * sizeof(int));
     cx_t   *taps     = (cx_t *)malloc(TDL_MAX_TAPS    * sizeof(cx_t));
 
@@ -804,10 +916,15 @@ void run_pusch_tdl_turbo_simulation(const L1Config *cfg) {
         for (int trial=0; trial<cfg->numTrials; trial++) {
             gen_random_bits(tb, tbsz);
             attach_crc(tb, tbsz, CRC24A, tb_crc);
-            ldpc_encode(&ldpc, tb_crc, coded);
-            nr_ldpc_rate_match_select(coded, acsz, ldpc.bg, ldpc.Zc,
-                                       ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                       /*rv=*/0, E, selbits);
+            nr_seg_split(tb_crc, &seg, cb_bits);
+            for (int r = 0; r < seg.C; r++) {
+                const int *info = cb_bits + (size_t)r * seg.Kprime;
+                ldpc_encode(&ldpc, info, coded);
+                nr_ldpc_rate_match_select(coded, acsz, ldpc.bg, ldpc.Zc,
+                                           ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                           /*rv=*/0, Er[r], rm[r]);
+            }
+            nr_seg_concat(&seg, (const int *const *)rm, Er, selbits);
             qam_modulate(selbits, E, mcs.modulation, data_syms);
 
             int nd = num_data;
@@ -848,19 +965,27 @@ void run_pusch_tdl_turbo_simulation(const L1Config *cfg) {
             for (int d=0;d<nd;d++) demod_nodfe[d] = y_raw[d] / abar_safe;
             double env_nodfe = (mvar + var_alpha) / (abar_safe*abar_safe);
             qam_demap_llr(demod_nodfe, nd, mcs.modulation, env_nodfe, allllr);
-            memset(soft_buf, 0, acsz * sizeof(double));
-            nr_ldpc_rate_match_combine(soft_buf, acsz, ldpc.bg, ldpc.Zc,
-                                        ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                        /*rv=*/0, E, allllr);
-            ldpc_decode(&ldpc, soft_buf, 25, decoded);
-            int crc_nodfe = check_crc(decoded, K, CRC24A);
-            int ml = tbsz < ldpc.info_size-crc_bits ? tbsz : ldpc.info_size-crc_bits;
-            if (ml<0) ml=0;
-            int be_nodfe=0;
-            for (int i=0;i<ml;i++) if (tb[i]!=decoded[i]) be_nodfe++;
-            err_nodfe  += be_nodfe;
-            bits_nodfe += tbsz;
-            if (!crc_nodfe || be_nodfe > 0) blk_nodfe++;
+            {
+                int roff = 0;
+                int cb_crc_ok = 1;
+                for (int r = 0; r < seg.C; r++) {
+                    memset(soft_buf, 0, acsz * sizeof(double));
+                    nr_ldpc_rate_match_combine(soft_buf, acsz, ldpc.bg, ldpc.Zc,
+                                                ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                                /*rv=*/0, Er[r], allllr + roff);
+                    roff += Er[r];
+                    ldpc_decode(&ldpc, soft_buf, 25, decoded_cb);
+                    if (seg.C > 1 && !check_crc(decoded_cb, seg.Kprime, CRC24B))
+                        cb_crc_ok = 0;
+                    memcpy(decoded_tb_nodfe + (size_t)r * payload, decoded_cb, payload * sizeof(int));
+                }
+                int crc_nodfe = cb_crc_ok && check_crc(decoded_tb_nodfe, B, CRC24A);
+                int be_nodfe=0;
+                for (int i=0;i<tbsz;i++) if (tb[i]!=decoded_tb_nodfe[i]) be_nodfe++;
+                err_nodfe  += be_nodfe;
+                bits_nodfe += tbsz;
+                if (!crc_nodfe || be_nodfe > 0) blk_nodfe++;
+            }
 
             /* --- path 2: hard-decision DFE (block PIC) --- */
             for (int d=0;d<nd;d++) alpha_cx[d] = CX_MAKE(alpha[d], 0.0);
@@ -881,17 +1006,27 @@ void run_pusch_tdl_turbo_simulation(const L1Config *cfg) {
             }
             double env_dfe = mvar / (abar_safe*abar_safe);
             qam_demap_llr(y_dfe, nd, mcs.modulation, env_dfe, allllr);
-            memset(soft_buf, 0, acsz * sizeof(double));
-            nr_ldpc_rate_match_combine(soft_buf, acsz, ldpc.bg, ldpc.Zc,
-                                        ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                        /*rv=*/0, E, allllr);
-            ldpc_decode(&ldpc, soft_buf, 25, decoded);
-            int crc_dfe = check_crc(decoded, K, CRC24A);
-            int be_dfe=0;
-            for (int i=0;i<ml;i++) if (tb[i]!=decoded[i]) be_dfe++;
-            err_dfe  += be_dfe;
-            bits_dfe += tbsz;
-            if (!crc_dfe || be_dfe > 0) blk_dfe++;
+            {
+                int roff = 0;
+                int cb_crc_ok = 1;
+                for (int r = 0; r < seg.C; r++) {
+                    memset(soft_buf, 0, acsz * sizeof(double));
+                    nr_ldpc_rate_match_combine(soft_buf, acsz, ldpc.bg, ldpc.Zc,
+                                                ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                                /*rv=*/0, Er[r], allllr + roff);
+                    roff += Er[r];
+                    ldpc_decode(&ldpc, soft_buf, 25, decoded_cb);
+                    if (seg.C > 1 && !check_crc(decoded_cb, seg.Kprime, CRC24B))
+                        cb_crc_ok = 0;
+                    memcpy(decoded_tb_dfe + (size_t)r * payload, decoded_cb, payload * sizeof(int));
+                }
+                int crc_dfe = cb_crc_ok && check_crc(decoded_tb_dfe, B, CRC24A);
+                int be_dfe=0;
+                for (int i=0;i<tbsz;i++) if (tb[i]!=decoded_tb_dfe[i]) be_dfe++;
+                err_dfe  += be_dfe;
+                bits_dfe += tbsz;
+                if (!crc_dfe || be_dfe > 0) blk_dfe++;
+            }
 
             /* --- path 3: turbo equalization (soft PIC + LDPC extrinsic) ---
              * Correctness check (confirmed empirically, PUSCH_TURBO_ITERS=1
@@ -922,28 +1057,39 @@ void run_pusch_tdl_turbo_simulation(const L1Config *cfg) {
                     double var_n = mvar/(abar_safe*abar_safe) + leak/(abar_safe*abar_safe);
                     qam_demap_llr(&y_soft[n], 1, mcs.modulation, var_n, &allllr[n*bps]);
                 }
-                memset(soft_buf, 0, acsz * sizeof(double));
-                nr_ldpc_rate_match_combine(soft_buf, acsz, ldpc.bg, ldpc.Zc,
-                                            ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                            /*rv=*/0, E, allllr);
-
-                ldpc_decode_soft(&ldpc, soft_buf, 25, decoded, posterior);
-                crc_turbo = check_crc(decoded, K, CRC24A);
-                be_turbo = 0;
-                for (int i=0;i<ml;i++) if (tb[i]!=decoded[i]) be_turbo++;
-
-                if (iter < turbo_iters-1) {
-                    /* extrinsic over the full acsz domain (posterior minus what
-                     * the channel/rate-matching actually contributed this
-                     * iteration -- soft_buf is exactly that, 0 at positions
-                     * never transmitted), then re-select only the E
-                     * transmitted positions as next iteration's a priori
-                     * (mirrors nr_ldpc_rate_match_select() but for doubles --
-                     * see nr_ldpc_rate_match_select_soft()). */
-                    for (int i=0;i<acsz;i++) extrinsic[i] = posterior[i] - soft_buf[i];
-                    nr_ldpc_rate_match_select_soft(extrinsic, acsz, ldpc.bg, ldpc.Zc,
+                {
+                    int roff = 0;
+                    int cb_crc_ok = 1;
+                    for (int r = 0; r < seg.C; r++) {
+                        memset(soft_buf, 0, acsz * sizeof(double));
+                        nr_ldpc_rate_match_combine(soft_buf, acsz, ldpc.bg, ldpc.Zc,
                                                     ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                                    /*rv=*/0, E, apriori);
+                                                    /*rv=*/0, Er[r], allllr + roff);
+                        ldpc_decode_soft(&ldpc, soft_buf, 25, decoded_cb, posterior);
+                        if (iter == turbo_iters-1) {
+                            if (seg.C > 1 && !check_crc(decoded_cb, seg.Kprime, CRC24B))
+                                cb_crc_ok = 0;
+                            memcpy(decoded_tb_turbo + (size_t)r * payload, decoded_cb, payload * sizeof(int));
+                        } else {
+                            /* extrinsic over the full acsz domain (posterior minus what
+                             * the channel/rate-matching actually contributed this
+                             * iteration -- soft_buf is exactly that, 0 at positions
+                             * never transmitted), then re-select only this code
+                             * block's Er[r] transmitted positions as next iteration's
+                             * a priori slice (mirrors nr_ldpc_rate_match_select() but
+                             * for doubles -- see nr_ldpc_rate_match_select_soft()). */
+                            for (int i=0;i<acsz;i++) extrinsic[i] = posterior[i] - soft_buf[i];
+                            nr_ldpc_rate_match_select_soft(extrinsic, acsz, ldpc.bg, ldpc.Zc,
+                                                            ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                                            /*rv=*/0, Er[r], apriori + roff);
+                        }
+                        roff += Er[r];
+                    }
+                    if (iter == turbo_iters-1) {
+                        crc_turbo = cb_crc_ok && check_crc(decoded_tb_turbo, B, CRC24A);
+                        be_turbo = 0;
+                        for (int i=0;i<tbsz;i++) if (tb[i]!=decoded_tb_turbo[i]) be_turbo++;
+                    }
                 }
             }
             err_turbo  += be_turbo;
@@ -963,14 +1109,18 @@ void run_pusch_tdl_turbo_simulation(const L1Config *cfg) {
 
     ldpc_free(&ldpc);
     free(pilot_pos); free(data_pos); free(dmrs_sym);
-    free(tb); free(tb_crc); free(coded); free(selbits);
+    free(tb); free(tb_crc); free(cb_bits); free(coded);
+    for (int r = 0; r < seg.C; r++) free(rm[r]);
+    free(rm); free(Er); free(selbits);
     free(data_syms); free(precoded); free(tx_grid); free(rx_grid);
     free(rx_pilots); free(h_pilots); free(h_full);
     free(rx_data); free(h_data); free(eq_data);
     free(y_raw); free(demod_nodfe); free(x_hat0); free(y_dfe); free(y_soft);
     free(alpha_cx); free(g); free(E_x); free(Var_x); free(apriori); free(posterior);
     free(extrinsic); free(alpha);
-    free(allllr); free(soft_buf); free(decoded); free(bits_tmp); free(taps);
+    free(allllr); free(soft_buf); free(decoded_cb);
+    free(decoded_tb_nodfe); free(decoded_tb_dfe); free(decoded_tb_turbo);
+    free(bits_tmp); free(taps);
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -1005,11 +1155,25 @@ void run_pusch_harq_simulation(const L1Config *cfg) {
     int E    = num_data * bps;
     int tbsz = (int)(E * cr);
     if (tbsz < 1)    tbsz = 1;
-    if (tbsz > 8424) tbsz = 8424;
-    int K = tbsz + crc_bits;
 
-    LDPCCodec ldpc; ldpc_init(&ldpc, K, cr);
-    int ncb = ldpc.coded_size;
+    /* TS 38.212 5.2.2 code block segmentation (P0-2c, 2026-09-03) --
+     * see run_pusch_simulation() (this file) for the non-HARQ pattern.
+     * HARQ extension: seg.C persistent soft-combining buffers (one per
+     * code block), zeroed once per trial and accumulated across
+     * retransmission attempts -- whole-TB retransmit on any code
+     * block's CRC24B failure (no CBGTI/partial retransmission modeled,
+     * matches the design confirmed with the user 2026-09-03). */
+    int B = tbsz + crc_bits;
+    NRSegInfo seg;
+    nr_seg_compute(B, cr, &seg);
+    int payload = seg.Kprime - seg.L;
+    LDPCCodec ldpc;
+    ldpc_init_resolved(&ldpc, seg.Kprime, cr, seg.bg, seg.Zc, seg.Kb,
+                        seg.base_rows, seg.base_info_cols, seg.base_cols,
+                        seg.filler_size);
+    int acsz = ldpc.coded_size;
+    int *Er = (int *)malloc(seg.C * sizeof(int));
+    nr_ldpc_er_alloc(E, /*Nl=*/1, bps, seg.C, Er);
 
     int is_tdl    = (strcmp(cfg->channelModel, "TDL")         == 0);
     int is_flat   = (strcmp(cfg->channelModel, "FLAT_FADING") == 0);
@@ -1029,9 +1193,10 @@ void run_pusch_harq_simulation(const L1Config *cfg) {
     printf("Modulation   : %s (Qm=%d)\n", mcs.modulation, bps);
     printf("Target Rate  : %.4f\n", cr);
     printf("Mother Rate  : %.4f (Ncb=%d, actual NR LDPC BG%d/Zc=%d achieved rate)\n",
-           (double)K / ncb, ncb, ldpc.bg, ldpc.Zc);
+           (double)seg.Kprime / acsz, acsz, ldpc.bg, ldpc.Zc);
     printf("Num RB       : %d\n", num_rb);
     printf("TB Size      : %d bits\n", tbsz);
+    printf("Code Blocks  : C=%d%s\n", seg.C, seg.C > 1 ? " (CRC24B/CB)" : "");
     printf("Max Retx     : %d\n", max_retx);
     if (is_tdl)
         printf("Channel      : TDL (DS=%.0fns, %d taps), LS est.\n",
@@ -1040,10 +1205,15 @@ void run_pusch_harq_simulation(const L1Config *cfg) {
     printf("Trials/SNR   : %d\n\n", cfg->numTrials);
 
     int  *tb       = (int  *)malloc(tbsz     * sizeof(int));
-    int  *tb_crc   = (int  *)malloc(K        * sizeof(int));
-    int  *coded_full=(int  *)malloc(ncb      * sizeof(int));
+    int  *tb_crc   = (int  *)malloc(B        * sizeof(int));
+    int  *cb_bits  = (int  *)malloc((size_t)seg.C * seg.Kprime * sizeof(int));
+    int **coded_all= (int **)malloc(seg.C * sizeof(int *));
+    for (int r = 0; r < seg.C; r++) coded_all[r] = (int *)malloc(acsz * sizeof(int));
     int  *selbits  = (int  *)malloc(E        * sizeof(int));
-    int  *decoded  = (int  *)malloc(K        * sizeof(int));
+    int **rm       = (int **)malloc(seg.C * sizeof(int *));
+    for (int r = 0; r < seg.C; r++) rm[r] = (int *)malloc(Er[r] * sizeof(int));
+    int  *decoded_cb=(int  *)malloc(ldpc.info_size * sizeof(int));
+    int  *decoded_tb=(int  *)malloc(B        * sizeof(int));
     cx_t *data_syms= (cx_t *)malloc(num_data * sizeof(cx_t));
     cx_t *precoded = (cx_t *)malloc(num_data * sizeof(cx_t));
     cx_t *tx_grid  = (cx_t *)malloc(active   * sizeof(cx_t));
@@ -1056,7 +1226,8 @@ void run_pusch_harq_simulation(const L1Config *cfg) {
     cx_t *eq_data  = (cx_t *)malloc(num_data  * sizeof(cx_t));
     cx_t *descrambled=(cx_t*)malloc(num_data  * sizeof(cx_t));
     double *allllr = (double *)malloc(E   * sizeof(double));
-    double *soft_buf=(double *)malloc(ncb * sizeof(double));
+    double **soft_buf=(double **)malloc(seg.C * sizeof(double *));
+    for (int r = 0; r < seg.C; r++) soft_buf[r] = (double *)malloc(acsz * sizeof(double));
     double *alpha  = (double *)malloc(num_data * sizeof(double));
     cx_t   *taps   = (cx_t *)malloc(TDL_MAX_TAPS * sizeof(cx_t));
 
@@ -1080,8 +1251,11 @@ void run_pusch_harq_simulation(const L1Config *cfg) {
         for (int trial = 0; trial < cfg->numTrials; trial++) {
             gen_random_bits(tb, tbsz);
             attach_crc(tb, tbsz, CRC24A, tb_crc);
-            ldpc_encode(&ldpc, tb_crc, coded_full);
-            for (int i = 0; i < ncb; i++) soft_buf[i] = 0.0;
+            nr_seg_split(tb_crc, &seg, cb_bits);
+            for (int r = 0; r < seg.C; r++)
+                ldpc_encode(&ldpc, cb_bits + (size_t)r * seg.Kprime, coded_all[r]);
+            for (int r = 0; r < seg.C; r++)
+                for (int i = 0; i < acsz; i++) soft_buf[r][i] = 0.0;
 
             int crc_ok=0, be=0, be_1st=0, crc_1st=0;
             int attempts = 0;
@@ -1089,7 +1263,11 @@ void run_pusch_harq_simulation(const L1Config *cfg) {
             for (int attempt = 0; attempt < max_retx; attempt++) {
                 int rv = rvseq[attempt % rvseq_len];
 
-                nr_ldpc_rate_match_select(coded_full, ncb, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, E, selbits);
+                for (int r = 0; r < seg.C; r++)
+                    nr_ldpc_rate_match_select(coded_all[r], acsz, ldpc.bg, ldpc.Zc,
+                                               ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                               rv, Er[r], rm[r]);
+                nr_seg_concat(&seg, (const int *const *)rm, Er, selbits);
                 int nd = num_data;  /* E = nd * bps */
                 qam_modulate(selbits, E, mcs.modulation, data_syms);
 
@@ -1173,14 +1351,22 @@ void run_pusch_harq_simulation(const L1Config *cfg) {
                 if (env >= 0.0)
                     qam_demap_llr(demod_in, nd, mcs.modulation, env, allllr);
 
-                nr_ldpc_rate_match_combine(soft_buf, ncb, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, E, allllr);
-                ldpc_decode(&ldpc, soft_buf, 25, decoded);
-                crc_ok = check_crc(decoded, K, CRC24A);
+                int roff = 0;
+                int cb_crc_ok = 1;
+                for (int r = 0; r < seg.C; r++) {
+                    nr_ldpc_rate_match_combine(soft_buf[r], acsz, ldpc.bg, ldpc.Zc,
+                                                ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                                rv, Er[r], allllr + roff);
+                    roff += Er[r];
+                    ldpc_decode(&ldpc, soft_buf[r], 25, decoded_cb);
+                    if (seg.C > 1 && !check_crc(decoded_cb, seg.Kprime, CRC24B))
+                        cb_crc_ok = 0;
+                    memcpy(decoded_tb + (size_t)r * payload, decoded_cb, payload * sizeof(int));
+                }
+                crc_ok = cb_crc_ok && check_crc(decoded_tb, B, CRC24A);
 
-                int ml = tbsz < ldpc.info_size - crc_bits ? tbsz : ldpc.info_size - crc_bits;
-                if (ml < 0) ml = 0;
                 be = 0;
-                for (int i = 0; i < ml; i++) if (tb[i] != decoded[i]) be++;
+                for (int i = 0; i < tbsz; i++) if (tb[i] != decoded_tb[i]) be++;
 
                 if (attempt == 0) { be_1st = be; crc_1st = crc_ok; }
                 attempts = attempt + 1;
@@ -1204,11 +1390,14 @@ void run_pusch_harq_simulation(const L1Config *cfg) {
 
     ldpc_free(&ldpc);
     free(pilot_pos); free(data_pos); free(dmrs_sym);
-    free(tb); free(tb_crc); free(coded_full); free(selbits); free(decoded);
+    free(tb); free(tb_crc); free(cb_bits);
+    for (int r = 0; r < seg.C; r++) { free(coded_all[r]); free(rm[r]); free(soft_buf[r]); }
+    free(coded_all); free(rm); free(soft_buf); free(Er);
+    free(selbits); free(decoded_cb); free(decoded_tb);
     free(data_syms); free(precoded); free(tx_grid); free(rx_grid);
     free(rx_pilots); free(h_pilots); free(h_full);
     free(rx_data); free(h_data); free(eq_data); free(descrambled);
-    free(allllr); free(soft_buf); free(alpha); free(taps);
+    free(allllr); free(alpha); free(taps);
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -1261,13 +1450,23 @@ void run_pusch_sm2x2_simulation(const L1Config *cfg) {
     int max_dbits = num_data * bps;
     int tbsz = (int)(max_dbits * cr);
     if (tbsz < 1) tbsz = 1;
-    if (tbsz > 8424) tbsz = 8424;
 
-    int K = tbsz + crc_bits;
-    LDPCCodec ldpc; ldpc_init(&ldpc, K, cr);
+    /* TS 38.212 5.2.2 code block segmentation (P0-2c, 2026-09-03) --
+     * see run_pdsch_simulation() (pdsch.c) for the pattern this mirrors. */
+    int B = tbsz + crc_bits;
+    NRSegInfo seg;
+    nr_seg_compute(B, cr, &seg);
+    int payload = seg.Kprime - seg.L;
+    int K = B;   /* legacy name kept below for filler/print-only uses */
+    LDPCCodec ldpc;
+    ldpc_init_resolved(&ldpc, seg.Kprime, cr, seg.bg, seg.Zc, seg.Kb,
+                        seg.base_rows, seg.base_info_cols, seg.base_cols,
+                        seg.filler_size);
     int acsz = ldpc.coded_size;
-    int E    = num_data * bps;   /* TS 38.212 5.4.2.1 rate-matched output length
-                                     (C=1, single code block -- E=G exactly) */
+    int E    = num_data * bps;   /* TS 38.212 5.4.2.1 total rate-matched
+                                     output length G, per codeword */
+    int *Er = (int *)malloc(seg.C * sizeof(int));
+    nr_ldpc_er_alloc(E, /*Nl=*/1, bps, seg.C, Er);
 
     int use_mmse = (strcmp(cfg->equalizer,"MMSE")==0);
 
@@ -1286,7 +1485,11 @@ void run_pusch_sm2x2_simulation(const L1Config *cfg) {
 
     int *tbA=(int*)malloc(tbsz*sizeof(int)), *tbB=(int*)malloc(tbsz*sizeof(int));
     int *tb_crcA=(int*)malloc(K*sizeof(int)), *tb_crcB=(int*)malloc(K*sizeof(int));
+    int *cb_bitsA=(int*)malloc((size_t)seg.C*seg.Kprime*sizeof(int));
+    int *cb_bitsB=(int*)malloc((size_t)seg.C*seg.Kprime*sizeof(int));
     int *codedA=(int*)malloc(acsz*sizeof(int)), *codedB=(int*)malloc(acsz*sizeof(int));
+    int **rmA=(int**)malloc(seg.C*sizeof(int*)), **rmB=(int**)malloc(seg.C*sizeof(int*));
+    for (int r=0;r<seg.C;r++) { rmA[r]=(int*)malloc(Er[r]*sizeof(int)); rmB[r]=(int*)malloc(Er[r]*sizeof(int)); }
     int *selbitsA=(int*)malloc(E*sizeof(int)), *selbitsB=(int*)malloc(E*sizeof(int));
     cx_t *symsA=(cx_t*)malloc(num_data*sizeof(cx_t)), *symsB=(cx_t*)malloc(num_data*sizeof(cx_t));
     cx_t *tx_grid0=(cx_t*)malloc(active*sizeof(cx_t)), *tx_grid1=(cx_t*)malloc(active*sizeof(cx_t));
@@ -1294,7 +1497,8 @@ void run_pusch_sm2x2_simulation(const L1Config *cfg) {
     cx_t *x_hatA=(cx_t*)malloc(num_data*sizeof(cx_t)), *x_hatB=(cx_t*)malloc(num_data*sizeof(cx_t));
     double *allllrA=(double*)malloc(E*sizeof(double)), *allllrB=(double*)malloc(E*sizeof(double));
     double *soft_bufA=(double*)malloc(acsz*sizeof(double)), *soft_bufB=(double*)malloc(acsz*sizeof(double));
-    int *decodedA=(int*)malloc(K*sizeof(int)), *decodedB=(int*)malloc(K*sizeof(int));
+    int *decoded_cb=(int*)malloc(ldpc.info_size*sizeof(int));
+    int *decoded_tbA=(int*)malloc(B*sizeof(int)), *decoded_tbB=(int*)malloc(B*sizeof(int));
 
     printf("%12s%15s%15s\n", "SNR (dB)", "BER", "BLER");
     for (int i=0;i<42;i++) printf("-");
@@ -1310,14 +1514,20 @@ void run_pusch_sm2x2_simulation(const L1Config *cfg) {
             gen_random_bits(tbA, tbsz); gen_random_bits(tbB, tbsz);
             attach_crc(tbA, tbsz, CRC24A, tb_crcA);
             attach_crc(tbB, tbsz, CRC24A, tb_crcB);
-            ldpc_encode(&ldpc, tb_crcA, codedA);
-            ldpc_encode(&ldpc, tb_crcB, codedB);
-            nr_ldpc_rate_match_select(codedA, acsz, ldpc.bg, ldpc.Zc,
-                                       ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                       /*rv=*/0, E, selbitsA);
-            nr_ldpc_rate_match_select(codedB, acsz, ldpc.bg, ldpc.Zc,
-                                       ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                       /*rv=*/0, E, selbitsB);
+            nr_seg_split(tb_crcA, &seg, cb_bitsA);
+            nr_seg_split(tb_crcB, &seg, cb_bitsB);
+            for (int r = 0; r < seg.C; r++) {
+                ldpc_encode(&ldpc, cb_bitsA + (size_t)r*seg.Kprime, codedA);
+                nr_ldpc_rate_match_select(codedA, acsz, ldpc.bg, ldpc.Zc,
+                                           ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                           /*rv=*/0, Er[r], rmA[r]);
+                ldpc_encode(&ldpc, cb_bitsB + (size_t)r*seg.Kprime, codedB);
+                nr_ldpc_rate_match_select(codedB, acsz, ldpc.bg, ldpc.Zc,
+                                           ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                           /*rv=*/0, Er[r], rmB[r]);
+            }
+            nr_seg_concat(&seg, (const int *const *)rmA, Er, selbitsA);
+            nr_seg_concat(&seg, (const int *const *)rmB, Er, selbitsB);
             qam_modulate(selbitsA, E, mcs.modulation, symsA);
             qam_modulate(selbitsB, E, mcs.modulation, symsB);
 
@@ -1359,25 +1569,33 @@ void run_pusch_sm2x2_simulation(const L1Config *cfg) {
 
             qam_demap_llr(x_hatA, num_data, mcs.modulation, envA, allllrA);
             qam_demap_llr(x_hatB, num_data, mcs.modulation, envB, allllrB);
-            memset(soft_bufA, 0, acsz*sizeof(double));
-            memset(soft_bufB, 0, acsz*sizeof(double));
-            nr_ldpc_rate_match_combine(soft_bufA, acsz, ldpc.bg, ldpc.Zc,
-                                        ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                        /*rv=*/0, E, allllrA);
-            nr_ldpc_rate_match_combine(soft_bufB, acsz, ldpc.bg, ldpc.Zc,
-                                        ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                        /*rv=*/0, E, allllrB);
+            int roffA = 0, roffB = 0;
+            int cb_crc_okA = 1, cb_crc_okB = 1;
+            for (int r = 0; r < seg.C; r++) {
+                memset(soft_bufA, 0, acsz*sizeof(double));
+                nr_ldpc_rate_match_combine(soft_bufA, acsz, ldpc.bg, ldpc.Zc,
+                                            ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                            /*rv=*/0, Er[r], allllrA + roffA);
+                roffA += Er[r];
+                ldpc_decode(&ldpc, soft_bufA, 25, decoded_cb);
+                if (seg.C > 1 && !check_crc(decoded_cb, seg.Kprime, CRC24B)) cb_crc_okA = 0;
+                memcpy(decoded_tbA + (size_t)r*payload, decoded_cb, payload*sizeof(int));
 
-            ldpc_decode(&ldpc, soft_bufA, 25, decodedA);
-            ldpc_decode(&ldpc, soft_bufB, 25, decodedB);
-            int crcA_ok = check_crc(decodedA, K, CRC24A);
-            int crcB_ok = check_crc(decodedB, K, CRC24A);
-            int ml = tbsz < ldpc.info_size-crc_bits ? tbsz : ldpc.info_size-crc_bits;
-            if (ml<0) ml=0;
+                memset(soft_bufB, 0, acsz*sizeof(double));
+                nr_ldpc_rate_match_combine(soft_bufB, acsz, ldpc.bg, ldpc.Zc,
+                                            ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                            /*rv=*/0, Er[r], allllrB + roffB);
+                roffB += Er[r];
+                ldpc_decode(&ldpc, soft_bufB, 25, decoded_cb);
+                if (seg.C > 1 && !check_crc(decoded_cb, seg.Kprime, CRC24B)) cb_crc_okB = 0;
+                memcpy(decoded_tbB + (size_t)r*payload, decoded_cb, payload*sizeof(int));
+            }
+            int crcA_ok = cb_crc_okA && check_crc(decoded_tbA, B, CRC24A);
+            int crcB_ok = cb_crc_okB && check_crc(decoded_tbB, B, CRC24A);
             int beA=0, beB=0;
-            for (int i=0;i<ml;i++) {
-                if (tbA[i]!=decodedA[i]) beA++;
-                if (tbB[i]!=decodedB[i]) beB++;
+            for (int i=0;i<tbsz;i++) {
+                if (tbA[i]!=decoded_tbA[i]) beA++;
+                if (tbB[i]!=decoded_tbB[i]) beB++;
             }
             total_err  += beA + beB;
             total_bits += 2*tbsz;
@@ -1393,11 +1611,13 @@ void run_pusch_sm2x2_simulation(const L1Config *cfg) {
     free(pilot_pos); free(data_pos); free(pilotA); free(pilotB);
     free(dmrsA); free(dmrsB);
     free(tbA); free(tbB); free(tb_crcA); free(tb_crcB);
-    free(codedA); free(codedB); free(selbitsA); free(selbitsB);
+    free(cb_bitsA); free(cb_bitsB); free(codedA); free(codedB);
+    for (int r = 0; r < seg.C; r++) { free(rmA[r]); free(rmB[r]); }
+    free(rmA); free(rmB); free(Er); free(selbitsA); free(selbitsB);
     free(symsA); free(symsB); free(tx_grid0); free(tx_grid1);
     free(rx_grid0); free(rx_grid1); free(x_hatA); free(x_hatB);
     free(allllrA); free(allllrB); free(soft_bufA); free(soft_bufB);
-    free(decodedA); free(decodedB);
+    free(decoded_cb); free(decoded_tbA); free(decoded_tbB);
 }
 
 /* UL SM_2X2, 주파수선택적 TDL — `run_pdsch_sm2x2_tdl_simulation()`과 완전히
@@ -1433,13 +1653,23 @@ void run_pusch_sm2x2_tdl_simulation(const L1Config *cfg) {
     int max_dbits = num_data * bps;
     int tbsz = (int)(max_dbits * cr);
     if (tbsz < 1) tbsz = 1;
-    if (tbsz > 8424) tbsz = 8424;
 
-    int K = tbsz + crc_bits;
-    LDPCCodec ldpc; ldpc_init(&ldpc, K, cr);
+    /* TS 38.212 5.2.2 code block segmentation (P0-2c, 2026-09-03) --
+     * see run_pdsch_simulation() (pdsch.c) for the pattern this mirrors. */
+    int B = tbsz + crc_bits;
+    NRSegInfo seg;
+    nr_seg_compute(B, cr, &seg);
+    int payload = seg.Kprime - seg.L;
+    int K = B;   /* legacy name kept below for filler/print-only uses */
+    LDPCCodec ldpc;
+    ldpc_init_resolved(&ldpc, seg.Kprime, cr, seg.bg, seg.Zc, seg.Kb,
+                        seg.base_rows, seg.base_info_cols, seg.base_cols,
+                        seg.filler_size);
     int acsz = ldpc.coded_size;
-    int E    = num_data * bps;   /* TS 38.212 5.4.2.1 rate-matched output length
-                                     (C=1, single code block -- E=G exactly) */
+    int E    = num_data * bps;   /* TS 38.212 5.4.2.1 total rate-matched
+                                     output length G, per codeword */
+    int *Er = (int *)malloc(seg.C * sizeof(int));
+    nr_ldpc_er_alloc(E, /*Nl=*/1, bps, seg.C, Er);
 
     int use_mmse = (strcmp(cfg->equalizer,"MMSE")==0);
     double scs_hz = (double)cfg->scsKHz * 1000.0;
@@ -1461,7 +1691,11 @@ void run_pusch_sm2x2_tdl_simulation(const L1Config *cfg) {
 
     int *tbA=(int*)malloc(tbsz*sizeof(int)), *tbB=(int*)malloc(tbsz*sizeof(int));
     int *tb_crcA=(int*)malloc(K*sizeof(int)), *tb_crcB=(int*)malloc(K*sizeof(int));
+    int *cb_bitsA=(int*)malloc((size_t)seg.C*seg.Kprime*sizeof(int));
+    int *cb_bitsB=(int*)malloc((size_t)seg.C*seg.Kprime*sizeof(int));
     int *codedA=(int*)malloc(acsz*sizeof(int)), *codedB=(int*)malloc(acsz*sizeof(int));
+    int **rmA=(int**)malloc(seg.C*sizeof(int*)), **rmB=(int**)malloc(seg.C*sizeof(int*));
+    for (int r=0;r<seg.C;r++) { rmA[r]=(int*)malloc(Er[r]*sizeof(int)); rmB[r]=(int*)malloc(Er[r]*sizeof(int)); }
     int *selbitsA=(int*)malloc(E*sizeof(int)), *selbitsB=(int*)malloc(E*sizeof(int));
     cx_t *symsA=(cx_t*)malloc(num_data*sizeof(cx_t)), *symsB=(cx_t*)malloc(num_data*sizeof(cx_t));
     cx_t *tx_grid0=(cx_t*)malloc(active*sizeof(cx_t)), *tx_grid1=(cx_t*)malloc(active*sizeof(cx_t));
@@ -1469,7 +1703,8 @@ void run_pusch_sm2x2_tdl_simulation(const L1Config *cfg) {
     cx_t *x_hatA=(cx_t*)malloc(num_data*sizeof(cx_t)), *x_hatB=(cx_t*)malloc(num_data*sizeof(cx_t));
     double *allllrA=(double*)malloc(E*sizeof(double)), *allllrB=(double*)malloc(E*sizeof(double));
     double *soft_bufA=(double*)malloc(acsz*sizeof(double)), *soft_bufB=(double*)malloc(acsz*sizeof(double));
-    int *decodedA=(int*)malloc(K*sizeof(int)), *decodedB=(int*)malloc(K*sizeof(int));
+    int *decoded_cb=(int*)malloc(ldpc.info_size*sizeof(int));
+    int *decoded_tbA=(int*)malloc(B*sizeof(int)), *decoded_tbB=(int*)malloc(B*sizeof(int));
 
     cx_t *rx_pilotsA0=(cx_t*)malloc(nppl*sizeof(cx_t)), *rx_pilotsA1=(cx_t*)malloc(nppl*sizeof(cx_t));
     cx_t *rx_pilotsB0=(cx_t*)malloc(nppl*sizeof(cx_t)), *rx_pilotsB1=(cx_t*)malloc(nppl*sizeof(cx_t));
@@ -1496,14 +1731,20 @@ void run_pusch_sm2x2_tdl_simulation(const L1Config *cfg) {
             gen_random_bits(tbA, tbsz); gen_random_bits(tbB, tbsz);
             attach_crc(tbA, tbsz, CRC24A, tb_crcA);
             attach_crc(tbB, tbsz, CRC24A, tb_crcB);
-            ldpc_encode(&ldpc, tb_crcA, codedA);
-            ldpc_encode(&ldpc, tb_crcB, codedB);
-            nr_ldpc_rate_match_select(codedA, acsz, ldpc.bg, ldpc.Zc,
-                                       ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                       /*rv=*/0, E, selbitsA);
-            nr_ldpc_rate_match_select(codedB, acsz, ldpc.bg, ldpc.Zc,
-                                       ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                       /*rv=*/0, E, selbitsB);
+            nr_seg_split(tb_crcA, &seg, cb_bitsA);
+            nr_seg_split(tb_crcB, &seg, cb_bitsB);
+            for (int r = 0; r < seg.C; r++) {
+                ldpc_encode(&ldpc, cb_bitsA + (size_t)r*seg.Kprime, codedA);
+                nr_ldpc_rate_match_select(codedA, acsz, ldpc.bg, ldpc.Zc,
+                                           ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                           /*rv=*/0, Er[r], rmA[r]);
+                ldpc_encode(&ldpc, cb_bitsB + (size_t)r*seg.Kprime, codedB);
+                nr_ldpc_rate_match_select(codedB, acsz, ldpc.bg, ldpc.Zc,
+                                           ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                           /*rv=*/0, Er[r], rmB[r]);
+            }
+            nr_seg_concat(&seg, (const int *const *)rmA, Er, selbitsA);
+            nr_seg_concat(&seg, (const int *const *)rmB, Er, selbitsB);
             qam_modulate(selbitsA, E, mcs.modulation, symsA);
             qam_modulate(selbitsB, E, mcs.modulation, symsB);
 
@@ -1555,25 +1796,33 @@ void run_pusch_sm2x2_tdl_simulation(const L1Config *cfg) {
 
             qam_demap_llr(x_hatA, num_data, mcs.modulation, envA, allllrA);
             qam_demap_llr(x_hatB, num_data, mcs.modulation, envB, allllrB);
-            memset(soft_bufA, 0, acsz*sizeof(double));
-            memset(soft_bufB, 0, acsz*sizeof(double));
-            nr_ldpc_rate_match_combine(soft_bufA, acsz, ldpc.bg, ldpc.Zc,
-                                        ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                        /*rv=*/0, E, allllrA);
-            nr_ldpc_rate_match_combine(soft_bufB, acsz, ldpc.bg, ldpc.Zc,
-                                        ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                        /*rv=*/0, E, allllrB);
+            int roffA = 0, roffB = 0;
+            int cb_crc_okA = 1, cb_crc_okB = 1;
+            for (int r = 0; r < seg.C; r++) {
+                memset(soft_bufA, 0, acsz*sizeof(double));
+                nr_ldpc_rate_match_combine(soft_bufA, acsz, ldpc.bg, ldpc.Zc,
+                                            ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                            /*rv=*/0, Er[r], allllrA + roffA);
+                roffA += Er[r];
+                ldpc_decode(&ldpc, soft_bufA, 25, decoded_cb);
+                if (seg.C > 1 && !check_crc(decoded_cb, seg.Kprime, CRC24B)) cb_crc_okA = 0;
+                memcpy(decoded_tbA + (size_t)r*payload, decoded_cb, payload*sizeof(int));
 
-            ldpc_decode(&ldpc, soft_bufA, 25, decodedA);
-            ldpc_decode(&ldpc, soft_bufB, 25, decodedB);
-            int crcA_ok = check_crc(decodedA, K, CRC24A);
-            int crcB_ok = check_crc(decodedB, K, CRC24A);
-            int ml = tbsz < ldpc.info_size-crc_bits ? tbsz : ldpc.info_size-crc_bits;
-            if (ml<0) ml=0;
+                memset(soft_bufB, 0, acsz*sizeof(double));
+                nr_ldpc_rate_match_combine(soft_bufB, acsz, ldpc.bg, ldpc.Zc,
+                                            ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                            /*rv=*/0, Er[r], allllrB + roffB);
+                roffB += Er[r];
+                ldpc_decode(&ldpc, soft_bufB, 25, decoded_cb);
+                if (seg.C > 1 && !check_crc(decoded_cb, seg.Kprime, CRC24B)) cb_crc_okB = 0;
+                memcpy(decoded_tbB + (size_t)r*payload, decoded_cb, payload*sizeof(int));
+            }
+            int crcA_ok = cb_crc_okA && check_crc(decoded_tbA, B, CRC24A);
+            int crcB_ok = cb_crc_okB && check_crc(decoded_tbB, B, CRC24A);
             int beA=0, beB=0;
-            for (int i=0;i<ml;i++) {
-                if (tbA[i]!=decodedA[i]) beA++;
-                if (tbB[i]!=decodedB[i]) beB++;
+            for (int i=0;i<tbsz;i++) {
+                if (tbA[i]!=decoded_tbA[i]) beA++;
+                if (tbB[i]!=decoded_tbB[i]) beB++;
             }
             total_err  += beA + beB;
             total_bits += 2*tbsz;
@@ -1589,11 +1838,13 @@ void run_pusch_sm2x2_tdl_simulation(const L1Config *cfg) {
     free(pilot_pos); free(data_pos); free(pilotA); free(pilotB);
     free(dmrsA); free(dmrsB);
     free(tbA); free(tbB); free(tb_crcA); free(tb_crcB);
-    free(codedA); free(codedB); free(selbitsA); free(selbitsB);
+    free(cb_bitsA); free(cb_bitsB); free(codedA); free(codedB);
+    for (int r = 0; r < seg.C; r++) { free(rmA[r]); free(rmB[r]); }
+    free(rmA); free(rmB); free(Er); free(selbitsA); free(selbitsB);
     free(symsA); free(symsB); free(tx_grid0); free(tx_grid1);
     free(rx_grid0); free(rx_grid1); free(x_hatA); free(x_hatB);
     free(allllrA); free(allllrB); free(soft_bufA); free(soft_bufB);
-    free(decodedA); free(decodedB);
+    free(decoded_cb); free(decoded_tbA); free(decoded_tbB);
     free(rx_pilotsA0); free(rx_pilotsA1); free(rx_pilotsB0); free(rx_pilotsB1);
     free(h_pilots00); free(h_pilots10); free(h_pilots01); free(h_pilots11);
     free(h00_full); free(h10_full); free(h01_full); free(h11_full);
@@ -1643,11 +1894,25 @@ void run_pusch_sm2x2_tdl_harq_simulation(const L1Config *cfg) {
     int max_dbits = E;
     int tbsz = (int)(max_dbits * cr);
     if (tbsz < 1) tbsz = 1;
-    if (tbsz > 8424) tbsz = 8424;
 
-    int K = tbsz + crc_bits;
-    LDPCCodec ldpc; ldpc_init(&ldpc, K, cr);
-    int ncb = ldpc.coded_size;
+    /* TS 38.212 5.2.2 code block segmentation (P0-2c, 2026-09-03) --
+     * both independent codewords (A/B) share tbsz/cr so they share one
+     * NRSegInfo/LDPCCodec; each gets its own seg.C code blocks and its
+     * own seg.C persistent HARQ soft-combining buffers. Whole-TB
+     * (both codewords, all code blocks) retransmit together on any
+     * failure -- see run_pusch_harq_simulation() for the same pattern
+     * applied to a single codeword. */
+    int B = tbsz + crc_bits;
+    NRSegInfo seg;
+    nr_seg_compute(B, cr, &seg);
+    int payload = seg.Kprime - seg.L;
+    LDPCCodec ldpc;
+    ldpc_init_resolved(&ldpc, seg.Kprime, cr, seg.bg, seg.Zc, seg.Kb,
+                        seg.base_rows, seg.base_info_cols, seg.base_cols,
+                        seg.filler_size);
+    int acsz = ldpc.coded_size;
+    int *Er = (int *)malloc(seg.C * sizeof(int));
+    nr_ldpc_er_alloc(E, /*Nl=*/1, bps, seg.C, Er);
 
     int use_mmse = (strcmp(cfg->equalizer,"MMSE")==0);
     double scs_hz = (double)cfg->scsKHz * 1000.0;
@@ -1663,11 +1928,12 @@ void run_pusch_sm2x2_tdl_harq_simulation(const L1Config *cfg) {
     printf("Modulation   : %s (Qm=%d)\n", mcs.modulation, bps);
     printf("Target Rate  : %.4f\n", cr);
     printf("Mother Rate  : %.4f (Ncb=%d, actual NR LDPC BG%d/Zc=%d achieved rate)\n",
-           (double)K / ncb, ncb, ldpc.bg, ldpc.Zc);
+           (double)seg.Kprime / acsz, acsz, ldpc.bg, ldpc.Zc);
     printf("Num RB       : %d\n", num_rb);
     printf("UE Layers    : 2 (independent codewords, shared retransmission occasion)\n");
     printf("gNB Rx Ant   : 2\n");
     printf("TB Size/layer: %d bits\n", tbsz);
+    printf("Code Blocks  : C=%d/codeword%s\n", seg.C, seg.C > 1 ? " (CRC24B/CB)" : "");
     printf("Max Retx     : %d\n", max_retx);
     printf("Waveform     : CP-OFDM (Transform Precoding은 다중 레이어 미지원, TS 38.211 6.3.1.4)\n");
     printf("Channel      : TDL per Tx-Rx antenna pair, redrawn every attempt (DS=%.0fns, %d taps)\n",
@@ -1677,16 +1943,23 @@ void run_pusch_sm2x2_tdl_harq_simulation(const L1Config *cfg) {
     printf("Trials/SNR   : %d\n\n", cfg->numTrials);
 
     int *tbA=(int*)malloc(tbsz*sizeof(int)), *tbB=(int*)malloc(tbsz*sizeof(int));
-    int *tb_crcA=(int*)malloc(K*sizeof(int)), *tb_crcB=(int*)malloc(K*sizeof(int));
-    int *coded_fullA=(int*)malloc(ncb*sizeof(int)), *coded_fullB=(int*)malloc(ncb*sizeof(int));
+    int *tb_crcA=(int*)malloc(B*sizeof(int)), *tb_crcB=(int*)malloc(B*sizeof(int));
+    int *cb_bitsA=(int*)malloc((size_t)seg.C*seg.Kprime*sizeof(int));
+    int *cb_bitsB=(int*)malloc((size_t)seg.C*seg.Kprime*sizeof(int));
+    int **coded_allA=(int**)malloc(seg.C*sizeof(int*)), **coded_allB=(int**)malloc(seg.C*sizeof(int*));
+    for (int r=0;r<seg.C;r++) { coded_allA[r]=(int*)malloc(acsz*sizeof(int)); coded_allB[r]=(int*)malloc(acsz*sizeof(int)); }
     int *selbitsA=(int*)malloc(E*sizeof(int)), *selbitsB=(int*)malloc(E*sizeof(int));
+    int **rmA=(int**)malloc(seg.C*sizeof(int*)), **rmB=(int**)malloc(seg.C*sizeof(int*));
+    for (int r=0;r<seg.C;r++) { rmA[r]=(int*)malloc(Er[r]*sizeof(int)); rmB[r]=(int*)malloc(Er[r]*sizeof(int)); }
     cx_t *data_symsA=(cx_t*)malloc(num_data*sizeof(cx_t)), *data_symsB=(cx_t*)malloc(num_data*sizeof(cx_t));
     cx_t *tx_grid0=(cx_t*)malloc(active*sizeof(cx_t)), *tx_grid1=(cx_t*)malloc(active*sizeof(cx_t));
     cx_t *rx_grid0=(cx_t*)malloc(active*sizeof(cx_t)), *rx_grid1=(cx_t*)malloc(active*sizeof(cx_t));
     cx_t *x_hatA=(cx_t*)malloc(num_data*sizeof(cx_t)), *x_hatB=(cx_t*)malloc(num_data*sizeof(cx_t));
     double *allllrA=(double*)malloc(E*sizeof(double)), *allllrB=(double*)malloc(E*sizeof(double));
-    double *soft_bufA=(double*)malloc(ncb*sizeof(double)), *soft_bufB=(double*)malloc(ncb*sizeof(double));
-    int *decodedA=(int*)malloc(K*sizeof(int)), *decodedB=(int*)malloc(K*sizeof(int));
+    double **soft_bufA=(double**)malloc(seg.C*sizeof(double*)), **soft_bufB=(double**)malloc(seg.C*sizeof(double*));
+    for (int r=0;r<seg.C;r++) { soft_bufA[r]=(double*)malloc(acsz*sizeof(double)); soft_bufB[r]=(double*)malloc(acsz*sizeof(double)); }
+    int *decoded_cbA=(int*)malloc(ldpc.info_size*sizeof(int)), *decoded_cbB=(int*)malloc(ldpc.info_size*sizeof(int));
+    int *decoded_tbA=(int*)malloc(B*sizeof(int)), *decoded_tbB=(int*)malloc(B*sizeof(int));
 
     cx_t *rx_pilotsA0=(cx_t*)malloc(nppl*sizeof(cx_t)), *rx_pilotsA1=(cx_t*)malloc(nppl*sizeof(cx_t));
     cx_t *rx_pilotsB0=(cx_t*)malloc(nppl*sizeof(cx_t)), *rx_pilotsB1=(cx_t*)malloc(nppl*sizeof(cx_t));
@@ -1714,18 +1987,27 @@ void run_pusch_sm2x2_tdl_harq_simulation(const L1Config *cfg) {
             gen_random_bits(tbA, tbsz); gen_random_bits(tbB, tbsz);
             attach_crc(tbA, tbsz, CRC24A, tb_crcA);
             attach_crc(tbB, tbsz, CRC24A, tb_crcB);
-            ldpc_encode(&ldpc, tb_crcA, coded_fullA);
-            ldpc_encode(&ldpc, tb_crcB, coded_fullB);
+            nr_seg_split(tb_crcA, &seg, cb_bitsA);
+            nr_seg_split(tb_crcB, &seg, cb_bitsB);
+            for (int r=0;r<seg.C;r++) {
+                ldpc_encode(&ldpc, cb_bitsA + (size_t)r*seg.Kprime, coded_allA[r]);
+                ldpc_encode(&ldpc, cb_bitsB + (size_t)r*seg.Kprime, coded_allB[r]);
+            }
 
-            for (int i=0;i<ncb;i++) { soft_bufA[i] = 0.0; soft_bufB[i] = 0.0; }
+            for (int r=0;r<seg.C;r++)
+                for (int i=0;i<acsz;i++) { soft_bufA[r][i] = 0.0; soft_bufB[r][i] = 0.0; }
 
             int crcA_ok=0, crcB_ok=0, beA=0, beB=0, attempts=0;
             int beA_1st=0, beB_1st=0, crcA_1st=0, crcB_1st=0;
 
             for (int attempt=0; attempt<max_retx; attempt++) {
                 int rv = rvseq[attempt % rvseq_len];
-                nr_ldpc_rate_match_select(coded_fullA, ncb, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, E, selbitsA);
-                nr_ldpc_rate_match_select(coded_fullB, ncb, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, E, selbitsB);
+                for (int r=0;r<seg.C;r++) {
+                    nr_ldpc_rate_match_select(coded_allA[r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], rmA[r]);
+                    nr_ldpc_rate_match_select(coded_allB[r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], rmB[r]);
+                }
+                nr_seg_concat(&seg, (const int *const *)rmA, Er, selbitsA);
+                nr_seg_concat(&seg, (const int *const *)rmB, Er, selbitsB);
                 qam_modulate(selbitsA, E, mcs.modulation, data_symsA);
                 qam_modulate(selbitsB, E, mcs.modulation, data_symsB);
 
@@ -1780,19 +2062,26 @@ void run_pusch_sm2x2_tdl_harq_simulation(const L1Config *cfg) {
                 qam_demap_llr(x_hatA, num_data, mcs.modulation, envA, allllrA);
                 qam_demap_llr(x_hatB, num_data, mcs.modulation, envB, allllrB);
 
-                nr_ldpc_rate_match_combine(soft_bufA, ncb, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, E, allllrA);
-                nr_ldpc_rate_match_combine(soft_bufB, ncb, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, E, allllrB);
-                ldpc_decode(&ldpc, soft_bufA, 25, decodedA);
-                ldpc_decode(&ldpc, soft_bufB, 25, decodedB);
-                crcA_ok = check_crc(decodedA, K, CRC24A);
-                crcB_ok = check_crc(decodedB, K, CRC24A);
+                int roffA = 0, roffB = 0;
+                int cbA_crc_ok = 1, cbB_crc_ok = 1;
+                for (int r=0;r<seg.C;r++) {
+                    nr_ldpc_rate_match_combine(soft_bufA[r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], allllrA + roffA);
+                    nr_ldpc_rate_match_combine(soft_bufB[r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], allllrB + roffB);
+                    roffA += Er[r]; roffB += Er[r];
+                    ldpc_decode(&ldpc, soft_bufA[r], 25, decoded_cbA);
+                    ldpc_decode(&ldpc, soft_bufB[r], 25, decoded_cbB);
+                    if (seg.C > 1 && !check_crc(decoded_cbA, seg.Kprime, CRC24B)) cbA_crc_ok = 0;
+                    if (seg.C > 1 && !check_crc(decoded_cbB, seg.Kprime, CRC24B)) cbB_crc_ok = 0;
+                    memcpy(decoded_tbA + (size_t)r*payload, decoded_cbA, payload*sizeof(int));
+                    memcpy(decoded_tbB + (size_t)r*payload, decoded_cbB, payload*sizeof(int));
+                }
+                crcA_ok = cbA_crc_ok && check_crc(decoded_tbA, B, CRC24A);
+                crcB_ok = cbB_crc_ok && check_crc(decoded_tbB, B, CRC24A);
 
-                int ml = tbsz < ldpc.info_size-crc_bits ? tbsz : ldpc.info_size-crc_bits;
-                if (ml<0) ml=0;
                 beA=0; beB=0;
-                for (int i=0;i<ml;i++) {
-                    if (tbA[i]!=decodedA[i]) beA++;
-                    if (tbB[i]!=decodedB[i]) beB++;
+                for (int i=0;i<tbsz;i++) {
+                    if (tbA[i]!=decoded_tbA[i]) beA++;
+                    if (tbB[i]!=decoded_tbB[i]) beB++;
                 }
 
                 if (attempt==0) {
@@ -1820,15 +2109,266 @@ void run_pusch_sm2x2_tdl_harq_simulation(const L1Config *cfg) {
     free(pilot_pos); free(data_pos); free(pilotA); free(pilotB);
     free(dmrsA); free(dmrsB);
     free(tbA); free(tbB); free(tb_crcA); free(tb_crcB);
-    free(coded_fullA); free(coded_fullB); free(selbitsA); free(selbitsB);
+    free(cb_bitsA); free(cb_bitsB);
+    for (int r=0;r<seg.C;r++) {
+        free(coded_allA[r]); free(coded_allB[r]);
+        free(rmA[r]); free(rmB[r]);
+        free(soft_bufA[r]); free(soft_bufB[r]);
+    }
+    free(coded_allA); free(coded_allB); free(rmA); free(rmB);
+    free(soft_bufA); free(soft_bufB); free(Er);
+    free(selbitsA); free(selbitsB);
     free(data_symsA); free(data_symsB); free(tx_grid0); free(tx_grid1);
     free(rx_grid0); free(rx_grid1); free(x_hatA); free(x_hatB);
-    free(allllrA); free(allllrB); free(soft_bufA); free(soft_bufB);
-    free(decodedA); free(decodedB);
+    free(allllrA); free(allllrB);
+    free(decoded_cbA); free(decoded_cbB); free(decoded_tbA); free(decoded_tbB);
     free(rx_pilotsA0); free(rx_pilotsA1); free(rx_pilotsB0); free(rx_pilotsB1);
     free(h_pilots00); free(h_pilots10); free(h_pilots01); free(h_pilots11);
     free(h00_full); free(h10_full); free(h01_full); free(h11_full);
     free(taps00); free(taps10); free(taps01); free(taps11);
+}
+
+/* UL SM_2X2, 평탄 페이딩 + HARQ — `run_pusch_sm2x2_tdl_harq_simulation()`과
+ * 동일한 다중 코드블록 HARQ 구조(코드워드 A/B 각각 seg.C개 영구
+ * soft-combining 버퍼, attempt마다 두 코드워드 모두 재전송)를 쓰되 채널만
+ * TDL 대신 위 `run_pusch_sm2x2_simulation()`의 평탄 2x2 MIMO 채널로 교체.
+ * attempt마다 채널을 새로 드로우한다 — flat+HARQ 조합의 기존 관례
+ * (`run_pdsch_mumimo_harq_simulation()`의 `is_tdl` 분기에서 flat일 때도
+ * `mumimo_channel_draw()`를 attempt 루프 안에서 매번 호출하는 것과 동일:
+ * "flat"은 RE 전체에 걸쳐 평탄하다는 뜻이지 재전송 간에도 고정이라는
+ * 뜻이 아님 — 이렇게 해야 HARQ가 시간 다이버시티 이득을 실제로 갖는다). */
+void run_pusch_sm2x2_harq_simulation(const L1Config *cfg) {
+    int num_rb   = cfg->numRB;
+    int active   = num_rb * 12;
+
+    MCSTableType tbl = mcs_table_from_str(cfg->mcsTableType);
+    MCSEntry mcs = get_mcs_entry(cfg->mcsIndex, tbl);
+    double cr    = get_code_rate(&mcs);
+    int    bps   = mcs.modulationOrder;
+    int    crc_bits = 24;
+
+    int num_pilots = 6 * num_rb;
+    int num_data   = 6 * num_rb;
+    int *pilot_pos = (int *)malloc(num_pilots * sizeof(int));
+    int *data_pos  = (int *)malloc(num_data   * sizeof(int));
+    dmrs_pilot_indices(num_rb, pilot_pos);
+    dmrs_data_indices(num_rb, data_pos);
+
+    int nppl = num_pilots / 2;
+    int *pilotA = (int *)malloc(nppl * sizeof(int));
+    int *pilotB = (int *)malloc(nppl * sizeof(int));
+    for (int i=0;i<nppl;i++) { pilotA[i] = pilot_pos[2*i]; pilotB[i] = pilot_pos[2*i+1]; }
+    cx_t *dmrsA = (cx_t *)malloc(nppl * sizeof(cx_t));
+    cx_t *dmrsB = (cx_t *)malloc(nppl * sizeof(cx_t));
+    dmrs_sequence(0x87654321u, nppl, dmrsA);
+    dmrs_sequence(0x87abcdefu, nppl, dmrsB);
+
+    int E = num_data * bps;
+    int max_dbits = E;
+    int tbsz = (int)(max_dbits * cr);
+    if (tbsz < 1) tbsz = 1;
+
+    /* TS 38.212 5.2.2 code block segmentation (P0-2c, 2026-09-03) --
+     * both independent codewords (A/B) share tbsz/cr so they share one
+     * NRSegInfo/LDPCCodec; each gets its own seg.C code blocks and its
+     * own seg.C persistent HARQ soft-combining buffers. Whole-TB (both
+     * codewords, all code blocks) retransmit together on any failure --
+     * see run_pusch_sm2x2_tdl_harq_simulation() for the same pattern. */
+    int B = tbsz + crc_bits;
+    NRSegInfo seg;
+    nr_seg_compute(B, cr, &seg);
+    int payload = seg.Kprime - seg.L;
+    LDPCCodec ldpc;
+    ldpc_init_resolved(&ldpc, seg.Kprime, cr, seg.bg, seg.Zc, seg.Kb,
+                        seg.base_rows, seg.base_info_cols, seg.base_cols,
+                        seg.filler_size);
+    int acsz = ldpc.coded_size;
+    int *Er = (int *)malloc(seg.C * sizeof(int));
+    nr_ldpc_er_alloc(E, /*Nl=*/1, bps, seg.C, Er);
+
+    int use_mmse = (strcmp(cfg->equalizer,"MMSE")==0);
+
+    int is_chase = (strcmp(cfg->harqRvSeq,"CHASE")==0);
+    int rvseq[4] = {0,2,3,1};
+    int rvseq_len = is_chase ? 1 : 4;
+    int max_retx = cfg->harqMaxRetx > 0 ? cfg->harqMaxRetx : 1;
+
+    printf("=== PUSCH 2x2 SU-MIMO (HARQ Circular Buffer %s, Uplink), Flat Fading ===\n",
+           is_chase ? "Chase" : "IR");
+    printf("MCS Index    : %d (Table %s)\n", cfg->mcsIndex, cfg->mcsTableType);
+    printf("Modulation   : %s (Qm=%d)\n", mcs.modulation, bps);
+    printf("Target Rate  : %.4f\n", cr);
+    printf("Mother Rate  : %.4f (Ncb=%d, actual NR LDPC BG%d/Zc=%d achieved rate)\n",
+           (double)seg.Kprime / acsz, acsz, ldpc.bg, ldpc.Zc);
+    printf("Num RB       : %d\n", num_rb);
+    printf("UE Layers    : 2 (independent codewords, shared retransmission occasion)\n");
+    printf("gNB Rx Ant   : 2\n");
+    printf("TB Size/layer: %d bits\n", tbsz);
+    printf("Code Blocks  : C=%d/codeword%s\n", seg.C, seg.C > 1 ? " (CRC24B/CB)" : "");
+    printf("Max Retx     : %d\n", max_retx);
+    printf("Waveform     : CP-OFDM (Transform Precoding은 다중 레이어 미지원, TS 38.211 6.3.1.4)\n");
+    printf("Channel      : Flat Rayleigh 2x2, redrawn every attempt\n");
+    printf("Detector     : %s with LS channel estimation (averaged, block-flat)\n",
+           use_mmse ? "MMSE" : "ZF");
+    printf("Trials/SNR   : %d\n\n", cfg->numTrials);
+
+    int *tbA=(int*)malloc(tbsz*sizeof(int)), *tbB=(int*)malloc(tbsz*sizeof(int));
+    int *tb_crcA=(int*)malloc(B*sizeof(int)), *tb_crcB=(int*)malloc(B*sizeof(int));
+    int *cb_bitsA=(int*)malloc((size_t)seg.C*seg.Kprime*sizeof(int));
+    int *cb_bitsB=(int*)malloc((size_t)seg.C*seg.Kprime*sizeof(int));
+    int **coded_allA=(int**)malloc(seg.C*sizeof(int*)), **coded_allB=(int**)malloc(seg.C*sizeof(int*));
+    for (int r=0;r<seg.C;r++) { coded_allA[r]=(int*)malloc(acsz*sizeof(int)); coded_allB[r]=(int*)malloc(acsz*sizeof(int)); }
+    int *selbitsA=(int*)malloc(E*sizeof(int)), *selbitsB=(int*)malloc(E*sizeof(int));
+    int **rmA=(int**)malloc(seg.C*sizeof(int*)), **rmB=(int**)malloc(seg.C*sizeof(int*));
+    for (int r=0;r<seg.C;r++) { rmA[r]=(int*)malloc(Er[r]*sizeof(int)); rmB[r]=(int*)malloc(Er[r]*sizeof(int)); }
+    cx_t *symsA=(cx_t*)malloc(num_data*sizeof(cx_t)), *symsB=(cx_t*)malloc(num_data*sizeof(cx_t));
+    cx_t *tx_grid0=(cx_t*)malloc(active*sizeof(cx_t)), *tx_grid1=(cx_t*)malloc(active*sizeof(cx_t));
+    cx_t *rx_grid0=(cx_t*)malloc(active*sizeof(cx_t)), *rx_grid1=(cx_t*)malloc(active*sizeof(cx_t));
+    cx_t *x_hatA=(cx_t*)malloc(num_data*sizeof(cx_t)), *x_hatB=(cx_t*)malloc(num_data*sizeof(cx_t));
+    double *allllrA=(double*)malloc(E*sizeof(double)), *allllrB=(double*)malloc(E*sizeof(double));
+    double **soft_bufA=(double**)malloc(seg.C*sizeof(double*)), **soft_bufB=(double**)malloc(seg.C*sizeof(double*));
+    for (int r=0;r<seg.C;r++) { soft_bufA[r]=(double*)malloc(acsz*sizeof(double)); soft_bufB[r]=(double*)malloc(acsz*sizeof(double)); }
+    int *decoded_cbA=(int*)malloc(ldpc.info_size*sizeof(int)), *decoded_cbB=(int*)malloc(ldpc.info_size*sizeof(int));
+    int *decoded_tbA=(int*)malloc(B*sizeof(int)), *decoded_tbB=(int*)malloc(B*sizeof(int));
+
+    printf("%10s%14s%14s%14s%12s\n", "SNR(dB)", "BER(final)", "BLER(1st)", "BLER(HARQ)", "AvgTx");
+    for (int i=0;i<64;i++) printf("-");
+    printf("\n");
+
+    MIMOChannel mch;
+    for (double snr=cfg->snrStart; snr<=cfg->snrEnd+1e-6; snr+=cfg->snrStep) {
+        mimo_channel_init(&mch, snr);
+        double N0 = 1.0 / pow(10.0, snr/10.0);
+        int total_err=0, total_bits=0, blk_err_final=0, blk_err_1st=0;
+        long long total_attempts=0;
+
+        for (int trial=0; trial<cfg->numTrials; trial++) {
+            gen_random_bits(tbA, tbsz); gen_random_bits(tbB, tbsz);
+            attach_crc(tbA, tbsz, CRC24A, tb_crcA);
+            attach_crc(tbB, tbsz, CRC24A, tb_crcB);
+            nr_seg_split(tb_crcA, &seg, cb_bitsA);
+            nr_seg_split(tb_crcB, &seg, cb_bitsB);
+            for (int r=0;r<seg.C;r++) {
+                ldpc_encode(&ldpc, cb_bitsA + (size_t)r*seg.Kprime, coded_allA[r]);
+                ldpc_encode(&ldpc, cb_bitsB + (size_t)r*seg.Kprime, coded_allB[r]);
+            }
+
+            for (int r=0;r<seg.C;r++)
+                for (int i=0;i<acsz;i++) { soft_bufA[r][i] = 0.0; soft_bufB[r][i] = 0.0; }
+
+            int crcA_ok=0, crcB_ok=0, beA=0, beB=0, attempts=0;
+            int beA_1st=0, beB_1st=0, crcA_1st=0, crcB_1st=0;
+
+            for (int attempt=0; attempt<max_retx; attempt++) {
+                int rv = rvseq[attempt % rvseq_len];
+                for (int r=0;r<seg.C;r++) {
+                    nr_ldpc_rate_match_select(coded_allA[r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], rmA[r]);
+                    nr_ldpc_rate_match_select(coded_allB[r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], rmB[r]);
+                }
+                nr_seg_concat(&seg, (const int *const *)rmA, Er, selbitsA);
+                nr_seg_concat(&seg, (const int *const *)rmB, Er, selbitsB);
+                qam_modulate(selbitsA, E, mcs.modulation, symsA);
+                qam_modulate(selbitsB, E, mcs.modulation, symsB);
+
+                for (int k=0;k<active;k++) { tx_grid0[k]=CX_ZERO; tx_grid1[k]=CX_ZERO; }
+                for (int p=0;p<nppl;p++) { tx_grid0[pilotA[p]] = dmrsA[p]; tx_grid1[pilotB[p]] = dmrsB[p]; }
+                for (int d=0;d<num_data;d++) { tx_grid0[data_pos[d]] = symsA[d]; tx_grid1[data_pos[d]] = symsB[d]; }
+
+                cx_t h[2][2];
+                mimo_channel_draw_2x2(h);   /* attempt마다 재드로우 -- HARQ 시간 다이버시티 */
+                for (int k=0;k<active;k++) {
+                    cx_t tx[2] = { tx_grid0[k], tx_grid1[k] };
+                    cx_t y[2];
+                    mimo_channel_apply_2x2(&mch, h, tx, y);
+                    rx_grid0[k] = y[0]; rx_grid1[k] = y[1];
+                }
+
+                cx_t h00s=CX_ZERO, h10s=CX_ZERO, h01s=CX_ZERO, h11s=CX_ZERO;
+                for (int p=0;p<nppl;p++) {
+                    h00s += rx_grid0[pilotA[p]] / dmrsA[p];
+                    h10s += rx_grid1[pilotA[p]] / dmrsA[p];
+                    h01s += rx_grid0[pilotB[p]] / dmrsB[p];
+                    h11s += rx_grid1[pilotB[p]] / dmrsB[p];
+                }
+                cx_t h_hat[2][2] = {
+                    { h00s / nppl, h01s / nppl },
+                    { h10s / nppl, h11s / nppl }
+                };
+
+                double nvA_sum=0.0, nvB_sum=0.0;
+                for (int d=0;d<num_data;d++) {
+                    cx_t y[2] = { rx_grid0[data_pos[d]], rx_grid1[data_pos[d]] };
+                    cx_t xh[2]; double nv[2];
+                    if (use_mmse) mimo_mmse_detect(h_hat, y, N0, xh, nv);
+                    else          mimo_zf_detect  (h_hat, y, N0, xh, nv);
+                    x_hatA[d] = xh[0]; x_hatB[d] = xh[1];
+                    nvA_sum += nv[0]; nvB_sum += nv[1];
+                }
+                double envA = nvA_sum / num_data, envB = nvB_sum / num_data;
+
+                qam_demap_llr(x_hatA, num_data, mcs.modulation, envA, allllrA);
+                qam_demap_llr(x_hatB, num_data, mcs.modulation, envB, allllrB);
+
+                int roffA = 0, roffB = 0;
+                int cbA_crc_ok = 1, cbB_crc_ok = 1;
+                for (int r=0;r<seg.C;r++) {
+                    nr_ldpc_rate_match_combine(soft_bufA[r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], allllrA + roffA);
+                    nr_ldpc_rate_match_combine(soft_bufB[r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], allllrB + roffB);
+                    roffA += Er[r]; roffB += Er[r];
+                    ldpc_decode(&ldpc, soft_bufA[r], 25, decoded_cbA);
+                    ldpc_decode(&ldpc, soft_bufB[r], 25, decoded_cbB);
+                    if (seg.C > 1 && !check_crc(decoded_cbA, seg.Kprime, CRC24B)) cbA_crc_ok = 0;
+                    if (seg.C > 1 && !check_crc(decoded_cbB, seg.Kprime, CRC24B)) cbB_crc_ok = 0;
+                    memcpy(decoded_tbA + (size_t)r*payload, decoded_cbA, payload*sizeof(int));
+                    memcpy(decoded_tbB + (size_t)r*payload, decoded_cbB, payload*sizeof(int));
+                }
+                crcA_ok = cbA_crc_ok && check_crc(decoded_tbA, B, CRC24A);
+                crcB_ok = cbB_crc_ok && check_crc(decoded_tbB, B, CRC24A);
+
+                beA=0; beB=0;
+                for (int i=0;i<tbsz;i++) {
+                    if (tbA[i]!=decoded_tbA[i]) beA++;
+                    if (tbB[i]!=decoded_tbB[i]) beB++;
+                }
+
+                if (attempt==0) {
+                    beA_1st=beA; beB_1st=beB; crcA_1st=crcA_ok; crcB_1st=crcB_ok;
+                }
+                attempts = attempt+1;
+                if (crcA_ok && crcB_ok) break;
+            }
+
+            total_err  += beA + beB;
+            total_bits += 2*tbsz;
+            if (!crcA_ok || beA>0 || !crcB_ok || beB>0) blk_err_final++;
+            if (!crcA_1st || beA_1st>0 || !crcB_1st || beB_1st>0) blk_err_1st++;
+            total_attempts += attempts;
+        }
+        double ber       = total_bits > 0 ? (double)total_err/total_bits : 0.0;
+        double bler_1st  = (double)blk_err_1st   / cfg->numTrials;
+        double bler_final= (double)blk_err_final / cfg->numTrials;
+        double avg_tx    = (double)total_attempts / cfg->numTrials;
+        printf("%10.1f%14.4e%14.4f%14.4f%12.2f\n", snr, ber, bler_1st, bler_final, avg_tx);
+    }
+    printf("\nPUSCH 2x2 SU-MIMO + Flat Fading + HARQ simulation complete.\n");
+
+    ldpc_free(&ldpc);
+    free(pilot_pos); free(data_pos); free(pilotA); free(pilotB);
+    free(dmrsA); free(dmrsB);
+    free(tbA); free(tbB); free(tb_crcA); free(tb_crcB);
+    free(cb_bitsA); free(cb_bitsB);
+    for (int r=0;r<seg.C;r++) {
+        free(coded_allA[r]); free(coded_allB[r]);
+        free(rmA[r]); free(rmB[r]);
+        free(soft_bufA[r]); free(soft_bufB[r]);
+    }
+    free(coded_allA); free(coded_allB); free(rmA); free(rmB);
+    free(soft_bufA); free(soft_bufB); free(Er);
+    free(selbitsA); free(selbitsB);
+    free(symsA); free(symsB); free(tx_grid0); free(tx_grid1);
+    free(rx_grid0); free(rx_grid1); free(x_hatA); free(x_hatB);
+    free(allllrA); free(allllrB);
+    free(decoded_cbA); free(decoded_cbB); free(decoded_tbA); free(decoded_tbB);
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -1867,15 +2407,24 @@ void run_pusch_ul_eigen_bf_simulation(const L1Config *cfg) {
 
     int max_dbits = num_data * bps;
     int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1)    tbsz = 1;
-    if (tbsz > 8424) tbsz = 8424;
+    if (tbsz < 1) tbsz = 1;
 
-    int K = tbsz + crc_bits;
+    /* TS 38.212 5.2.2 code block segmentation (P0-2c, 2026-09-03) --
+     * see run_pdsch_simulation() (pdsch.c) for the pattern this mirrors. */
+    int B = tbsz + crc_bits;
+    NRSegInfo seg;
+    nr_seg_compute(B, cr, &seg);
+    int payload = seg.Kprime - seg.L;
+    int K = B;   /* legacy name kept below for filler/print-only uses */
     LDPCCodec ldpc;
-    ldpc_init(&ldpc, K, cr);
+    ldpc_init_resolved(&ldpc, seg.Kprime, cr, seg.bg, seg.Zc, seg.Kb,
+                        seg.base_rows, seg.base_info_cols, seg.base_cols,
+                        seg.filler_size);
     int acsz = ldpc.coded_size;
-    int E    = num_data * bps;   /* TS 38.212 5.4.2.1 rate-matched output length
-                                     (C=1, single code block -- E=G exactly) */
+    int E    = num_data * bps;   /* TS 38.212 5.4.2.1 total rate-matched
+                                     output length G, per codeword */
+    int *Er = (int *)malloc(seg.C * sizeof(int));
+    nr_ldpc_er_alloc(E, /*Nl=*/1, bps, seg.C, Er);
 
     cx_t *dmrs = (cx_t *)malloc(num_pilots * sizeof(cx_t));
     dmrs_sequence(0x87ee1901u, num_pilots, dmrs);
@@ -1892,21 +2441,27 @@ void run_pusch_ul_eigen_bf_simulation(const L1Config *cfg) {
     printf("Data RE      : %d  (Genie는 완전한 채널지식, Eigen-BF는 파일럿 공분산 기반)\n", num_data);
     printf("Trials/SNR   : %d\n\n", cfg->numTrials);
 
-    int    *tb[2], *tb_crc[2], *coded[2], *selbits[2], *dec[2];
+    int    *tb[2], *tb_crc[2], *cb_bits[2], *coded[2], *selbits[2];
+    int    *decoded_tb[2];
+    int   **rm[2];
     cx_t   *sym[2];
     double *allllr[2], *soft_buf[2];
     cx_t   *rx_hat[2];
     for (int s = 0; s < 2; s++) {
         tb[s]     = (int    *)malloc(tbsz  * sizeof(int));
         tb_crc[s] = (int    *)malloc(K     * sizeof(int));
+        cb_bits[s]= (int    *)malloc((size_t)seg.C * seg.Kprime * sizeof(int));
         coded[s]  = (int    *)malloc(acsz  * sizeof(int));
+        rm[s]     = (int   **)malloc(seg.C * sizeof(int *));
+        for (int r = 0; r < seg.C; r++) rm[s][r] = (int *)malloc(Er[r] * sizeof(int));
         selbits[s]= (int    *)malloc(E     * sizeof(int));
         sym[s]    = (cx_t  *)malloc(num_data * sizeof(cx_t));
         allllr[s] = (double *)malloc(E     * sizeof(double));
         soft_buf[s]=(double *)malloc(acsz  * sizeof(double));
-        dec[s]    = (int    *)malloc(K     * sizeof(int));
+        decoded_tb[s] = (int *)malloc(B    * sizeof(int));
         rx_hat[s] = (cx_t  *)malloc(num_data * sizeof(cx_t));
     }
+    int *decoded_cb = (int *)malloc(ldpc.info_size * sizeof(int));
     cx_t (*h_est_obs)[UL_EIGEN_NRX] = (cx_t (*)[UL_EIGEN_NRX])malloc((size_t)num_pilots * sizeof(*h_est_obs));
 
     printf("%-9s  %-12s %-11s  %-12s %-11s  %s\n",
@@ -1956,10 +2511,14 @@ void run_pusch_ul_eigen_bf_simulation(const L1Config *cfg) {
             for (int s = 0; s < 2; s++) {
                 gen_random_bits(tb[s], tbsz);
                 attach_crc(tb[s], tbsz, CRC24A, tb_crc[s]);
-                ldpc_encode(&ldpc, tb_crc[s], coded[s]);
-                nr_ldpc_rate_match_select(coded[s], acsz, ldpc.bg, ldpc.Zc,
-                                           ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                           /*rv=*/0, E, selbits[s]);
+                nr_seg_split(tb_crc[s], &seg, cb_bits[s]);
+                for (int r = 0; r < seg.C; r++) {
+                    ldpc_encode(&ldpc, cb_bits[s] + (size_t)r*seg.Kprime, coded[s]);
+                    nr_ldpc_rate_match_select(coded[s], acsz, ldpc.bg, ldpc.Zc,
+                                               ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                               /*rv=*/0, Er[r], rm[s][r]);
+                }
+                nr_seg_concat(&seg, (const int *const *)rm[s], Er, selbits[s]);
                 qam_modulate(selbits[s], E, mcs.modulation, sym[s]);
 
                 double g_abs2 = CX_NORM(g[s]);
@@ -1970,15 +2529,23 @@ void run_pusch_ul_eigen_bf_simulation(const L1Config *cfg) {
                     rx_hat[s][d] = (g_abs2 > 1e-12) ? y / g[s] : CX_ZERO;
                 }
                 qam_demap_llr(rx_hat[s], num_data, mcs.modulation, nv, allllr[s]);
-                memset(soft_buf[s], 0, acsz * sizeof(double));
-                nr_ldpc_rate_match_combine(soft_buf[s], acsz, ldpc.bg, ldpc.Zc,
-                                            ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                            /*rv=*/0, E, allllr[s]);
-                ldpc_decode(&ldpc, soft_buf[s], 25, dec[s]);
 
-                int crc_ok = check_crc(dec[s], K, CRC24A);
+                int roff = 0;
+                int cb_crc_ok = 1;
+                for (int r = 0; r < seg.C; r++) {
+                    memset(soft_buf[s], 0, acsz * sizeof(double));
+                    nr_ldpc_rate_match_combine(soft_buf[s], acsz, ldpc.bg, ldpc.Zc,
+                                                ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                                /*rv=*/0, Er[r], allllr[s] + roff);
+                    roff += Er[r];
+                    ldpc_decode(&ldpc, soft_buf[s], 25, decoded_cb);
+                    if (seg.C > 1 && !check_crc(decoded_cb, seg.Kprime, CRC24B)) cb_crc_ok = 0;
+                    memcpy(decoded_tb[s] + (size_t)r*payload, decoded_cb, payload * sizeof(int));
+                }
+
+                int crc_ok = cb_crc_ok && check_crc(decoded_tb[s], B, CRC24A);
                 int be = 0;
-                for (int i = 0; i < tbsz; i++) if (tb[s][i] != dec[s][i]) be++;
+                for (int i = 0; i < tbsz; i++) if (tb[s][i] != decoded_tb[s][i]) be++;
                 b_err[s]  += be;
                 t_bits[s] += tbsz;
                 if (!crc_ok || be > 0) e_blk[s]++;
@@ -2000,9 +2567,12 @@ void run_pusch_ul_eigen_bf_simulation(const L1Config *cfg) {
     ldpc_free(&ldpc);
     free(dmrs);
     free(h_est_obs);
+    free(Er); free(decoded_cb);
     for (int s = 0; s < 2; s++) {
-        free(tb[s]); free(tb_crc[s]); free(coded[s]); free(selbits[s]);
-        free(sym[s]); free(allllr[s]); free(soft_buf[s]); free(dec[s]);
+        free(tb[s]); free(tb_crc[s]); free(cb_bits[s]); free(coded[s]);
+        for (int r = 0; r < seg.C; r++) free(rm[s][r]);
+        free(rm[s]); free(selbits[s]);
+        free(sym[s]); free(allllr[s]); free(soft_buf[s]); free(decoded_tb[s]);
         free(rx_hat[s]);
     }
 }
@@ -2063,15 +2633,24 @@ void run_pusch_ul_eigen_bf_2tx_simulation(const L1Config *cfg) {
 
     int max_dbits = num_data * bps;
     int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1)    tbsz = 1;
-    if (tbsz > 8424) tbsz = 8424;
+    if (tbsz < 1) tbsz = 1;
 
-    int K = tbsz + crc_bits;
+    /* TS 38.212 5.2.2 code block segmentation (P0-2c, 2026-09-03) --
+     * see run_pdsch_simulation() (pdsch.c) for the pattern this mirrors. */
+    int B = tbsz + crc_bits;
+    NRSegInfo seg;
+    nr_seg_compute(B, cr, &seg);
+    int payload = seg.Kprime - seg.L;
+    int K = B;   /* legacy name kept below for filler/print-only uses */
     LDPCCodec ldpc;
-    ldpc_init(&ldpc, K, cr);
+    ldpc_init_resolved(&ldpc, seg.Kprime, cr, seg.bg, seg.Zc, seg.Kb,
+                        seg.base_rows, seg.base_info_cols, seg.base_cols,
+                        seg.filler_size);
     int acsz = ldpc.coded_size;
-    int E    = num_data * bps;   /* TS 38.212 5.4.2.1 rate-matched output length
-                                     (C=1, single code block -- E=G exactly) */
+    int E    = num_data * bps;   /* TS 38.212 5.4.2.1 total rate-matched
+                                     output length G, per codeword */
+    int *Er = (int *)malloc(seg.C * sizeof(int));
+    nr_ldpc_er_alloc(E, /*Nl=*/1, bps, seg.C, Er);
 
     cx_t *dmrsA = (cx_t *)malloc(nppl * sizeof(cx_t));
     cx_t *dmrsB = (cx_t *)malloc(nppl * sizeof(cx_t));
@@ -2092,7 +2671,9 @@ void run_pusch_ul_eigen_bf_2tx_simulation(const L1Config *cfg) {
     printf("Trials/SNR   : %d\n\n", cfg->numTrials);
 
     /* [path][layer]: path 0=Genie, 1=Eigen-BF; layer 0=A, 1=B(rank=1이면 미사용) */
-    int    *tb[2][2], *tb_crc[2][2], *coded[2][2], *selbits[2][2], *dec[2][2];
+    int    *tb[2][2], *tb_crc[2][2], *cb_bits[2][2], *coded[2][2], *selbits[2][2];
+    int    *decoded_tb[2][2];
+    int   **rm[2][2];
     cx_t   *sym[2][2];
     double *allllr[2][2], *soft_buf[2][2];
     cx_t   *rx_hat[2][2];
@@ -2100,15 +2681,19 @@ void run_pusch_ul_eigen_bf_2tx_simulation(const L1Config *cfg) {
         for (int l = 0; l < 2; l++) {
             tb[p][l]     = (int    *)malloc(tbsz  * sizeof(int));
             tb_crc[p][l] = (int    *)malloc(K     * sizeof(int));
+            cb_bits[p][l]= (int    *)malloc((size_t)seg.C * seg.Kprime * sizeof(int));
             coded[p][l]  = (int    *)malloc(acsz  * sizeof(int));
+            rm[p][l]     = (int   **)malloc(seg.C * sizeof(int *));
+            for (int r = 0; r < seg.C; r++) rm[p][l][r] = (int *)malloc(Er[r] * sizeof(int));
             selbits[p][l]= (int    *)malloc(E     * sizeof(int));
             sym[p][l]    = (cx_t  *)malloc(num_data * sizeof(cx_t));
             allllr[p][l] = (double *)malloc(E     * sizeof(double));
             soft_buf[p][l]=(double *)malloc(acsz  * sizeof(double));
-            dec[p][l]    = (int    *)malloc(K     * sizeof(int));
+            decoded_tb[p][l] = (int *)malloc(B    * sizeof(int));
             rx_hat[p][l] = (cx_t  *)malloc(num_data * sizeof(cx_t));
         }
     }
+    int *decoded_cb = (int *)malloc(ldpc.info_size * sizeof(int));
     cx_t (*h_est_obs)[UL_EIGEN_NRX] = (cx_t (*)[UL_EIGEN_NRX])malloc((size_t)nppl * sizeof(*h_est_obs));
 
     printf("%-9s  %-12s %-11s  %-12s %-11s  %s\n",
@@ -2185,10 +2770,14 @@ void run_pusch_ul_eigen_bf_2tx_simulation(const L1Config *cfg) {
                 for (int l = 0; l < rank; l++) {
                     gen_random_bits(tb[p][l], tbsz);
                     attach_crc(tb[p][l], tbsz, CRC24A, tb_crc[p][l]);
-                    ldpc_encode(&ldpc, tb_crc[p][l], coded[p][l]);
-                    nr_ldpc_rate_match_select(coded[p][l], acsz, ldpc.bg, ldpc.Zc,
-                                               ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                               /*rv=*/0, E, selbits[p][l]);
+                    nr_seg_split(tb_crc[p][l], &seg, cb_bits[p][l]);
+                    for (int r = 0; r < seg.C; r++) {
+                        ldpc_encode(&ldpc, cb_bits[p][l] + (size_t)r*seg.Kprime, coded[p][l]);
+                        nr_ldpc_rate_match_select(coded[p][l], acsz, ldpc.bg, ldpc.Zc,
+                                                   ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                                   /*rv=*/0, Er[r], rm[p][l][r]);
+                    }
+                    nr_seg_concat(&seg, (const int *const *)rm[p][l], Er, selbits[p][l]);
                     qam_modulate(selbits[p][l], E, mcs.modulation, sym[p][l]);
                 }
             }
@@ -2245,15 +2834,23 @@ void run_pusch_ul_eigen_bf_2tx_simulation(const L1Config *cfg) {
                 for (int l = 0; l < rank; l++) {
                     double env = nv_sum[p][l] / num_data;
                     qam_demap_llr(rx_hat[p][l], num_data, mcs.modulation, env, allllr[p][l]);
-                    memset(soft_buf[p][l], 0, acsz * sizeof(double));
-                    nr_ldpc_rate_match_combine(soft_buf[p][l], acsz, ldpc.bg, ldpc.Zc,
-                                                ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                                /*rv=*/0, E, allllr[p][l]);
-                    ldpc_decode(&ldpc, soft_buf[p][l], 25, dec[p][l]);
 
-                    int crc_ok = check_crc(dec[p][l], K, CRC24A);
+                    int roff = 0;
+                    int cb_crc_ok = 1;
+                    for (int r = 0; r < seg.C; r++) {
+                        memset(soft_buf[p][l], 0, acsz * sizeof(double));
+                        nr_ldpc_rate_match_combine(soft_buf[p][l], acsz, ldpc.bg, ldpc.Zc,
+                                                    ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                                    /*rv=*/0, Er[r], allllr[p][l] + roff);
+                        roff += Er[r];
+                        ldpc_decode(&ldpc, soft_buf[p][l], 25, decoded_cb);
+                        if (seg.C > 1 && !check_crc(decoded_cb, seg.Kprime, CRC24B)) cb_crc_ok = 0;
+                        memcpy(decoded_tb[p][l] + (size_t)r*payload, decoded_cb, payload*sizeof(int));
+                    }
+
+                    int crc_ok = cb_crc_ok && check_crc(decoded_tb[p][l], B, CRC24A);
                     int be = 0;
-                    for (int i = 0; i < tbsz; i++) if (tb[p][l][i] != dec[p][l][i]) be++;
+                    for (int i = 0; i < tbsz; i++) if (tb[p][l][i] != decoded_tb[p][l][i]) be++;
                     b_err[p]  += be;
                     t_bits[p] += tbsz;
                     if (!crc_ok || be > 0) any_err[p] = 1;
@@ -2277,10 +2874,13 @@ void run_pusch_ul_eigen_bf_2tx_simulation(const L1Config *cfg) {
     ldpc_free(&ldpc);
     free(dmrsA); free(dmrsB);
     free(h_est_obs);
+    free(Er); free(decoded_cb);
     for (int p = 0; p < 2; p++) {
         for (int l = 0; l < 2; l++) {
-            free(tb[p][l]); free(tb_crc[p][l]); free(coded[p][l]); free(selbits[p][l]);
-            free(sym[p][l]); free(allllr[p][l]); free(soft_buf[p][l]); free(dec[p][l]);
+            free(tb[p][l]); free(tb_crc[p][l]); free(cb_bits[p][l]); free(coded[p][l]);
+            for (int r = 0; r < seg.C; r++) free(rm[p][l][r]);
+            free(rm[p][l]); free(selbits[p][l]);
+            free(sym[p][l]); free(allllr[p][l]); free(soft_buf[p][l]); free(decoded_tb[p][l]);
             free(rx_hat[p][l]);
         }
     }
@@ -2337,15 +2937,24 @@ void run_pusch_ul_eigen_bf_tdl_simulation(const L1Config *cfg) {
 
     int max_dbits = num_data * bps;
     int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1)    tbsz = 1;
-    if (tbsz > 8424) tbsz = 8424;
+    if (tbsz < 1) tbsz = 1;
 
-    int K = tbsz + crc_bits;
+    /* TS 38.212 5.2.2 code block segmentation (P0-2c, 2026-09-03) --
+     * see run_pdsch_simulation() (pdsch.c) for the pattern this mirrors. */
+    int B = tbsz + crc_bits;
+    NRSegInfo seg;
+    nr_seg_compute(B, cr, &seg);
+    int payload = seg.Kprime - seg.L;
+    int K = B;   /* legacy name kept below for filler/print-only uses */
     LDPCCodec ldpc;
-    ldpc_init(&ldpc, K, cr);
+    ldpc_init_resolved(&ldpc, seg.Kprime, cr, seg.bg, seg.Zc, seg.Kb,
+                        seg.base_rows, seg.base_info_cols, seg.base_cols,
+                        seg.filler_size);
     int acsz = ldpc.coded_size;
-    int E    = num_data * bps;   /* TS 38.212 5.4.2.1 rate-matched output length
-                                     (C=1, single code block -- E=G exactly) */
+    int E    = num_data * bps;   /* TS 38.212 5.4.2.1 total rate-matched
+                                     output length G, per codeword */
+    int *Er = (int *)malloc(seg.C * sizeof(int));
+    nr_ldpc_er_alloc(E, /*Nl=*/1, bps, seg.C, Er);
 
     double scs_hz = (double)cfg->scsKHz * 1000.0;
 
@@ -2366,21 +2975,27 @@ void run_pusch_ul_eigen_bf_tdl_simulation(const L1Config *cfg) {
     printf("Data RE      : %d\n", num_data);
     printf("Trials/SNR   : %d\n\n", cfg->numTrials);
 
-    int    *tb[2], *tb_crc[2], *coded[2], *selbits[2], *dec[2];
+    int    *tb[2], *tb_crc[2], *cb_bits[2], *coded[2], *selbits[2];
+    int    *decoded_tb[2];
+    int   **rm[2];
     cx_t   *sym[2];
     double *allllr[2], *soft_buf[2];
     cx_t   *rx_hat[2];
     for (int s = 0; s < 2; s++) {
         tb[s]     = (int    *)malloc(tbsz  * sizeof(int));
         tb_crc[s] = (int    *)malloc(K     * sizeof(int));
+        cb_bits[s]= (int    *)malloc((size_t)seg.C * seg.Kprime * sizeof(int));
         coded[s]  = (int    *)malloc(acsz  * sizeof(int));
+        rm[s]     = (int   **)malloc(seg.C * sizeof(int *));
+        for (int r = 0; r < seg.C; r++) rm[s][r] = (int *)malloc(Er[r] * sizeof(int));
         selbits[s]= (int    *)malloc(E     * sizeof(int));
         sym[s]    = (cx_t  *)malloc(num_data * sizeof(cx_t));
         allllr[s] = (double *)malloc(E     * sizeof(double));
         soft_buf[s]=(double *)malloc(acsz  * sizeof(double));
-        dec[s]    = (int    *)malloc(K     * sizeof(int));
+        decoded_tb[s] = (int *)malloc(B    * sizeof(int));
         rx_hat[s] = (cx_t  *)malloc(num_data * sizeof(cx_t));
     }
+    int *decoded_cb = (int *)malloc(ldpc.info_size * sizeof(int));
     cx_t (*h_est_obs)[UL_EIGEN_NRX] = (cx_t (*)[UL_EIGEN_NRX])malloc((size_t)num_pilots * sizeof(*h_est_obs));
     cx_t *cluster_taps = (cx_t *)malloc(TDL_MAX_TAPS * sizeof(cx_t));
 
@@ -2422,10 +3037,14 @@ void run_pusch_ul_eigen_bf_tdl_simulation(const L1Config *cfg) {
             for (int s = 0; s < 2; s++) {
                 gen_random_bits(tb[s], tbsz);
                 attach_crc(tb[s], tbsz, CRC24A, tb_crc[s]);
-                ldpc_encode(&ldpc, tb_crc[s], coded[s]);
-                nr_ldpc_rate_match_select(coded[s], acsz, ldpc.bg, ldpc.Zc,
-                                           ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                           /*rv=*/0, E, selbits[s]);
+                nr_seg_split(tb_crc[s], &seg, cb_bits[s]);
+                for (int r = 0; r < seg.C; r++) {
+                    ldpc_encode(&ldpc, cb_bits[s] + (size_t)r*seg.Kprime, coded[s]);
+                    nr_ldpc_rate_match_select(coded[s], acsz, ldpc.bg, ldpc.Zc,
+                                               ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                               /*rv=*/0, Er[r], rm[s][r]);
+                }
+                nr_seg_concat(&seg, (const int *const *)rm[s], Er, selbits[s]);
                 qam_modulate(selbits[s], E, mcs.modulation, sym[s]);
             }
 
@@ -2459,15 +3078,23 @@ void run_pusch_ul_eigen_bf_tdl_simulation(const L1Config *cfg) {
             for (int s = 0; s < 2; s++) {
                 double env = nv_sum[s] / num_data;
                 qam_demap_llr(rx_hat[s], num_data, mcs.modulation, env, allllr[s]);
-                memset(soft_buf[s], 0, acsz * sizeof(double));
-                nr_ldpc_rate_match_combine(soft_buf[s], acsz, ldpc.bg, ldpc.Zc,
-                                            ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                            /*rv=*/0, E, allllr[s]);
-                ldpc_decode(&ldpc, soft_buf[s], 25, dec[s]);
 
-                int crc_ok = check_crc(dec[s], K, CRC24A);
+                int roff = 0;
+                int cb_crc_ok = 1;
+                for (int r = 0; r < seg.C; r++) {
+                    memset(soft_buf[s], 0, acsz * sizeof(double));
+                    nr_ldpc_rate_match_combine(soft_buf[s], acsz, ldpc.bg, ldpc.Zc,
+                                                ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                                /*rv=*/0, Er[r], allllr[s] + roff);
+                    roff += Er[r];
+                    ldpc_decode(&ldpc, soft_buf[s], 25, decoded_cb);
+                    if (seg.C > 1 && !check_crc(decoded_cb, seg.Kprime, CRC24B)) cb_crc_ok = 0;
+                    memcpy(decoded_tb[s] + (size_t)r*payload, decoded_cb, payload * sizeof(int));
+                }
+
+                int crc_ok = cb_crc_ok && check_crc(decoded_tb[s], B, CRC24A);
                 int be = 0;
-                for (int i = 0; i < tbsz; i++) if (tb[s][i] != dec[s][i]) be++;
+                for (int i = 0; i < tbsz; i++) if (tb[s][i] != decoded_tb[s][i]) be++;
                 b_err[s]  += be;
                 t_bits[s] += tbsz;
                 if (!crc_ok || be > 0) e_blk[s]++;
@@ -2489,9 +3116,12 @@ void run_pusch_ul_eigen_bf_tdl_simulation(const L1Config *cfg) {
     free(pilot_pos); free(data_pos); free(dmrs);
     free(h_est_obs);
     free(cluster_taps);
+    free(Er); free(decoded_cb);
     for (int s = 0; s < 2; s++) {
-        free(tb[s]); free(tb_crc[s]); free(coded[s]); free(selbits[s]);
-        free(sym[s]); free(allllr[s]); free(soft_buf[s]); free(dec[s]);
+        free(tb[s]); free(tb_crc[s]); free(cb_bits[s]); free(coded[s]);
+        for (int r = 0; r < seg.C; r++) free(rm[s][r]);
+        free(rm[s]); free(selbits[s]);
+        free(sym[s]); free(allllr[s]); free(soft_buf[s]); free(decoded_tb[s]);
         free(rx_hat[s]);
     }
 }
@@ -2534,11 +3164,23 @@ void run_pusch_ul_eigen_bf_harq_simulation(const L1Config *cfg) {
     int E    = num_data * bps;
     int tbsz = (int)(E * cr);
     if (tbsz < 1)    tbsz = 1;
-    if (tbsz > 8424) tbsz = 8424;
-    int K = tbsz + crc_bits;
 
-    LDPCCodec ldpc; ldpc_init(&ldpc, K, cr);
-    int ncb = ldpc.coded_size;
+    /* TS 38.212 5.2.2 code block segmentation (P0-2c, 2026-09-03) --
+     * both scenarios (Genie s=0 / Eigen-BF s=1) share tbsz/cr, so they
+     * share one NRSegInfo/LDPCCodec; each gets its own seg.C code
+     * blocks and seg.C persistent HARQ soft-combining buffers. See
+     * run_pusch_harq_simulation() for the same pattern on one codeword. */
+    int B = tbsz + crc_bits;
+    NRSegInfo seg;
+    nr_seg_compute(B, cr, &seg);
+    int payload = seg.Kprime - seg.L;
+    LDPCCodec ldpc;
+    ldpc_init_resolved(&ldpc, seg.Kprime, cr, seg.bg, seg.Zc, seg.Kb,
+                        seg.base_rows, seg.base_info_cols, seg.base_cols,
+                        seg.filler_size);
+    int acsz = ldpc.coded_size;
+    int *Er = (int *)malloc(seg.C * sizeof(int));
+    nr_ldpc_er_alloc(E, /*Nl=*/1, bps, seg.C, Er);
 
     int is_chase = (strcmp(cfg->harqRvSeq,"CHASE")==0);
     int rvseq[4] = {0,2,3,1};
@@ -2555,11 +3197,12 @@ void run_pusch_ul_eigen_bf_harq_simulation(const L1Config *cfg) {
     printf("Modulation   : %s (Qm=%d)\n", mcs.modulation, bps);
     printf("Target Rate  : %.4f\n", cr);
     printf("Mother Rate  : %.4f (Ncb=%d, actual NR LDPC BG%d/Zc=%d achieved rate)\n",
-           (double)K / ncb, ncb, ldpc.bg, ldpc.Zc);
+           (double)seg.Kprime / acsz, acsz, ldpc.bg, ldpc.Zc);
     printf("Num RB       : %d\n", num_rb);
     printf("UE Tx Ant    : 1\n");
     printf("gNB Rx Ant   : %d (Genie: 매 attempt 정확한 MRC / Eigen-BF: attempt 0에서 고정한 wideband 고유빔)\n", UL_EIGEN_NRX);
     printf("TB Size      : %d bits (두 경로 동일 고정 MCS)\n", tbsz);
+    printf("Code Blocks  : C=%d%s\n", seg.C, seg.C > 1 ? " (CRC24B/CB)" : "");
     printf("Max Retx     : %d\n", max_retx);
     if (is_tdl)
         printf("Channel      : 고정 공간벡터 h(16) x 공유 SISO TDL 클러스터 게인(attempt마다 재드로우), DS=%.0fns, %d taps\n",
@@ -2568,19 +3211,28 @@ void run_pusch_ul_eigen_bf_harq_simulation(const L1Config *cfg) {
         printf("Channel      : 고정(빔도 채널도 트라이얼 내내 불변, attempt마다 잡음만 재드로우)\n");
     printf("Trials/SNR   : %d\n\n", cfg->numTrials);
 
-    int   *tb[2], *tb_crc[2], *coded_full[2], *selbits[2], *dec[2];
+    int   *tb[2], *tb_crc[2], *cb_bits[2], *selbits[2], *decoded_cb[2], *decoded_tb[2];
+    int  **coded_all[2], **rm[2];
     cx_t  *sym[2], *rx_hat[2];
-    double *allllr[2], *soft_buf[2];
+    double *allllr[2], **soft_buf[2];
     for (int s = 0; s < 2; s++) {
         tb[s]         = (int    *)malloc(tbsz     * sizeof(int));
-        tb_crc[s]     = (int    *)malloc(K        * sizeof(int));
-        coded_full[s] = (int    *)malloc(ncb      * sizeof(int));
+        tb_crc[s]     = (int    *)malloc(B        * sizeof(int));
+        cb_bits[s]    = (int    *)malloc((size_t)seg.C * seg.Kprime * sizeof(int));
+        coded_all[s]  = (int   **)malloc(seg.C * sizeof(int *));
+        rm[s]         = (int   **)malloc(seg.C * sizeof(int *));
+        soft_buf[s]   = (double**)malloc(seg.C * sizeof(double *));
+        for (int r = 0; r < seg.C; r++) {
+            coded_all[s][r] = (int    *)malloc(acsz    * sizeof(int));
+            rm[s][r]        = (int    *)malloc(Er[r]   * sizeof(int));
+            soft_buf[s][r]  = (double *)malloc(acsz    * sizeof(double));
+        }
         selbits[s]    = (int    *)malloc(E        * sizeof(int));
-        dec[s]        = (int    *)malloc(K        * sizeof(int));
+        decoded_cb[s] = (int    *)malloc(ldpc.info_size * sizeof(int));
+        decoded_tb[s] = (int    *)malloc(B        * sizeof(int));
         sym[s]        = (cx_t  *)malloc(num_data  * sizeof(cx_t));
         rx_hat[s]     = (cx_t  *)malloc(num_data  * sizeof(cx_t));
         allllr[s]     = (double *)malloc(E        * sizeof(double));
-        soft_buf[s]   = (double *)malloc(ncb      * sizeof(double));
     }
     cx_t (*h_est_obs)[UL_EIGEN_NRX] = (cx_t (*)[UL_EIGEN_NRX])malloc((size_t)num_pilots * sizeof(*h_est_obs));
     cx_t *cluster_taps = (cx_t *)malloc(TDL_MAX_TAPS * sizeof(cx_t));
@@ -2623,8 +3275,11 @@ void run_pusch_ul_eigen_bf_harq_simulation(const L1Config *cfg) {
             for (int s = 0; s < 2; s++) {
                 gen_random_bits(tb[s], tbsz);
                 attach_crc(tb[s], tbsz, CRC24A, tb_crc[s]);
-                ldpc_encode(&ldpc, tb_crc[s], coded_full[s]);
-                for (int i = 0; i < ncb; i++) soft_buf[s][i] = 0.0;
+                nr_seg_split(tb_crc[s], &seg, cb_bits[s]);
+                for (int r = 0; r < seg.C; r++) {
+                    ldpc_encode(&ldpc, cb_bits[s] + (size_t)r * seg.Kprime, coded_all[s][r]);
+                    for (int i = 0; i < acsz; i++) soft_buf[s][r][i] = 0.0;
+                }
             }
 
             int crc_ok[2]={0,0}, be[2]={0,0}, be_1st[2]={0,0}, crc_1st[2]={0,0};
@@ -2634,7 +3289,9 @@ void run_pusch_ul_eigen_bf_harq_simulation(const L1Config *cfg) {
                 int rv = rvseq[attempt % rvseq_len];
 
                 for (int s = 0; s < 2; s++) {
-                    nr_ldpc_rate_match_select(coded_full[s], ncb, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, E, selbits[s]);
+                    for (int r = 0; r < seg.C; r++)
+                        nr_ldpc_rate_match_select(coded_all[s][r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], rm[s][r]);
+                    nr_seg_concat(&seg, (const int *const *)rm[s], Er, selbits[s]);
                     qam_modulate(selbits[s], E, mcs.modulation, sym[s]);
                 }
 
@@ -2667,17 +3324,22 @@ void run_pusch_ul_eigen_bf_harq_simulation(const L1Config *cfg) {
                     }
                 }
 
-                int ml = tbsz < ldpc.info_size - crc_bits ? tbsz : ldpc.info_size - crc_bits;
-                if (ml < 0) ml = 0;
                 for (int s = 0; s < 2; s++) {
                     double env = nv_sum[s] / num_data;
                     qam_demap_llr(rx_hat[s], num_data, mcs.modulation, env, allllr[s]);
-                    nr_ldpc_rate_match_combine(soft_buf[s], ncb, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, E, allllr[s]);
-                    ldpc_decode(&ldpc, soft_buf[s], 25, dec[s]);
-                    crc_ok[s] = check_crc(dec[s], K, CRC24A);
+                    int roff = 0;
+                    int cb_crc_ok = 1;
+                    for (int r = 0; r < seg.C; r++) {
+                        nr_ldpc_rate_match_combine(soft_buf[s][r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], allllr[s] + roff);
+                        roff += Er[r];
+                        ldpc_decode(&ldpc, soft_buf[s][r], 25, decoded_cb[s]);
+                        if (seg.C > 1 && !check_crc(decoded_cb[s], seg.Kprime, CRC24B)) cb_crc_ok = 0;
+                        memcpy(decoded_tb[s] + (size_t)r * payload, decoded_cb[s], payload * sizeof(int));
+                    }
+                    crc_ok[s] = cb_crc_ok && check_crc(decoded_tb[s], B, CRC24A);
                     int biterr = 0;
-                    for (int i = 0; i < ml; i++)
-                        if (tb[s][i] != dec[s][i]) biterr++;
+                    for (int i = 0; i < tbsz; i++)
+                        if (tb[s][i] != decoded_tb[s][i]) biterr++;
                     be[s] = biterr;
                     if (attempt == 0) { be_1st[s] = biterr; crc_1st[s] = crc_ok[s]; }
                 }
@@ -2713,11 +3375,16 @@ void run_pusch_ul_eigen_bf_harq_simulation(const L1Config *cfg) {
 
     ldpc_free(&ldpc);
     free(pilot_pos); free(data_pos); free(dmrs);
-    free(h_est_obs); free(cluster_taps);
+    free(h_est_obs); free(cluster_taps); free(Er);
     for (int s = 0; s < 2; s++) {
-        free(tb[s]); free(tb_crc[s]); free(coded_full[s]); free(selbits[s]);
-        free(dec[s]); free(sym[s]); free(rx_hat[s]);
-        free(allllr[s]); free(soft_buf[s]);
+        free(tb[s]); free(tb_crc[s]); free(cb_bits[s]);
+        for (int r = 0; r < seg.C; r++) {
+            free(coded_all[s][r]); free(rm[s][r]); free(soft_buf[s][r]);
+        }
+        free(coded_all[s]); free(rm[s]); free(soft_buf[s]);
+        free(selbits[s]); free(decoded_cb[s]); free(decoded_tb[s]);
+        free(sym[s]); free(rx_hat[s]);
+        free(allllr[s]);
     }
 }
 
@@ -2756,15 +3423,24 @@ void run_pusch_ul_eigen_bf_2tx_tdl_simulation(const L1Config *cfg) {
 
     int max_dbits = num_data * bps;
     int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1)    tbsz = 1;
-    if (tbsz > 8424) tbsz = 8424;
+    if (tbsz < 1) tbsz = 1;
 
-    int K = tbsz + crc_bits;
+    /* TS 38.212 5.2.2 code block segmentation (P0-2c, 2026-09-03) --
+     * see run_pdsch_simulation() (pdsch.c) for the pattern this mirrors. */
+    int B = tbsz + crc_bits;
+    NRSegInfo seg;
+    nr_seg_compute(B, cr, &seg);
+    int payload = seg.Kprime - seg.L;
+    int K = B;   /* legacy name kept below for filler/print-only uses */
     LDPCCodec ldpc;
-    ldpc_init(&ldpc, K, cr);
+    ldpc_init_resolved(&ldpc, seg.Kprime, cr, seg.bg, seg.Zc, seg.Kb,
+                        seg.base_rows, seg.base_info_cols, seg.base_cols,
+                        seg.filler_size);
     int acsz = ldpc.coded_size;
-    int E    = num_data * bps;   /* TS 38.212 5.4.2.1 rate-matched output length
-                                     (C=1, single code block -- E=G exactly) */
+    int E    = num_data * bps;   /* TS 38.212 5.4.2.1 total rate-matched
+                                     output length G, per codeword */
+    int *Er = (int *)malloc(seg.C * sizeof(int));
+    nr_ldpc_er_alloc(E, /*Nl=*/1, bps, seg.C, Er);
 
     double scs_hz = (double)cfg->scsKHz * 1000.0;
 
@@ -2788,7 +3464,9 @@ void run_pusch_ul_eigen_bf_2tx_tdl_simulation(const L1Config *cfg) {
     printf("Data RE      : %d\n", num_data);
     printf("Trials/SNR   : %d\n\n", cfg->numTrials);
 
-    int    *tb[2][2], *tb_crc[2][2], *coded[2][2], *selbits[2][2], *dec[2][2];
+    int    *tb[2][2], *tb_crc[2][2], *cb_bits[2][2], *coded[2][2], *selbits[2][2];
+    int    *decoded_tb[2][2];
+    int   **rm[2][2];
     cx_t   *sym[2][2];
     double *allllr[2][2], *soft_buf[2][2];
     cx_t   *rx_hat[2][2];
@@ -2796,15 +3474,19 @@ void run_pusch_ul_eigen_bf_2tx_tdl_simulation(const L1Config *cfg) {
         for (int l = 0; l < 2; l++) {
             tb[p][l]     = (int    *)malloc(tbsz  * sizeof(int));
             tb_crc[p][l] = (int    *)malloc(K     * sizeof(int));
+            cb_bits[p][l]= (int    *)malloc((size_t)seg.C * seg.Kprime * sizeof(int));
             coded[p][l]  = (int    *)malloc(acsz  * sizeof(int));
+            rm[p][l]     = (int   **)malloc(seg.C * sizeof(int *));
+            for (int r = 0; r < seg.C; r++) rm[p][l][r] = (int *)malloc(Er[r] * sizeof(int));
             selbits[p][l]= (int    *)malloc(E     * sizeof(int));
             sym[p][l]    = (cx_t  *)malloc(num_data * sizeof(cx_t));
             allllr[p][l] = (double *)malloc(E     * sizeof(double));
             soft_buf[p][l]=(double *)malloc(acsz  * sizeof(double));
-            dec[p][l]    = (int    *)malloc(K     * sizeof(int));
+            decoded_tb[p][l] = (int *)malloc(B    * sizeof(int));
             rx_hat[p][l] = (cx_t  *)malloc(num_data * sizeof(cx_t));
         }
     }
+    int *decoded_cb = (int *)malloc(ldpc.info_size * sizeof(int));
     cx_t (*h_est_obs)[UL_EIGEN_NRX] = (cx_t (*)[UL_EIGEN_NRX])malloc((size_t)nppl * sizeof(*h_est_obs));
     cx_t *cluster_taps = (cx_t *)malloc(TDL_MAX_TAPS * sizeof(cx_t));
 
@@ -2887,10 +3569,14 @@ void run_pusch_ul_eigen_bf_2tx_tdl_simulation(const L1Config *cfg) {
                 for (int l = 0; l < rank; l++) {
                     gen_random_bits(tb[p][l], tbsz);
                     attach_crc(tb[p][l], tbsz, CRC24A, tb_crc[p][l]);
-                    ldpc_encode(&ldpc, tb_crc[p][l], coded[p][l]);
-                    nr_ldpc_rate_match_select(coded[p][l], acsz, ldpc.bg, ldpc.Zc,
-                                               ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                               /*rv=*/0, E, selbits[p][l]);
+                    nr_seg_split(tb_crc[p][l], &seg, cb_bits[p][l]);
+                    for (int r = 0; r < seg.C; r++) {
+                        ldpc_encode(&ldpc, cb_bits[p][l] + (size_t)r*seg.Kprime, coded[p][l]);
+                        nr_ldpc_rate_match_select(coded[p][l], acsz, ldpc.bg, ldpc.Zc,
+                                                   ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                                   /*rv=*/0, Er[r], rm[p][l][r]);
+                    }
+                    nr_seg_concat(&seg, (const int *const *)rm[p][l], Er, selbits[p][l]);
                     qam_modulate(selbits[p][l], E, mcs.modulation, sym[p][l]);
                 }
             }
@@ -2954,15 +3640,23 @@ void run_pusch_ul_eigen_bf_2tx_tdl_simulation(const L1Config *cfg) {
                 for (int l = 0; l < rank; l++) {
                     double env = nv_sum[p][l] / num_data;
                     qam_demap_llr(rx_hat[p][l], num_data, mcs.modulation, env, allllr[p][l]);
-                    memset(soft_buf[p][l], 0, acsz * sizeof(double));
-                    nr_ldpc_rate_match_combine(soft_buf[p][l], acsz, ldpc.bg, ldpc.Zc,
-                                                ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                                /*rv=*/0, E, allllr[p][l]);
-                    ldpc_decode(&ldpc, soft_buf[p][l], 25, dec[p][l]);
 
-                    int crc_ok = check_crc(dec[p][l], K, CRC24A);
+                    int roff = 0;
+                    int cb_crc_ok = 1;
+                    for (int r = 0; r < seg.C; r++) {
+                        memset(soft_buf[p][l], 0, acsz * sizeof(double));
+                        nr_ldpc_rate_match_combine(soft_buf[p][l], acsz, ldpc.bg, ldpc.Zc,
+                                                    ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                                    /*rv=*/0, Er[r], allllr[p][l] + roff);
+                        roff += Er[r];
+                        ldpc_decode(&ldpc, soft_buf[p][l], 25, decoded_cb);
+                        if (seg.C > 1 && !check_crc(decoded_cb, seg.Kprime, CRC24B)) cb_crc_ok = 0;
+                        memcpy(decoded_tb[p][l] + (size_t)r*payload, decoded_cb, payload*sizeof(int));
+                    }
+
+                    int crc_ok = cb_crc_ok && check_crc(decoded_tb[p][l], B, CRC24A);
                     int be = 0;
-                    for (int i = 0; i < tbsz; i++) if (tb[p][l][i] != dec[p][l][i]) be++;
+                    for (int i = 0; i < tbsz; i++) if (tb[p][l][i] != decoded_tb[p][l][i]) be++;
                     b_err[p]  += be;
                     t_bits[p] += tbsz;
                     if (!crc_ok || be > 0) any_err[p] = 1;
@@ -2987,10 +3681,13 @@ void run_pusch_ul_eigen_bf_2tx_tdl_simulation(const L1Config *cfg) {
     free(pilot_pos); free(data_pos); free(pilotA); free(pilotB);
     free(dmrsA); free(dmrsB);
     free(h_est_obs); free(cluster_taps);
+    free(Er); free(decoded_cb);
     for (int p = 0; p < 2; p++) {
         for (int l = 0; l < 2; l++) {
-            free(tb[p][l]); free(tb_crc[p][l]); free(coded[p][l]); free(selbits[p][l]);
-            free(sym[p][l]); free(allllr[p][l]); free(soft_buf[p][l]); free(dec[p][l]);
+            free(tb[p][l]); free(tb_crc[p][l]); free(cb_bits[p][l]); free(coded[p][l]);
+            for (int r = 0; r < seg.C; r++) free(rm[p][l][r]);
+            free(rm[p][l]); free(selbits[p][l]);
+            free(sym[p][l]); free(allllr[p][l]); free(soft_buf[p][l]); free(decoded_tb[p][l]);
             free(rx_hat[p][l]);
         }
     }
@@ -3040,11 +3737,24 @@ void run_pusch_ul_eigen_bf_2tx_harq_simulation(const L1Config *cfg) {
     int E    = num_data * bps;
     int tbsz = (int)(E * cr);
     if (tbsz < 1)    tbsz = 1;
-    if (tbsz > 8424) tbsz = 8424;
-    int K = tbsz + crc_bits;
 
-    LDPCCodec ldpc; ldpc_init(&ldpc, K, cr);
-    int ncb = ldpc.coded_size;
+    /* TS 38.212 5.2.2 code block segmentation (P0-2c, 2026-09-03) --
+     * every [p][l] combination (scenario Genie/Eigen-BF x layer) is an
+     * independent codeword sharing tbsz/cr, so they share one
+     * NRSegInfo/LDPCCodec; each gets its own seg.C code blocks and
+     * seg.C persistent HARQ soft-combining buffers. See
+     * run_pusch_harq_simulation() for the same pattern on one codeword. */
+    int B = tbsz + crc_bits;
+    NRSegInfo seg;
+    nr_seg_compute(B, cr, &seg);
+    int payload = seg.Kprime - seg.L;
+    LDPCCodec ldpc;
+    ldpc_init_resolved(&ldpc, seg.Kprime, cr, seg.bg, seg.Zc, seg.Kb,
+                        seg.base_rows, seg.base_info_cols, seg.base_cols,
+                        seg.filler_size);
+    int acsz = ldpc.coded_size;
+    int *Er = (int *)malloc(seg.C * sizeof(int));
+    nr_ldpc_er_alloc(E, /*Nl=*/1, bps, seg.C, Er);
 
     int is_chase = (strcmp(cfg->harqRvSeq,"CHASE")==0);
     int rvseq[4] = {0,2,3,1};
@@ -3063,12 +3773,13 @@ void run_pusch_ul_eigen_bf_2tx_harq_simulation(const L1Config *cfg) {
     printf("Modulation   : %s (Qm=%d)\n", mcs.modulation, bps);
     printf("Target Rate  : %.4f\n", cr);
     printf("Mother Rate  : %.4f (Ncb=%d, actual NR LDPC BG%d/Zc=%d achieved rate)\n",
-           (double)K / ncb, ncb, ldpc.bg, ldpc.Zc);
+           (double)seg.Kprime / acsz, acsz, ldpc.bg, ldpc.Zc);
     printf("Num RB       : %d\n", num_rb);
     printf("UE Tx Layers : 1~2 (랭크 적응, 트라이얼당 1회 결정 후 모든 attempt에서 고정 — RI가 HARQ 버스트 중 안 바뀌는 실제 관례와 동일)\n");
     printf("gNB Rx Ant   : %d (Genie: 매 attempt 정확한 SVD / Eigen-BF: attempt 0에서 고정한 직교화 빔)\n", UL_EIGEN_NRX);
     printf("Detector     : %s (rank=2일 때 2x2, rank=1일 때 mrc_combine 2-branch)\n", use_mmse ? "MMSE" : "ZF");
     printf("TB Size/layer: %d bits\n", tbsz);
+    printf("Code Blocks  : C=%d/codeword%s\n", seg.C, seg.C > 1 ? " (CRC24B/CB)" : "");
     printf("Max Retx     : %d\n", max_retx);
     if (is_tdl)
         printf("Channel      : 고정 공간행렬 H(16x2) x 공유 SISO TDL 클러스터 게인(attempt마다 재드로우), DS=%.0fns, %d taps\n",
@@ -3077,20 +3788,29 @@ void run_pusch_ul_eigen_bf_2tx_harq_simulation(const L1Config *cfg) {
         printf("Channel      : 고정(빔도 채널도 트라이얼 내내 불변, attempt마다 잡음만 재드로우)\n");
     printf("Trials/SNR   : %d\n\n", cfg->numTrials);
 
-    int   *tb[2][2], *tb_crc[2][2], *coded_full[2][2], *selbits[2][2], *dec[2][2];
+    int   *tb[2][2], *tb_crc[2][2], *cb_bits[2][2], *selbits[2][2], *decoded_cb[2][2], *decoded_tb[2][2];
+    int  **coded_all[2][2], **rm[2][2];
     cx_t  *sym[2][2], *rx_hat[2][2];
-    double *allllr[2][2], *soft_buf[2][2];
+    double *allllr[2][2], **soft_buf[2][2];
     for (int p = 0; p < 2; p++) {
         for (int l = 0; l < 2; l++) {
             tb[p][l]         = (int    *)malloc(tbsz     * sizeof(int));
-            tb_crc[p][l]     = (int    *)malloc(K        * sizeof(int));
-            coded_full[p][l] = (int    *)malloc(ncb      * sizeof(int));
+            tb_crc[p][l]     = (int    *)malloc(B        * sizeof(int));
+            cb_bits[p][l]    = (int    *)malloc((size_t)seg.C * seg.Kprime * sizeof(int));
+            coded_all[p][l]  = (int   **)malloc(seg.C * sizeof(int *));
+            rm[p][l]         = (int   **)malloc(seg.C * sizeof(int *));
+            soft_buf[p][l]   = (double**)malloc(seg.C * sizeof(double *));
+            for (int r = 0; r < seg.C; r++) {
+                coded_all[p][l][r] = (int    *)malloc(acsz  * sizeof(int));
+                rm[p][l][r]        = (int    *)malloc(Er[r] * sizeof(int));
+                soft_buf[p][l][r]  = (double *)malloc(acsz  * sizeof(double));
+            }
             selbits[p][l]    = (int    *)malloc(E        * sizeof(int));
-            dec[p][l]        = (int    *)malloc(K        * sizeof(int));
+            decoded_cb[p][l] = (int    *)malloc(ldpc.info_size * sizeof(int));
+            decoded_tb[p][l] = (int    *)malloc(B        * sizeof(int));
             sym[p][l]        = (cx_t  *)malloc(num_data  * sizeof(cx_t));
             rx_hat[p][l]     = (cx_t  *)malloc(num_data  * sizeof(cx_t));
             allllr[p][l]     = (double *)malloc(E        * sizeof(double));
-            soft_buf[p][l]   = (double *)malloc(ncb      * sizeof(double));
         }
     }
     cx_t (*h_est_obs)[UL_EIGEN_NRX] = (cx_t (*)[UL_EIGEN_NRX])malloc((size_t)nppl * sizeof(*h_est_obs));
@@ -3170,8 +3890,11 @@ void run_pusch_ul_eigen_bf_2tx_harq_simulation(const L1Config *cfg) {
                 for (int l = 0; l < rank; l++) {
                     gen_random_bits(tb[p][l], tbsz);
                     attach_crc(tb[p][l], tbsz, CRC24A, tb_crc[p][l]);
-                    ldpc_encode(&ldpc, tb_crc[p][l], coded_full[p][l]);
-                    for (int i = 0; i < ncb; i++) soft_buf[p][l][i] = 0.0;
+                    nr_seg_split(tb_crc[p][l], &seg, cb_bits[p][l]);
+                    for (int r = 0; r < seg.C; r++) {
+                        ldpc_encode(&ldpc, cb_bits[p][l] + (size_t)r * seg.Kprime, coded_all[p][l][r]);
+                        for (int i = 0; i < acsz; i++) soft_buf[p][l][r][i] = 0.0;
+                    }
                 }
             }
 
@@ -3184,7 +3907,9 @@ void run_pusch_ul_eigen_bf_2tx_harq_simulation(const L1Config *cfg) {
 
                 for (int p = 0; p < 2; p++)
                     for (int l = 0; l < rank; l++) {
-                        nr_ldpc_rate_match_select(coded_full[p][l], ncb, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, E, selbits[p][l]);
+                        for (int r = 0; r < seg.C; r++)
+                            nr_ldpc_rate_match_select(coded_all[p][l][r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], rm[p][l][r]);
+                        nr_seg_concat(&seg, (const int *const *)rm[p][l], Er, selbits[p][l]);
                         qam_modulate(selbits[p][l], E, mcs.modulation, sym[p][l]);
                     }
 
@@ -3246,18 +3971,23 @@ void run_pusch_ul_eigen_bf_2tx_harq_simulation(const L1Config *cfg) {
                     }
                 }
 
-                int ml = tbsz < ldpc.info_size - crc_bits ? tbsz : ldpc.info_size - crc_bits;
-                if (ml < 0) ml = 0;
                 for (int p = 0; p < 2; p++) {
                     for (int l = 0; l < rank; l++) {
                         double env = nv_sum[p][l] / num_data;
                         qam_demap_llr(rx_hat[p][l], num_data, mcs.modulation, env, allllr[p][l]);
-                        nr_ldpc_rate_match_combine(soft_buf[p][l], ncb, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, E, allllr[p][l]);
-                        ldpc_decode(&ldpc, soft_buf[p][l], 25, dec[p][l]);
-                        crc_ok[p][l] = check_crc(dec[p][l], K, CRC24A);
+                        int roff = 0;
+                        int cb_crc_ok = 1;
+                        for (int r = 0; r < seg.C; r++) {
+                            nr_ldpc_rate_match_combine(soft_buf[p][l][r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], allllr[p][l] + roff);
+                            roff += Er[r];
+                            ldpc_decode(&ldpc, soft_buf[p][l][r], 25, decoded_cb[p][l]);
+                            if (seg.C > 1 && !check_crc(decoded_cb[p][l], seg.Kprime, CRC24B)) cb_crc_ok = 0;
+                            memcpy(decoded_tb[p][l] + (size_t)r * payload, decoded_cb[p][l], payload * sizeof(int));
+                        }
+                        crc_ok[p][l] = cb_crc_ok && check_crc(decoded_tb[p][l], B, CRC24A);
                         int biterr = 0;
-                        for (int i = 0; i < ml; i++)
-                            if (tb[p][l][i] != dec[p][l][i]) biterr++;
+                        for (int i = 0; i < tbsz; i++)
+                            if (tb[p][l][i] != decoded_tb[p][l][i]) biterr++;
                         be[p][l] = biterr;
                         if (attempt == 0) { be_1st[p][l] = biterr; crc_1st[p][l] = crc_ok[p][l]; }
                     }
@@ -3303,12 +4033,17 @@ void run_pusch_ul_eigen_bf_2tx_harq_simulation(const L1Config *cfg) {
     ldpc_free(&ldpc);
     free(pilot_pos); free(data_pos); free(pilotA); free(pilotB);
     free(dmrsA); free(dmrsB);
-    free(h_est_obs); free(cluster_taps);
+    free(h_est_obs); free(cluster_taps); free(Er);
     for (int p = 0; p < 2; p++) {
         for (int l = 0; l < 2; l++) {
-            free(tb[p][l]); free(tb_crc[p][l]); free(coded_full[p][l]); free(selbits[p][l]);
-            free(dec[p][l]); free(sym[p][l]); free(rx_hat[p][l]);
-            free(allllr[p][l]); free(soft_buf[p][l]);
+            free(tb[p][l]); free(tb_crc[p][l]); free(cb_bits[p][l]);
+            for (int r = 0; r < seg.C; r++) {
+                free(coded_all[p][l][r]); free(rm[p][l][r]); free(soft_buf[p][l][r]);
+            }
+            free(coded_all[p][l]); free(rm[p][l]); free(soft_buf[p][l]);
+            free(selbits[p][l]); free(decoded_cb[p][l]); free(decoded_tb[p][l]);
+            free(sym[p][l]); free(rx_hat[p][l]);
+            free(allllr[p][l]);
         }
     }
 }
@@ -3394,15 +4129,24 @@ void run_pusch_ul_eigen_bf_4tx_simulation(const L1Config *cfg) {
 
     int max_dbits = num_data * bps;
     int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1)    tbsz = 1;
-    if (tbsz > 8424) tbsz = 8424;
+    if (tbsz < 1) tbsz = 1;
 
-    int K = tbsz + crc_bits;
+    /* TS 38.212 5.2.2 code block segmentation (P0-2c, 2026-09-03) --
+     * see run_pdsch_simulation() (pdsch.c) for the pattern this mirrors. */
+    int B = tbsz + crc_bits;
+    NRSegInfo seg;
+    nr_seg_compute(B, cr, &seg);
+    int payload = seg.Kprime - seg.L;
+    int K = B;   /* legacy name kept below for filler/print-only uses */
     LDPCCodec ldpc;
-    ldpc_init(&ldpc, K, cr);
+    ldpc_init_resolved(&ldpc, seg.Kprime, cr, seg.bg, seg.Zc, seg.Kb,
+                        seg.base_rows, seg.base_info_cols, seg.base_cols,
+                        seg.filler_size);
     int acsz = ldpc.coded_size;
-    int E    = num_data * bps;   /* TS 38.212 5.4.2.1 rate-matched output length
-                                     (C=1, single code block -- E=G exactly) */
+    int E    = num_data * bps;   /* TS 38.212 5.4.2.1 total rate-matched
+                                     output length G, per codeword */
+    int *Er = (int *)malloc(seg.C * sizeof(int));
+    nr_ldpc_er_alloc(E, /*Nl=*/1, bps, seg.C, Er);
 
     static const unsigned int dmrs_cinit[4] = {0x87ee1920u, 0x87ee1921u, 0x87ee1922u, 0x87ee1923u};
     cx_t *dmrs[4];
@@ -3424,7 +4168,9 @@ void run_pusch_ul_eigen_bf_4tx_simulation(const L1Config *cfg) {
     printf("Data RE      : %d\n", num_data);
     printf("Trials/SNR   : %d\n\n", cfg->numTrials);
 
-    int    *tb[2][4], *tb_crc[2][4], *coded[2][4], *selbits[2][4], *dec[2][4];
+    int    *tb[2][4], *tb_crc[2][4], *cb_bits[2][4], *coded[2][4], *selbits[2][4];
+    int    *decoded_tb[2][4];
+    int   **rm[2][4];
     cx_t   *sym[2][4];
     double *allllr[2][4], *soft_buf[2][4];
     cx_t   *rx_hat[2][4];
@@ -3432,15 +4178,19 @@ void run_pusch_ul_eigen_bf_4tx_simulation(const L1Config *cfg) {
         for (int l = 0; l < 4; l++) {
             tb[p][l]     = (int    *)malloc(tbsz  * sizeof(int));
             tb_crc[p][l] = (int    *)malloc(K     * sizeof(int));
+            cb_bits[p][l]= (int    *)malloc((size_t)seg.C * seg.Kprime * sizeof(int));
             coded[p][l]  = (int    *)malloc(acsz  * sizeof(int));
+            rm[p][l]     = (int   **)malloc(seg.C * sizeof(int *));
+            for (int r = 0; r < seg.C; r++) rm[p][l][r] = (int *)malloc(Er[r] * sizeof(int));
             selbits[p][l]= (int    *)malloc(E     * sizeof(int));
             sym[p][l]    = (cx_t  *)malloc(num_data * sizeof(cx_t));
             allllr[p][l] = (double *)malloc(E     * sizeof(double));
             soft_buf[p][l]=(double *)malloc(acsz  * sizeof(double));
-            dec[p][l]    = (int    *)malloc(K     * sizeof(int));
+            decoded_tb[p][l] = (int *)malloc(B    * sizeof(int));
             rx_hat[p][l] = (cx_t  *)malloc(num_data * sizeof(cx_t));
         }
     }
+    int *decoded_cb = (int *)malloc(ldpc.info_size * sizeof(int));
     cx_t (*h_est_obs)[UL_EIGEN_NRX] = (cx_t (*)[UL_EIGEN_NRX])malloc((size_t)nppl * sizeof(*h_est_obs));
 
     printf("%-9s  %-12s %-11s  %-12s %-11s  %s\n",
@@ -3509,10 +4259,14 @@ void run_pusch_ul_eigen_bf_4tx_simulation(const L1Config *cfg) {
                 for (int l = 0; l < rank; l++) {
                     gen_random_bits(tb[p][l], tbsz);
                     attach_crc(tb[p][l], tbsz, CRC24A, tb_crc[p][l]);
-                    ldpc_encode(&ldpc, tb_crc[p][l], coded[p][l]);
-                    nr_ldpc_rate_match_select(coded[p][l], acsz, ldpc.bg, ldpc.Zc,
-                                               ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                               /*rv=*/0, E, selbits[p][l]);
+                    nr_seg_split(tb_crc[p][l], &seg, cb_bits[p][l]);
+                    for (int r = 0; r < seg.C; r++) {
+                        ldpc_encode(&ldpc, cb_bits[p][l] + (size_t)r*seg.Kprime, coded[p][l]);
+                        nr_ldpc_rate_match_select(coded[p][l], acsz, ldpc.bg, ldpc.Zc,
+                                                   ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                                   /*rv=*/0, Er[r], rm[p][l][r]);
+                    }
+                    nr_seg_concat(&seg, (const int *const *)rm[p][l], Er, selbits[p][l]);
                     qam_modulate(selbits[p][l], E, mcs.modulation, sym[p][l]);
                 }
 
@@ -3541,15 +4295,23 @@ void run_pusch_ul_eigen_bf_4tx_simulation(const L1Config *cfg) {
                 for (int l = 0; l < rank; l++) {
                     double env = nv_sum[p][l] / num_data;
                     qam_demap_llr(rx_hat[p][l], num_data, mcs.modulation, env, allllr[p][l]);
-                    memset(soft_buf[p][l], 0, acsz * sizeof(double));
-                    nr_ldpc_rate_match_combine(soft_buf[p][l], acsz, ldpc.bg, ldpc.Zc,
-                                                ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                                /*rv=*/0, E, allllr[p][l]);
-                    ldpc_decode(&ldpc, soft_buf[p][l], 25, dec[p][l]);
 
-                    int crc_ok = check_crc(dec[p][l], K, CRC24A);
+                    int roff = 0;
+                    int cb_crc_ok = 1;
+                    for (int r = 0; r < seg.C; r++) {
+                        memset(soft_buf[p][l], 0, acsz * sizeof(double));
+                        nr_ldpc_rate_match_combine(soft_buf[p][l], acsz, ldpc.bg, ldpc.Zc,
+                                                    ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                                    /*rv=*/0, Er[r], allllr[p][l] + roff);
+                        roff += Er[r];
+                        ldpc_decode(&ldpc, soft_buf[p][l], 25, decoded_cb);
+                        if (seg.C > 1 && !check_crc(decoded_cb, seg.Kprime, CRC24B)) cb_crc_ok = 0;
+                        memcpy(decoded_tb[p][l] + (size_t)r*payload, decoded_cb, payload*sizeof(int));
+                    }
+
+                    int crc_ok = cb_crc_ok && check_crc(decoded_tb[p][l], B, CRC24A);
                     int be = 0;
-                    for (int i = 0; i < tbsz; i++) if (tb[p][l][i] != dec[p][l][i]) be++;
+                    for (int i = 0; i < tbsz; i++) if (tb[p][l][i] != decoded_tb[p][l][i]) be++;
                     b_err[p]  += be;
                     t_bits[p] += tbsz;
                     if (!crc_ok || be > 0) any_err[p] = 1;
@@ -3573,10 +4335,13 @@ void run_pusch_ul_eigen_bf_4tx_simulation(const L1Config *cfg) {
     ldpc_free(&ldpc);
     for (int l = 0; l < 4; l++) free(dmrs[l]);
     free(h_est_obs);
+    free(Er); free(decoded_cb);
     for (int p = 0; p < 2; p++)
         for (int l = 0; l < 4; l++) {
-            free(tb[p][l]); free(tb_crc[p][l]); free(coded[p][l]); free(selbits[p][l]);
-            free(sym[p][l]); free(allllr[p][l]); free(soft_buf[p][l]); free(dec[p][l]);
+            free(tb[p][l]); free(tb_crc[p][l]); free(cb_bits[p][l]); free(coded[p][l]);
+            for (int r = 0; r < seg.C; r++) free(rm[p][l][r]);
+            free(rm[p][l]); free(selbits[p][l]);
+            free(sym[p][l]); free(allllr[p][l]); free(soft_buf[p][l]); free(decoded_tb[p][l]);
             free(rx_hat[p][l]);
         }
 }
@@ -3618,15 +4383,24 @@ void run_pusch_ul_eigen_bf_4tx_tdl_simulation(const L1Config *cfg) {
 
     int max_dbits = num_data * bps;
     int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1)    tbsz = 1;
-    if (tbsz > 8424) tbsz = 8424;
+    if (tbsz < 1) tbsz = 1;
 
-    int K = tbsz + crc_bits;
+    /* TS 38.212 5.2.2 code block segmentation (P0-2c, 2026-09-03) --
+     * see run_pdsch_simulation() (pdsch.c) for the pattern this mirrors. */
+    int B = tbsz + crc_bits;
+    NRSegInfo seg;
+    nr_seg_compute(B, cr, &seg);
+    int payload = seg.Kprime - seg.L;
+    int K = B;   /* legacy name kept below for filler/print-only uses */
     LDPCCodec ldpc;
-    ldpc_init(&ldpc, K, cr);
+    ldpc_init_resolved(&ldpc, seg.Kprime, cr, seg.bg, seg.Zc, seg.Kb,
+                        seg.base_rows, seg.base_info_cols, seg.base_cols,
+                        seg.filler_size);
     int acsz = ldpc.coded_size;
-    int E    = num_data * bps;   /* TS 38.212 5.4.2.1 rate-matched output length
-                                     (C=1, single code block -- E=G exactly) */
+    int E    = num_data * bps;   /* TS 38.212 5.4.2.1 total rate-matched
+                                     output length G, per codeword */
+    int *Er = (int *)malloc(seg.C * sizeof(int));
+    nr_ldpc_er_alloc(E, /*Nl=*/1, bps, seg.C, Er);
 
     double scs_hz = (double)cfg->scsKHz * 1000.0;
 
@@ -3652,7 +4426,9 @@ void run_pusch_ul_eigen_bf_4tx_tdl_simulation(const L1Config *cfg) {
     printf("Data RE      : %d\n", num_data);
     printf("Trials/SNR   : %d\n\n", cfg->numTrials);
 
-    int    *tb[2][4], *tb_crc[2][4], *coded[2][4], *selbits[2][4], *dec[2][4];
+    int    *tb[2][4], *tb_crc[2][4], *cb_bits[2][4], *coded[2][4], *selbits[2][4];
+    int    *decoded_tb[2][4];
+    int   **rm[2][4];
     cx_t   *sym[2][4];
     double *allllr[2][4], *soft_buf[2][4];
     cx_t   *rx_hat[2][4];
@@ -3660,15 +4436,19 @@ void run_pusch_ul_eigen_bf_4tx_tdl_simulation(const L1Config *cfg) {
         for (int l = 0; l < 4; l++) {
             tb[p][l]     = (int    *)malloc(tbsz  * sizeof(int));
             tb_crc[p][l] = (int    *)malloc(K     * sizeof(int));
+            cb_bits[p][l]= (int    *)malloc((size_t)seg.C * seg.Kprime * sizeof(int));
             coded[p][l]  = (int    *)malloc(acsz  * sizeof(int));
+            rm[p][l]     = (int   **)malloc(seg.C * sizeof(int *));
+            for (int r = 0; r < seg.C; r++) rm[p][l][r] = (int *)malloc(Er[r] * sizeof(int));
             selbits[p][l]= (int    *)malloc(E     * sizeof(int));
             sym[p][l]    = (cx_t  *)malloc(num_data * sizeof(cx_t));
             allllr[p][l] = (double *)malloc(E     * sizeof(double));
             soft_buf[p][l]=(double *)malloc(acsz  * sizeof(double));
-            dec[p][l]    = (int    *)malloc(K     * sizeof(int));
+            decoded_tb[p][l] = (int *)malloc(B    * sizeof(int));
             rx_hat[p][l] = (cx_t  *)malloc(num_data * sizeof(cx_t));
         }
     }
+    int *decoded_cb = (int *)malloc(ldpc.info_size * sizeof(int));
     cx_t (*h_est_obs)[UL_EIGEN_NRX] = (cx_t (*)[UL_EIGEN_NRX])malloc((size_t)nppl * sizeof(*h_est_obs));
     cx_t *cluster_taps = (cx_t *)malloc(TDL_MAX_TAPS * sizeof(cx_t));
 
@@ -3744,10 +4524,14 @@ void run_pusch_ul_eigen_bf_4tx_tdl_simulation(const L1Config *cfg) {
                 for (int l = 0; l < rank; l++) {
                     gen_random_bits(tb[p][l], tbsz);
                     attach_crc(tb[p][l], tbsz, CRC24A, tb_crc[p][l]);
-                    ldpc_encode(&ldpc, tb_crc[p][l], coded[p][l]);
-                    nr_ldpc_rate_match_select(coded[p][l], acsz, ldpc.bg, ldpc.Zc,
-                                               ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                               /*rv=*/0, E, selbits[p][l]);
+                    nr_seg_split(tb_crc[p][l], &seg, cb_bits[p][l]);
+                    for (int r = 0; r < seg.C; r++) {
+                        ldpc_encode(&ldpc, cb_bits[p][l] + (size_t)r*seg.Kprime, coded[p][l]);
+                        nr_ldpc_rate_match_select(coded[p][l], acsz, ldpc.bg, ldpc.Zc,
+                                                   ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                                   /*rv=*/0, Er[r], rm[p][l][r]);
+                    }
+                    nr_seg_concat(&seg, (const int *const *)rm[p][l], Er, selbits[p][l]);
                     qam_modulate(selbits[p][l], E, mcs.modulation, sym[p][l]);
                 }
 
@@ -3784,15 +4568,23 @@ void run_pusch_ul_eigen_bf_4tx_tdl_simulation(const L1Config *cfg) {
                 for (int l = 0; l < rank; l++) {
                     double env = nv_sum[p][l] / num_data;
                     qam_demap_llr(rx_hat[p][l], num_data, mcs.modulation, env, allllr[p][l]);
-                    memset(soft_buf[p][l], 0, acsz * sizeof(double));
-                    nr_ldpc_rate_match_combine(soft_buf[p][l], acsz, ldpc.bg, ldpc.Zc,
-                                                ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                                /*rv=*/0, E, allllr[p][l]);
-                    ldpc_decode(&ldpc, soft_buf[p][l], 25, dec[p][l]);
 
-                    int crc_ok = check_crc(dec[p][l], K, CRC24A);
+                    int roff = 0;
+                    int cb_crc_ok = 1;
+                    for (int r = 0; r < seg.C; r++) {
+                        memset(soft_buf[p][l], 0, acsz * sizeof(double));
+                        nr_ldpc_rate_match_combine(soft_buf[p][l], acsz, ldpc.bg, ldpc.Zc,
+                                                    ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                                    /*rv=*/0, Er[r], allllr[p][l] + roff);
+                        roff += Er[r];
+                        ldpc_decode(&ldpc, soft_buf[p][l], 25, decoded_cb);
+                        if (seg.C > 1 && !check_crc(decoded_cb, seg.Kprime, CRC24B)) cb_crc_ok = 0;
+                        memcpy(decoded_tb[p][l] + (size_t)r*payload, decoded_cb, payload*sizeof(int));
+                    }
+
+                    int crc_ok = cb_crc_ok && check_crc(decoded_tb[p][l], B, CRC24A);
                     int be = 0;
-                    for (int i = 0; i < tbsz; i++) if (tb[p][l][i] != dec[p][l][i]) be++;
+                    for (int i = 0; i < tbsz; i++) if (tb[p][l][i] != decoded_tb[p][l][i]) be++;
                     b_err[p]  += be;
                     t_bits[p] += tbsz;
                     if (!crc_ok || be > 0) any_err[p] = 1;
@@ -3817,10 +4609,13 @@ void run_pusch_ul_eigen_bf_4tx_tdl_simulation(const L1Config *cfg) {
     free(pilot_pos); free(data_pos);
     for (int l = 0; l < 4; l++) { free(pilotL[l]); free(dmrs[l]); }
     free(h_est_obs); free(cluster_taps);
+    free(Er); free(decoded_cb);
     for (int p = 0; p < 2; p++)
         for (int l = 0; l < 4; l++) {
-            free(tb[p][l]); free(tb_crc[p][l]); free(coded[p][l]); free(selbits[p][l]);
-            free(sym[p][l]); free(allllr[p][l]); free(soft_buf[p][l]); free(dec[p][l]);
+            free(tb[p][l]); free(tb_crc[p][l]); free(cb_bits[p][l]); free(coded[p][l]);
+            for (int r = 0; r < seg.C; r++) free(rm[p][l][r]);
+            free(rm[p][l]); free(selbits[p][l]);
+            free(sym[p][l]); free(allllr[p][l]); free(soft_buf[p][l]); free(decoded_tb[p][l]);
             free(rx_hat[p][l]);
         }
 }
@@ -3866,11 +4661,24 @@ void run_pusch_ul_eigen_bf_4tx_harq_simulation(const L1Config *cfg) {
     int E    = num_data * bps;
     int tbsz = (int)(E * cr);
     if (tbsz < 1)    tbsz = 1;
-    if (tbsz > 8424) tbsz = 8424;
-    int K = tbsz + crc_bits;
 
-    LDPCCodec ldpc; ldpc_init(&ldpc, K, cr);
-    int ncb = ldpc.coded_size;
+    /* TS 38.212 5.2.2 code block segmentation (P0-2c, 2026-09-03) --
+     * every [p][l] combination (scenario x layer) is an independent
+     * codeword sharing tbsz/cr, so they share one NRSegInfo/LDPCCodec;
+     * each gets its own seg.C code blocks and seg.C persistent HARQ
+     * soft-combining buffers. See run_pusch_harq_simulation() for the
+     * same pattern on one codeword. */
+    int B = tbsz + crc_bits;
+    NRSegInfo seg;
+    nr_seg_compute(B, cr, &seg);
+    int payload = seg.Kprime - seg.L;
+    LDPCCodec ldpc;
+    ldpc_init_resolved(&ldpc, seg.Kprime, cr, seg.bg, seg.Zc, seg.Kb,
+                        seg.base_rows, seg.base_info_cols, seg.base_cols,
+                        seg.filler_size);
+    int acsz = ldpc.coded_size;
+    int *Er = (int *)malloc(seg.C * sizeof(int));
+    nr_ldpc_er_alloc(E, /*Nl=*/1, bps, seg.C, Er);
 
     int is_chase = (strcmp(cfg->harqRvSeq,"CHASE")==0);
     int rvseq[4] = {0,2,3,1};
@@ -3891,12 +4699,13 @@ void run_pusch_ul_eigen_bf_4tx_harq_simulation(const L1Config *cfg) {
     printf("Modulation   : %s (Qm=%d)\n", mcs.modulation, bps);
     printf("Target Rate  : %.4f\n", cr);
     printf("Mother Rate  : %.4f (Ncb=%d, actual NR LDPC BG%d/Zc=%d achieved rate)\n",
-           (double)K / ncb, ncb, ldpc.bg, ldpc.Zc);
+           (double)seg.Kprime / acsz, acsz, ldpc.bg, ldpc.Zc);
     printf("Num RB       : %d\n", num_rb);
     printf("UE Tx Layers : 1~4 (랭크 적응, 트라이얼당 1회 결정 후 모든 attempt에서 고정)\n");
     printf("gNB Rx Ant   : %d (Genie: 매 attempt 정확한 4x4 SVD / Eigen-BF: attempt 0에서 고정한 직교화 빔)\n", UL_EIGEN_NRX);
     printf("Detector     : MMSE 고정 (rank1=mrc_combine_4rx, rank2=4rx2, rank3=4rx3, rank4=4x4)\n");
     printf("TB Size/layer: %d bits\n", tbsz);
+    printf("Code Blocks  : C=%d/codeword%s\n", seg.C, seg.C > 1 ? " (CRC24B/CB)" : "");
     printf("Max Retx     : %d\n", max_retx);
     if (is_tdl)
         printf("Channel      : 고정 공간행렬 H(16x4) x 공유 SISO TDL 클러스터 게인(attempt마다 재드로우), DS=%.0fns, %d taps\n",
@@ -3905,20 +4714,29 @@ void run_pusch_ul_eigen_bf_4tx_harq_simulation(const L1Config *cfg) {
         printf("Channel      : 고정(빔도 채널도 트라이얼 내내 불변, attempt마다 잡음만 재드로우)\n");
     printf("Trials/SNR   : %d\n\n", cfg->numTrials);
 
-    int   *tb[2][4], *tb_crc[2][4], *coded_full[2][4], *selbits[2][4], *dec[2][4];
+    int   *tb[2][4], *tb_crc[2][4], *cb_bits[2][4], *selbits[2][4], *decoded_cb[2][4], *decoded_tb[2][4];
+    int  **coded_all[2][4], **rm[2][4];
     cx_t  *sym[2][4], *rx_hat[2][4];
-    double *allllr[2][4], *soft_buf[2][4];
+    double *allllr[2][4], **soft_buf[2][4];
     for (int p = 0; p < 2; p++) {
         for (int l = 0; l < 4; l++) {
             tb[p][l]         = (int    *)malloc(tbsz     * sizeof(int));
-            tb_crc[p][l]     = (int    *)malloc(K        * sizeof(int));
-            coded_full[p][l] = (int    *)malloc(ncb      * sizeof(int));
+            tb_crc[p][l]     = (int    *)malloc(B        * sizeof(int));
+            cb_bits[p][l]    = (int    *)malloc((size_t)seg.C * seg.Kprime * sizeof(int));
+            coded_all[p][l]  = (int   **)malloc(seg.C * sizeof(int *));
+            rm[p][l]         = (int   **)malloc(seg.C * sizeof(int *));
+            soft_buf[p][l]   = (double**)malloc(seg.C * sizeof(double *));
+            for (int r = 0; r < seg.C; r++) {
+                coded_all[p][l][r] = (int    *)malloc(acsz  * sizeof(int));
+                rm[p][l][r]        = (int    *)malloc(Er[r] * sizeof(int));
+                soft_buf[p][l][r]  = (double *)malloc(acsz  * sizeof(double));
+            }
             selbits[p][l]    = (int    *)malloc(E        * sizeof(int));
-            dec[p][l]        = (int    *)malloc(K        * sizeof(int));
+            decoded_cb[p][l] = (int    *)malloc(ldpc.info_size * sizeof(int));
+            decoded_tb[p][l] = (int    *)malloc(B        * sizeof(int));
             sym[p][l]        = (cx_t  *)malloc(num_data  * sizeof(cx_t));
             rx_hat[p][l]     = (cx_t  *)malloc(num_data  * sizeof(cx_t));
             allllr[p][l]     = (double *)malloc(E        * sizeof(double));
-            soft_buf[p][l]   = (double *)malloc(ncb      * sizeof(double));
         }
     }
     cx_t (*h_est_obs)[UL_EIGEN_NRX] = (cx_t (*)[UL_EIGEN_NRX])malloc((size_t)nppl * sizeof(*h_est_obs));
@@ -3990,8 +4808,11 @@ void run_pusch_ul_eigen_bf_4tx_harq_simulation(const L1Config *cfg) {
                 for (int l = 0; l < rank; l++) {
                     gen_random_bits(tb[p][l], tbsz);
                     attach_crc(tb[p][l], tbsz, CRC24A, tb_crc[p][l]);
-                    ldpc_encode(&ldpc, tb_crc[p][l], coded_full[p][l]);
-                    for (int i = 0; i < ncb; i++) soft_buf[p][l][i] = 0.0;
+                    nr_seg_split(tb_crc[p][l], &seg, cb_bits[p][l]);
+                    for (int r = 0; r < seg.C; r++) {
+                        ldpc_encode(&ldpc, cb_bits[p][l] + (size_t)r * seg.Kprime, coded_all[p][l][r]);
+                        for (int i = 0; i < acsz; i++) soft_buf[p][l][r][i] = 0.0;
+                    }
                 }
 
             int crc_ok[2][4]={{0}}, be[2][4]={{0}};
@@ -4003,7 +4824,9 @@ void run_pusch_ul_eigen_bf_4tx_harq_simulation(const L1Config *cfg) {
 
                 for (int p = 0; p < 2; p++)
                     for (int l = 0; l < rank; l++) {
-                        nr_ldpc_rate_match_select(coded_full[p][l], ncb, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, E, selbits[p][l]);
+                        for (int r = 0; r < seg.C; r++)
+                            nr_ldpc_rate_match_select(coded_all[p][l][r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], rm[p][l][r]);
+                        nr_seg_concat(&seg, (const int *const *)rm[p][l], Er, selbits[p][l]);
                         qam_modulate(selbits[p][l], E, mcs.modulation, sym[p][l]);
                     }
 
@@ -4039,18 +4862,23 @@ void run_pusch_ul_eigen_bf_4tx_harq_simulation(const L1Config *cfg) {
                     }
                 }
 
-                int ml = tbsz < ldpc.info_size - crc_bits ? tbsz : ldpc.info_size - crc_bits;
-                if (ml < 0) ml = 0;
                 for (int p = 0; p < 2; p++) {
                     for (int l = 0; l < rank; l++) {
                         double env = nv_sum[p][l] / num_data;
                         qam_demap_llr(rx_hat[p][l], num_data, mcs.modulation, env, allllr[p][l]);
-                        nr_ldpc_rate_match_combine(soft_buf[p][l], ncb, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, E, allllr[p][l]);
-                        ldpc_decode(&ldpc, soft_buf[p][l], 25, dec[p][l]);
-                        crc_ok[p][l] = check_crc(dec[p][l], K, CRC24A);
+                        int roff = 0;
+                        int cb_crc_ok = 1;
+                        for (int r = 0; r < seg.C; r++) {
+                            nr_ldpc_rate_match_combine(soft_buf[p][l][r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], allllr[p][l] + roff);
+                            roff += Er[r];
+                            ldpc_decode(&ldpc, soft_buf[p][l][r], 25, decoded_cb[p][l]);
+                            if (seg.C > 1 && !check_crc(decoded_cb[p][l], seg.Kprime, CRC24B)) cb_crc_ok = 0;
+                            memcpy(decoded_tb[p][l] + (size_t)r * payload, decoded_cb[p][l], payload * sizeof(int));
+                        }
+                        crc_ok[p][l] = cb_crc_ok && check_crc(decoded_tb[p][l], B, CRC24A);
                         int biterr = 0;
-                        for (int i = 0; i < ml; i++)
-                            if (tb[p][l][i] != dec[p][l][i]) biterr++;
+                        for (int i = 0; i < tbsz; i++)
+                            if (tb[p][l][i] != decoded_tb[p][l][i]) biterr++;
                         be[p][l] = biterr;
                         if (attempt == 0) { be_1st[p][l] = biterr; crc_1st[p][l] = crc_ok[p][l]; }
                     }
@@ -4096,11 +4924,16 @@ void run_pusch_ul_eigen_bf_4tx_harq_simulation(const L1Config *cfg) {
     ldpc_free(&ldpc);
     free(pilot_pos); free(data_pos);
     for (int l = 0; l < 4; l++) { free(pilotL[l]); free(dmrs[l]); }
-    free(h_est_obs); free(cluster_taps);
+    free(h_est_obs); free(cluster_taps); free(Er);
     for (int p = 0; p < 2; p++)
         for (int l = 0; l < 4; l++) {
-            free(tb[p][l]); free(tb_crc[p][l]); free(coded_full[p][l]); free(selbits[p][l]);
-            free(dec[p][l]); free(sym[p][l]); free(rx_hat[p][l]);
-            free(allllr[p][l]); free(soft_buf[p][l]);
+            free(tb[p][l]); free(tb_crc[p][l]); free(cb_bits[p][l]);
+            for (int r = 0; r < seg.C; r++) {
+                free(coded_all[p][l][r]); free(rm[p][l][r]); free(soft_buf[p][l][r]);
+            }
+            free(coded_all[p][l]); free(rm[p][l]); free(soft_buf[p][l]);
+            free(selbits[p][l]); free(decoded_cb[p][l]); free(decoded_tb[p][l]);
+            free(sym[p][l]); free(rx_hat[p][l]);
+            free(allllr[p][l]);
         }
 }
