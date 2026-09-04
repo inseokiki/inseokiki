@@ -79,7 +79,7 @@ static void run_legacy_sim(const L1Config *cfg) {
 
     int info_blk = 128;
     LDPCCodec ldpc; ldpc_init(&ldpc, info_blk, cfg->codeRate);
-    PolarCodec polar; polar_init(&polar, 256, info_blk, 256);
+    PolarCodec polar; polar_init(&polar, 256, info_blk, 256, /*I_IL=*/0, /*n_PC=*/0, /*n_PC_wm=*/0);
 
     int use_ldpc  = (strcmp(cfg->coding,"LDPC")==0);
     int use_polar = (strcmp(cfg->coding,"POLAR")==0);
@@ -139,7 +139,8 @@ static void run_legacy_sim(const L1Config *cfg) {
                 qam_demap_llr(rx_mod, ns, cfg->modulation, nv, all_llr);
                 memcpy(llr, all_llr, coded_sz*sizeof(double));
                 if (use_ldpc) ldpc_decode(&ldpc, llr, 20, rxbits);
-                else          polar_decode(&polar, llr, rxbits);
+                else          polar_decode_scl(&polar, llr, POLAR_SCL_L, /*use_crc=*/0, CRC24C,
+                                                /*use_rnti=*/0, 0, rxbits);
             } else {
                 int *tmp = (int *)malloc(ns*bps*sizeof(int));
                 qam_demodulate(rx_mod, ns, cfg->modulation, tmp);

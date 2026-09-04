@@ -8,20 +8,6 @@
 
 ## 진행 중
 
-- [ ] Polar 코드(PBCH/PDCCH/PUCCH 제어채널) 표준 정합화 — 2026-09-03
-  상태 점검에서 확인. LDPC는 P0-1~P0-3+P0-2c로 표준 정합화가 거의
-  끝났지만, `polar.c`는 아직 착수 전: (1) 극성화 시퀀스가 TS 38.212
-  Table 5.3.1.2-1(고정 1024-엔트리 신뢰도 시퀀스)이 아니라
-  `generate_frozen_bits()`의 일반 Bhattacharyya 파라미터 재귀로 매번
-  계산 — AWGN에서 근사적 경향은 맞지만 스펙이 규정한 정확한 시퀀스와
-  bit-exact 일치 보장 없음. (2) 디코더가 SC(Successive Cancellation)
-  뿐이고 CA-SCL(CRC-Aided SCL)이 없음 — 실제 UE/gNB는 짧은 블록
-  (PBCH/PDCCH)에서 CA-SCL을 씀. Rate matching의 shortening 위치 처리
-  (§5.4.1.1)는 스펙 절차를 따르도록 이미 구현돼 있어(2026-07-13 버그
-  수정 이력) 이 부분은 구조적으로 맞음. `docs/analysis/
-  phy_development_direction_validation.md`의 "Phase 3. Polar chain
-  정합화"가 이 항목에 해당 — 착수 전 우선순위/범위(PBCH만 먼저 할지,
-  CA-SCL까지 포함할지) 확인 필요.
 - [ ] OLLA를 CL_XPORT로 추가 확장 — SISO/SIMO_MRC/SM_2X2/SM_4X4는
   완료(SM_4X4는 2026-09-03, 아래 "완료" 참조). CL_XPORT(RI+PMI 적응)는
   매 트라이얼 RI/PMI 재선택과 OLLA 오프셋을 어떻게 결합할지(RI 선택
@@ -56,6 +42,69 @@
 
 ## 완료 (최근)
 
+- [x] Polar 코드 표준 정합화 Phase 4(CA-SCL 디코더) + PBCH/PDCCH/PUCCH/
+  main.c 전 채널 연결 — 2026-09-04 완료. CA-SCL(List size, CRC-aided
+  path selection)은 3GPP 비규정 구현 선택 영역(인코더만 표준 규정,
+  디코더는 이 프로젝트의 LDPC BP 디코더와 동일 지위) — Tal & Vardy
+  List Decoding, Balatsoukas-Stimming LLR 도메인 경로 메트릭,
+  Niu & Chen CRC-aided path selection 등 일반 문헌 알고리즘으로 구현,
+  3GPP 근거 확인 절차 대상 아님. `polar_decode_scl()`을 `polar.h`에
+  선언(`SCLPath`/`scl_recurse()`/`scl_pm_cost()`는 `polar.c` 내부).
+  검증 중 CRC 미통과 시 최악(마지막 순회) 후보가 반환되던 버그 1건
+  발견·수정(주석은 "p=0 후보 보존"이라 했지만 실제로는 매 반복
+  덮어써지는 구조였음) — `p==0`일 때 별도 저장하는 방식으로 수정.
+  검증(저장소 밖 스크래치 하네스): (1) SCL(L=1, CRC 미사용)이 일반
+  SC와 노이즈 있는 300회 트라이얼에서 비트 단위 완전 일치(분기/pruning
+  로직이 이론적으로 SC와 등가임을 증명하는 차등 테스트), (2) CA-SCL
+  (L=8) BLER이 동일 SNR에서 일반 SC 대비 개선(17.4%→4.0%, K=56
+  PBCH 유사 설정), (3) RNTI-masked CRC 경로선택(PDCCH 전용) 정상
+  RNTI에서 500/500 정확 복호, 틀린 RNTI에서 0/500 오탐(masking이
+  실제로 적용됨을 확인) — ASan/UBSan 누수·UB 없음, 전체 회귀 90/90
+  유지(연결 전후 동일). 이어서 사용자 요청("다 연결해줘")으로
+  PBCH(use_crc=1)/PDCCH(use_crc=1,RNTI-masked)/PUCCH 4개소·main.c
+  legacy sim(use_crc=0, UCI/PUCCH는 spec상 K<=11에 별도 CRC 없어
+  genie 비교 유지)까지 기존 `polar_decode()`를 전부
+  `polar_decode_scl()`로 교체, list size는 `polar.h`의
+  `POLAR_SCL_L=8`(구현 선택, 문헌 통상값)로 공유. PBCH AWGN 실행
+  결과(SNR -6~0dB, 3000 trial)로 물리적으로 타당한 BLER 곡선 확인.
+  Phase 1~3(신뢰도 시퀀스+입력 인터리빙+PC 비트)도 같은 날 완료,
+  사용자 확인된 순서(1→2→3→4)대로 진행.
+  **Phase 1(표)**: TS 38.212 Table 5.3.1.2-1(극성화 시퀀스 Q_Nmax,
+  1024개)/Table 5.3.1.1-1(입력 인터리빙 패턴, 164개) 둘 다 로컬
+  `3gpp/38212-hc0/38212-hc0.docx` 원문에서 프로그램적 추출(LDPC 표
+  추출과 동일 방식) — **두 가지 독립 방법으로 교차검증**: (1) docx
+  직접 파싱 결과가 3gpp-server MCP 렌더링 결과와 셀 단위로 완전 일치,
+  (2) Q_Nmax 앞 32개 값이 잘 알려진 참조값과 전부 일치, (3) 두 표 모두
+  C에서 실행 시점에 유효한 순열(중복/누락 없음)임을 직접 검증. 신규
+  `polar_tables.h`/`.c`.
+  **Phase 2(입력 인터리빙, §5.3.1.1)**: `I_IL` 플래그 기반 `Pi(k)`
+  구성 — PBCH(§7.1.4)/PDCCH(§7.3.3)는 `I_IL=1`(인터리버 실제 동작),
+  UCI(§6.3.1.3.1)는 `I_IL=0`(no-op) **직접 원문 이미지로 확인**(처음엔
+  반대로 추정할 뻔했으나 각 채널 절을 실제로 열어 확인 후 정정).
+  **Phase 3(PC 비트, §5.3.1.2)**: 5단 시프트레지스터 기반 PC 비트 값
+  생성 알고리즘을 원문 이미지 20여 개로 전부 확인, `n_PC`/`n_PC^wm`
+  결정 조건도 원문에서 확인(`18≤K≤25`→`n_PC=3`, `K>30`→`n_PC=0`,
+  PBCH/PDCCH는 항상 `n_PC=0`). **미확인으로 남긴 것**: `26≤K≤30`
+  구간이 원문(§6.3.1.3.1)에 명시적 분기 없음 — `polar_uci_npc()`가
+  `n_PC=0`(K>30과 동일)을 보수적 기본값으로 적용, 주석에 명시. 디코더
+  SC도 PC 비트 위치에서 (0 고정이 아니라) 시프트레지스터가 계산한
+  기댓값을 강제하도록 확장(인코더와 동일한 상태 전이를 디코더 재귀가
+  n=0..N-1 순서로 그대로 재현 — 이 recursion 구조의 기존 성질을 그대로
+  활용, 새 알고리즘 아님).
+  `polar_init()` 시그니처에 `I_IL`/`n_PC`/`n_PC_wm` 추가, `pbch.c`(2곳)/
+  `pdcch.c`(4곳)/`pucch.c`(4곳)/`main.c`(레거시 경로 1곳) 총 11개 호출부
+  갱신, UCI용 `polar_uci_npc()` 헬퍼 신규.
+  **검증**: standalone 하네스로 PBCH/PDCCH 파라미터(I_IL=1) +
+  UCI+PC비트(K=20, n_PC_wm=0/1 둘 다) + UCI 무PC(K=30) 총 5개 구성 각각
+  200트라이얼 잡음 없는 라운드트립 전부 정확 일치, ASan/UBSan 클린.
+  전체 clean 빌드 경고 0건(기존 5건 무관 경고만 유지),
+  `regression_test.sh` **90/90 그대로 통과**. 실제 시뮬레이터로 PBCH/
+  PDCCH/PUCCH F3 수동 SNR 스윕 — 셋 다 깨끗한 워터폴 확인.
+  **알려진 한계**: 이 프로젝트의 PUCCH 함수 4개 전부 UCI 비트수를
+  3~11로 강제 클램프하고 있어, PC 비트 경로(K∈[18,25]에서만 발동)는
+  실제 시뮬레이터 어떤 config로도 아직 도달 불가능 — standalone
+  하네스로만 검증됨(코드 자체는 회귀에 포함돼 있으나 실사용 경로에서
+  exercised 안 됨, 명시).
 - [x] 빔 관리 P1 -> P3(UE Rx 빔 정제) -> P2(gNB Tx 빔 재정제) — 2026-09-03
   완료. 사용자 확인된 설계대로 UE를 더 이상 단일/광각 안테나로 취급하지
   않고 4소자 ULA + 자체 DFT 빔 코드북(오버샘플링 x2, 8후보)을 갖는다고

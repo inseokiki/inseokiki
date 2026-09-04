@@ -376,8 +376,10 @@ void run_pucch_format2_simulation(const L1Config *cfg) {
     const int bps = 2;
     int E = num_re * bps;
 
+    int n_PC, n_PC_wm;
+    polar_uci_npc(K, E, &n_PC, &n_PC_wm);
     PolarCodec polar;
-    polar_init(&polar, N, K, E);
+    polar_init(&polar, N, K, E, /*I_IL=*/0, n_PC, n_PC_wm);   /* TS 38.212 6.3.1.3.1 */
 
     printf("=== PUCCH Format 2 (Short, Coded UCI, e.g. CQI) ===\n");
     printf("UCI bits     : %d\n", K);
@@ -411,7 +413,8 @@ void run_pucch_format2_simulation(const L1Config *cfg) {
             double nv = 1.0 / pow(10.0, snr/10.0);
             qam_demap_llr(rx_syms, num_re, "QPSK", nv, llr_qam);
             polar_rate_dematch(llr_qam, E, N, K, llr_dm);
-            polar_decode(&polar, llr_dm, decoded);
+            polar_decode_scl(&polar, llr_dm, POLAR_SCL_L, /*use_crc=*/0, CRC24C,
+                              /*use_rnti=*/0, 0, decoded);   /* K<=11 UCI: no spec CRC, genie bit-compare */
             for (int i=0;i<K;i++) if (decoded[i]!=uci[i]) bit_err++;
             total_bits += K;
         }
@@ -444,8 +447,10 @@ void run_pucch_format3_simulation(const L1Config *cfg) {
     const int bps = 2;
     int E = num_re * bps;
 
+    int n_PC, n_PC_wm;
+    polar_uci_npc(K, E, &n_PC, &n_PC_wm);
     PolarCodec polar;
-    polar_init(&polar, N, K, E);
+    polar_init(&polar, N, K, E, /*I_IL=*/0, n_PC, n_PC_wm);   /* TS 38.212 6.3.1.3.1 */
 
     printf("=== PUCCH Format 3 (Long, Coded UCI, DFT-s-OFDM) ===\n");
     printf("UCI bits     : %d\n", K);
@@ -483,7 +488,8 @@ void run_pucch_format3_simulation(const L1Config *cfg) {
             double nv = 1.0 / pow(10.0, snr/10.0);
             qam_demap_llr(descrambled, num_re, "QPSK", nv, llr_qam);
             polar_rate_dematch(llr_qam, E, N, K, llr_dm);
-            polar_decode(&polar, llr_dm, decoded);
+            polar_decode_scl(&polar, llr_dm, POLAR_SCL_L, /*use_crc=*/0, CRC24C,
+                              /*use_rnti=*/0, 0, decoded);   /* K<=11 UCI: no spec CRC, genie bit-compare */
             for (int i=0;i<K;i++) if (decoded[i]!=uci[i]) bit_err++;
             total_bits += K;
         }
@@ -530,8 +536,10 @@ void run_pucch_format3_tdl_simulation(const L1Config *cfg) {
     int use_mmse = (strcmp(cfg->equalizer,"MMSE")==0);
     double scs_hz = (double)cfg->scsKHz * 1000.0;
 
+    int n_PC, n_PC_wm;
+    polar_uci_npc(K, E, &n_PC, &n_PC_wm);
     PolarCodec polar;
-    polar_init(&polar, N, K, E);
+    polar_init(&polar, N, K, E, /*I_IL=*/0, n_PC, n_PC_wm);   /* TS 38.212 6.3.1.3.1 */
 
     printf("=== PUCCH Format 3 (Long, Coded UCI, DFT-s-OFDM), TDL Frequency-Selective Fading ===\n");
     printf("UCI bits     : %d\n", K);
@@ -607,7 +615,8 @@ void run_pucch_format3_tdl_simulation(const L1Config *cfg) {
 
             qam_demap_llr(demod_in, num_re, "QPSK", env, llr_qam);
             polar_rate_dematch(llr_qam, E, N, K, llr_dm);
-            polar_decode(&polar, llr_dm, decoded);
+            polar_decode_scl(&polar, llr_dm, POLAR_SCL_L, /*use_crc=*/0, CRC24C,
+                              /*use_rnti=*/0, 0, decoded);   /* K<=11 UCI: no spec CRC, genie bit-compare */
             for (int i=0;i<K;i++) if (decoded[i]!=uci[i]) bit_err++;
             total_bits += K;
         }
@@ -663,7 +672,9 @@ void run_pucch_format3_tdl_harq_simulation(const L1Config *cfg) {
     int max_retx = cfg->harqMaxRetx > 0 ? cfg->harqMaxRetx : 1;
 
     PolarCodec polar;
-    polar_init(&polar, N, K, N);   /* E=N: no shortening, full mother codeword */
+    int n_PC, n_PC_wm;
+    polar_uci_npc(K, N, &n_PC, &n_PC_wm);
+    polar_init(&polar, N, K, N, /*I_IL=*/0, n_PC, n_PC_wm);   /* TS 38.212 6.3.1.3.1, E=N: no shortening, full mother codeword */
     int ncb = N;
 
     printf("=== PUCCH Format 3 (Long, Coded UCI, DFT-s-OFDM) + HARQ (Circular Buffer %s), TDL Frequency-Selective Fading ===\n",
@@ -751,7 +762,8 @@ void run_pucch_format3_tdl_harq_simulation(const L1Config *cfg) {
 
                 qam_demap_llr(demod_in, num_re, "QPSK", env, allllr);
                 rate_match_combine(soft_buf, ncb, rv, E, allllr);
-                polar_decode(&polar, soft_buf, decoded);
+                polar_decode_scl(&polar, soft_buf, POLAR_SCL_L, /*use_crc=*/0, CRC24C,
+                                  /*use_rnti=*/0, 0, decoded);   /* K<=11 UCI: no spec CRC, genie bit-compare */
 
                 int be = 0;
                 for (int i=0;i<K;i++) if (decoded[i]!=uci[i]) be++;

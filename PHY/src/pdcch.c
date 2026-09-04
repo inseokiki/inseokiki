@@ -135,7 +135,7 @@ void run_pdcch_simulation(const L1Config *cfg) {
             attach_crc_rnti(dci, dci_size, CRC24C, rnti, dci_crc);
 
             PolarCodec polar_tx;
-            polar_init(&polar_tx, N_tx, K, E_tx);
+            polar_init(&polar_tx, N_tx, K, E_tx, /*I_IL=*/1, /*n_PC=*/0, /*n_PC_wm=*/0);   /* TS 38.212 7.3.3 */
             polar_encode(&polar_tx, dci_crc, coded);
             polar_free(&polar_tx);
 
@@ -172,8 +172,9 @@ void run_pdcch_simulation(const L1Config *cfg) {
                 free(rm_c);
 
                 PolarCodec polar_rx;
-                polar_init(&polar_rx, N_c, K, E_c);
-                polar_decode(&polar_rx, dm, dec);
+                polar_init(&polar_rx, N_c, K, E_c, /*I_IL=*/1, /*n_PC=*/0, /*n_PC_wm=*/0);   /* TS 38.212 7.3.3 */
+                polar_decode_scl(&polar_rx, dm, POLAR_SCL_L, /*use_crc=*/1, CRC24C,
+                                  /*use_rnti=*/1, rnti, dec);
                 polar_free(&polar_rx);
 
                 if (check_crc_rnti(dec, K, CRC24C, rnti)) {
@@ -321,7 +322,7 @@ void run_pdcch_fading_simulation(const L1Config *cfg) {
             attach_crc_rnti(dci, dci_size, CRC24C, rnti, dci_crc);
 
             PolarCodec polar_tx;
-            polar_init(&polar_tx, N_tx, K, E_tx);
+            polar_init(&polar_tx, N_tx, K, E_tx, /*I_IL=*/1, /*n_PC=*/0, /*n_PC_wm=*/0);   /* TS 38.212 7.3.3 */
             polar_encode(&polar_tx, dci_crc, coded);
             polar_free(&polar_tx);
 
@@ -381,8 +382,9 @@ void run_pdcch_fading_simulation(const L1Config *cfg) {
                 polar_rate_dematch(llr, E_c, N_c, K, dm);
 
                 PolarCodec polar_rx;
-                polar_init(&polar_rx, N_c, K, E_c);
-                polar_decode(&polar_rx, dm, dec);
+                polar_init(&polar_rx, N_c, K, E_c, /*I_IL=*/1, /*n_PC=*/0, /*n_PC_wm=*/0);   /* TS 38.212 7.3.3 */
+                polar_decode_scl(&polar_rx, dm, POLAR_SCL_L, /*use_crc=*/1, CRC24C,
+                                  /*use_rnti=*/1, rnti, dec);
                 polar_free(&polar_rx);
 
                 if (check_crc_rnti(dec, K, CRC24C, rnti)) {

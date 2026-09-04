@@ -35,7 +35,7 @@ void run_pbch_simulation(const L1Config *cfg) {
     printf("Trials per SNR: %d\n\n", cfg->numTrials);
 
     PolarCodec polar;
-    polar_init(&polar, N, K, E);
+    polar_init(&polar, N, K, E, /*I_IL=*/1, /*n_PC=*/0, /*n_PC_wm=*/0);   /* TS 38.212 7.1.4/7.1.5 */
 
     int *payload_bits   = (int *)malloc(payload * sizeof(int));
     int *with_crc       = (int *)malloc((payload + crc_bits) * sizeof(int));
@@ -65,7 +65,8 @@ void run_pbch_simulation(const L1Config *cfg) {
             double nv = 1.0 / pow(10.0, snr / 10.0);
             qam_demap_llr(rx_syms, E/bps, "QPSK", nv, llr_qam);
             polar_rate_dematch(llr_qam, E, N, K, llr_dm);
-            polar_decode(&polar, llr_dm, decoded);
+            polar_decode_scl(&polar, llr_dm, POLAR_SCL_L, /*use_crc=*/1, CRC24C,
+                              /*use_rnti=*/0, 0, decoded);
             if (!check_crc(decoded, K, CRC24C)) blk_err++;
         }
         double bler = (double)blk_err / cfg->numTrials;
@@ -116,7 +117,7 @@ void run_pbch_fading_simulation(const L1Config *cfg) {
     printf("Trials per SNR: %d\n\n", cfg->numTrials);
 
     PolarCodec polar;
-    polar_init(&polar, N, K, E);
+    polar_init(&polar, N, K, E, /*I_IL=*/1, /*n_PC=*/0, /*n_PC_wm=*/0);   /* TS 38.212 7.1.4/7.1.5 */
 
     int *payload_bits   = (int *)malloc(payload * sizeof(int));
     int *with_crc       = (int *)malloc((payload + crc_bits) * sizeof(int));
@@ -177,7 +178,8 @@ void run_pbch_fading_simulation(const L1Config *cfg) {
                 qam_demap_llr(eq_syms, nsym, "QPSK", env, llr_qam);
             }
             polar_rate_dematch(llr_qam, E, N, K, llr_dm);
-            polar_decode(&polar, llr_dm, decoded);
+            polar_decode_scl(&polar, llr_dm, POLAR_SCL_L, /*use_crc=*/1, CRC24C,
+                              /*use_rnti=*/0, 0, decoded);
             if (!check_crc(decoded, K, CRC24C)) blk_err++;
         }
         double bler = (double)blk_err / cfg->numTrials;
