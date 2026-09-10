@@ -329,17 +329,11 @@ static void validate_config(const L1Config *c) {
     }
     if (strcmp(c->mimoMode,"BEAM_MGMT")==0 && c->beamMgmtNumRep < 1)
         CFG_ERR("BEAM_MGMT_NUM_REP=%d must be >= 1", c->beamMgmtNumRep);
-    /* BEAM_MGMT_RX_SWEEP(P1->P3->P2, UE Rx 빔 정제, 2026-09-03)은 아직
-     * AWGN 전용 함수만 있음(TDL/HARQ와의 결합은 후속 과제) — 같은
-     * 오배선 클래스 재도입 방지를 위해 명시적으로 미리 차단. */
-    if (c->beamMgmtRxSweep) {
-        if (strcmp(c->mimoMode,"BEAM_MGMT")!=0)
-            CFG_ERR("BEAM_MGMT_RX_SWEEP=1 requires MIMO_MODE=BEAM_MGMT.");
-        if (c->harqEnable || strcmp(c->channelModel,"TDL")==0)
-            CFG_ERR("BEAM_MGMT_RX_SWEEP=1 + HARQ_ENABLE=1/CHANNEL_MODEL=TDL has no "
-                     "dedicated simulation function — AWGN/flat only for now. Not yet "
-                     "implemented (see tasks/todo.md).");
-    }
+    /* BEAM_MGMT_RX_SWEEP(P1->P3->P2, UE Rx 빔 정제, 2026-09-03)은
+     * MIMO_MODE=BEAM_MGMT 전용 옵션. TDL/HARQ 결합은 2026-09-10 완료
+     * (run_pdsch_beam_mgmt_p123_tdl_simulation/_harq_simulation). */
+    if (c->beamMgmtRxSweep && strcmp(c->mimoMode,"BEAM_MGMT")!=0)
+        CFG_ERR("BEAM_MGMT_RX_SWEEP=1 requires MIMO_MODE=BEAM_MGMT.");
 
     /* 리소스 그리드 기본 정합성 */
     if (c->numRB > 0 && c->nfft > 0 && c->numRB * 12 > c->nfft)

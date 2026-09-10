@@ -45,5 +45,7 @@ void run_pdsch_beam_mgmt_simulation(const L1Config *cfg);
 void run_pdsch_beam_mgmt_p123_simulation(const L1Config *cfg);
 void run_pdsch_beam_mgmt_tdl_simulation(const L1Config *cfg);
 void run_pdsch_beam_mgmt_harq_simulation(const L1Config *cfg);
+void run_pdsch_beam_mgmt_p123_tdl_simulation(const L1Config *cfg);
+void run_pdsch_beam_mgmt_p123_harq_simulation(const L1Config *cfg);
 
 #endif

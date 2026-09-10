@@ -8014,15 +8014,16 @@ void run_pdsch_olla_sm4x4_simulation(const L1Config *cfg) {
 /* ─────────────────────────────────────────────────────────────────────────────
  * MU-MIMO 하향링크 — Zero-Forcing Beamforming, 평탄 페이딩 (i.i.d.)
  *
- * mumimo.h 문서 참조. Nt=4(gNB), K=2 사용자(각 1 Rx 안테나, MU-MISO).
- * ZF-BF 프리코더가 사용자 간 간섭을 설계상 정확히 제거하므로(잡음 없는
- * 경우 H[k]·W[:,j]=0, j≠k — mumimo_zf_precode() 검증에서 |오차|~1e-15
- * 확인), 검출은 사용자별로 완전히 독립적인 스칼라 채널 y_k=h_eff_k·x_k+n_k
- * (h_eff_k=H[k]·W[:,k], 실수 양수)로 단순화된다 — MIMO 검출기가 전혀
- * 필요 없음. 두 사용자는 서로 다른(독립적인) 데이터를 받는다는 점이
- * SU-MIMO 다중 레이어(같은 사용자의 서로 다른 스트림)와의 근본적 차이 —
- * BLER은 사용자별로 각각, 그리고 "둘 중 하나라도 실패" 결합 지표로 보고.
- * 두 사용자 모두 같은 고정 MCS(이 프로젝트의 다른 함수들과 동일한 관례).
+ * mumimo.h 문서 참조. Nt=4(gNB), K=MUMIMO_K 사용자(현재 4, 각 1 Rx
+ * 안테나, MU-MISO). ZF-BF 프리코더가 사용자 간 간섭을 설계상 정확히
+ * 제거하므로(잡음 없는 경우 H[k]·W[:,j]=0, j≠k — mumimo_zf_precode()
+ * 검증에서 |오차|~1e-15 확인), 검출은 사용자별로 완전히 독립적인
+ * 스칼라 채널 y_k=h_eff_k·x_k+n_k(h_eff_k=H[k]·W[:,k], 실수 양수)로
+ * 단순화된다 — MIMO 검출기가 전혀 필요 없음. 각 사용자는 서로 다른
+ * (독립적인) 데이터를 받는다는 점이 SU-MIMO 다중 레이어(같은 사용자의
+ * 서로 다른 스트림)와의 근본적 차이 — BLER은 사용자별로 각각, 그리고
+ * "하나라도 실패" 결합 지표로 보고. 전 사용자 같은 고정 MCS(이
+ * 프로젝트의 다른 함수들과 동일한 관례).
  * TDL/HARQ/사용자별 다중 스트림은 미지원 — tasks/todo.md 후속 과제.
  * ─────────────────────────────────────────────────────────────────────────── */
 void run_pdsch_mumimo_simulation(const L1Config *cfg) {
@@ -8060,7 +8061,7 @@ void run_pdsch_mumimo_simulation(const L1Config *cfg) {
     printf("Num RB       : %d\n", num_rb);
     printf("Tx/Users     : %d gNB antennas / %d users (각 1 Rx 안테나, i.i.d.)\n", MUMIMO_NT, MUMIMO_K);
     printf("Precoding    : Zero-Forcing Beamforming (사용자 간 간섭 설계상 제거)\n");
-    printf("TB Size/User : %d bits (두 사용자 동일 고정 MCS)\n", tbsz);
+    printf("TB Size/User : %d bits (전 사용자 동일 고정 MCS)\n", tbsz);
     printf("Data RE/User : %d  (Genie-aided CSI, pilot 오버헤드 없음)\n", nd);
     printf("Trials/SNR   : %d\n\n", cfg->numTrials);
 
@@ -8086,9 +8087,15 @@ void run_pdsch_mumimo_simulation(const L1Config *cfg) {
     }
     cx_t *nbuf = (cx_t *)malloc((size_t)nd * MUMIMO_K * sizeof(cx_t));
 
-    printf("%-9s  %-12s %-11s  %-12s %-11s  %s\n",
-           "SNR(dB)", "BER_U0", "BLER_U0", "BER_U1", "BLER_U1", "BLER_Comb");
-    for (int i = 0; i < 78; i++) printf("-");
+    printf("%-9s", "SNR(dB)");
+    for (int u = 0; u < MUMIMO_K; u++) {
+        char lb[16], ll[16];
+        snprintf(lb, sizeof(lb), "BER_U%d", u);
+        snprintf(ll, sizeof(ll), "BLER_U%d", u);
+        printf("  %-12s %-11s", lb, ll);
+    }
+    printf("  %s\n", "BLER_Comb");
+    for (int i = 0; i < 9 + MUMIMO_K * 26 + 11; i++) printf("-");
     printf("\n");
 
     for (double snr = cfg->snrStart; snr <= cfg->snrEnd + 1e-6; snr += cfg->snrStep) {
@@ -8175,14 +8182,15 @@ void run_pdsch_mumimo_simulation(const L1Config *cfg) {
             if (any_err) e_comb++;
         }   /* end trial loop */
 
-        double ber0  = t_bits[0] > 0 ? (double)b_err[0] / t_bits[0] : 0.0;
-        double bler0 = e_blk[0] / (double)cfg->numTrials;
-        double ber1  = t_bits[1] > 0 ? (double)b_err[1] / t_bits[1] : 0.0;
-        double bler1 = e_blk[1] / (double)cfg->numTrials;
         double bler_comb = e_comb / (double)cfg->numTrials;
 
-        printf("%-9.1f  %-12.4e %-11.4f  %-12.4e %-11.4f  %.4f\n",
-               snr, ber0, bler0, ber1, bler1, bler_comb);
+        printf("%-9.1f", snr);
+        for (int u = 0; u < MUMIMO_K; u++) {
+            double ber_u  = t_bits[u] > 0 ? (double)b_err[u] / t_bits[u] : 0.0;
+            double bler_u = e_blk[u] / (double)cfg->numTrials;
+            printf("  %-12.4e %-11.4f", ber_u, bler_u);
+        }
+        printf("  %.4f\n", bler_comb);
     }   /* end SNR loop */
 
     printf("\nPDSCH MU-MIMO simulation complete.\n");
@@ -8203,13 +8211,13 @@ void run_pdsch_mumimo_simulation(const L1Config *cfg) {
  * MU-MIMO 하향링크 — Zero-Forcing Beamforming, TDL 주파수선택적 페이딩
  *
  * run_pdsch_mumimo_simulation()(평탄)과 구조는 동일하되, 사용자-Tx 안테나
- * 쌍마다(K×Nt=8개) 독립 TDL tap-set을 드로우해 RE(=심볼 인덱스를 그대로
- * RE로 취급 — genie-aided라 실제 DMRS 그리드가 없음, `pbch.c`의 페이딩
- * 함수와 동일한 기존 단순화 재사용)마다 채널 H[K][Nt]가 달라지므로
- * ZF-BF 프리코더도 RE마다 다시 설계해야 한다. `mumimo_zf_precode()`는
- * K=2 폐형 2×2 역행렬이라 RE당 비용이 사실상 무시할 만큼 작아(다른
- * massive-MIMO 모드의 SVD/고유분해와 달리) PRG 단위 서브밴드 근사 없이
- * 매 RE 정확히 재계산한다.
+ * 쌍마다(K×Nt개, 현재 4×4=16개) 독립 TDL tap-set을 드로우해 RE(=심볼
+ * 인덱스를 그대로 RE로 취급 — genie-aided라 실제 DMRS 그리드가 없음,
+ * `pbch.c`의 페이딩 함수와 동일한 기존 단순화 재사용)마다 채널 H[K][Nt]가
+ * 달라지므로 ZF-BF 프리코더도 RE마다 다시 설계해야 한다. `mumimo_zf_precode()`는
+ * K×K Gauss-Jordan 역행렬(K<=4)이라 RE당 비용이 사실상 무시할 만큼 작아
+ * (다른 massive-MIMO 모드의 SVD/고유분해와 달리) PRG 단위 서브밴드 근사
+ * 없이 매 RE 정확히 재계산한다.
  *
  * ZF-BF의 H·H^+=I는 채널 값과 무관하게 항상 성립하는 대수적 항등식이므로
  * (평탄 버전 헤더 주석 참조) h_eff[u]가 RE마다 달라도 실수 양수 스칼라
@@ -8253,7 +8261,7 @@ void run_pdsch_mumimo_tdl_simulation(const L1Config *cfg) {
     printf("Tx/Users     : %d gNB antennas / %d users (각 1 Rx 안테나)\n", MUMIMO_NT, MUMIMO_K);
     printf("Precoding    : Zero-Forcing Beamforming, RE별 재설계 (K x Nt = %d개 독립 TDL tap-set, DS=%.0fns, %d taps)\n",
            MUMIMO_K * MUMIMO_NT, cfg->tdlDelaySpreadNs, TDL_MAX_TAPS);
-    printf("TB Size/User : %d bits (두 사용자 동일 고정 MCS)\n", tbsz);
+    printf("TB Size/User : %d bits (전 사용자 동일 고정 MCS)\n", tbsz);
     printf("Data RE/User : %d  (Genie-aided CSI, pilot 오버헤드 없음)\n", nd);
     printf("Trials/SNR   : %d\n\n", cfg->numTrials);
 
@@ -8282,9 +8290,15 @@ void run_pdsch_mumimo_tdl_simulation(const L1Config *cfg) {
         for (int t = 0; t < MUMIMO_NT; t++)
             taps[u][t] = (cx_t *)malloc(TDL_MAX_TAPS * sizeof(cx_t));
 
-    printf("%-9s  %-12s %-11s  %-12s %-11s  %s\n",
-           "SNR(dB)", "BER_U0", "BLER_U0", "BER_U1", "BLER_U1", "BLER_Comb");
-    for (int i = 0; i < 78; i++) printf("-");
+    printf("%-9s", "SNR(dB)");
+    for (int u = 0; u < MUMIMO_K; u++) {
+        char lb[16], ll[16];
+        snprintf(lb, sizeof(lb), "BER_U%d", u);
+        snprintf(ll, sizeof(ll), "BLER_U%d", u);
+        printf("  %-12s %-11s", lb, ll);
+    }
+    printf("  %s\n", "BLER_Comb");
+    for (int i = 0; i < 9 + MUMIMO_K * 26 + 11; i++) printf("-");
     printf("\n");
 
     TDLChannel tdl_ch;
@@ -8371,14 +8385,15 @@ void run_pdsch_mumimo_tdl_simulation(const L1Config *cfg) {
             if (any_err) e_comb++;
         }   /* end trial loop */
 
-        double ber0  = t_bits[0] > 0 ? (double)b_err[0] / t_bits[0] : 0.0;
-        double bler0 = e_blk[0] / (double)cfg->numTrials;
-        double ber1  = t_bits[1] > 0 ? (double)b_err[1] / t_bits[1] : 0.0;
-        double bler1 = e_blk[1] / (double)cfg->numTrials;
         double bler_comb = e_comb / (double)cfg->numTrials;
 
-        printf("%-9.1f  %-12.4e %-11.4f  %-12.4e %-11.4f  %.4f\n",
-               snr, ber0, bler0, ber1, bler1, bler_comb);
+        printf("%-9.1f", snr);
+        for (int u = 0; u < MUMIMO_K; u++) {
+            double ber_u  = t_bits[u] > 0 ? (double)b_err[u] / t_bits[u] : 0.0;
+            double bler_u = e_blk[u] / (double)cfg->numTrials;
+            printf("  %-12.4e %-11.4f", ber_u, bler_u);
+        }
+        printf("  %.4f\n", bler_comb);
     }   /* end SNR loop */
 
     printf("\nPDSCH MU-MIMO + TDL simulation complete.\n");
@@ -8400,10 +8415,10 @@ void run_pdsch_mumimo_tdl_simulation(const L1Config *cfg) {
  * MU-MIMO 하향링크 — Zero-Forcing Beamforming, HARQ 순환버퍼 IR/Chase
  * (평탄 페이딩/TDL 모두 지원)
  *
- * 두 사용자 모두 mother LDPC 코드워드 + 영구 soft-combining 버퍼를
+ * K명 사용자 모두 mother LDPC 코드워드 + 영구 soft-combining 버퍼를
  * 독립적으로 가지며(이 프로젝트 다른 다중스트림 HARQ 함수들과 동일한
- * "같은 재전송 occasion을 공유"단순화 — 매 attempt마다 두 사용자 모두
- * 재전송, 둘 다 CRC 통과해야 종료), ZF-BF 프리코더는 매 attempt(채널
+ * "같은 재전송 occasion을 공유"단순화 — 매 attempt마다 K명 모두
+ * 재전송, 전부 CRC 통과해야 종료), ZF-BF 프리코더는 매 attempt(채널
  * 재드로우 시점)마다, TDL이면 매 RE마다 다시 설계한다. `nr_rate_matching.c`의
  * TS 38.212 5.4.2.1 표준 BG/Zc 인지 circular buffer(`nr_ldpc_rate_match_select`/
  * `nr_ldpc_rate_match_combine`, 2026-09-02)를 그대로 재사용 — CL_32PORT HARQ와
@@ -8460,7 +8475,7 @@ void run_pdsch_mumimo_harq_simulation(const L1Config *cfg) {
     printf("Num RB       : %d\n", num_rb);
     printf("Tx/Users     : %d gNB antennas / %d users (각 1 Rx 안테나)\n", MUMIMO_NT, MUMIMO_K);
     printf("Precoding    : Zero-Forcing Beamforming%s\n", is_tdl ? ", RE별 재설계" : "");
-    printf("TB Size/User : %d bits (두 사용자 동일 고정 MCS)\n", tbsz);
+    printf("TB Size/User : %d bits (전 사용자 동일 고정 MCS)\n", tbsz);
     printf("Max Retx     : %d\n", max_retx);
     if (is_tdl)
         printf("Channel      : TDL per user-antenna pair (%d tap-sets, DS=%.0fns, %d taps, genie-aided)\n",
@@ -9481,6 +9496,505 @@ void run_pdsch_beam_mgmt_harq_simulation(const L1Config *cfg) {
     }   /* end SNR loop */
 
     printf("\nPDSCH Beam Management + %s + HARQ simulation complete.\n", is_tdl ? "TDL" : "Flat Fading");
+
+    ldpc_free(&ldpc);
+    free(cluster_taps); free(Er);
+    for (int s = 0; s < 2; s++) {
+        free(tb[s]); free(tb_crc[s]); free(cb_bits[s]);
+        for (int r = 0; r < seg.C; r++) { free(coded_cw[s][r]); free(rm[s][r]); free(soft_buf[s][r]); }
+        free(coded_cw[s]); free(rm[s]); free(soft_buf[s]);
+        free(selbits[s]); free(decoded_cb[s]); free(decoded_tb[s]);
+        free(sym[s]); free(rx_hat[s]);
+        free(allllr[s]);
+    }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+ * 빔 관리 P1->P3->P2(UE Rx 빔 정제 + gNB Tx 빔 재정제), TDL 주파수선택적
+ * 페이딩 — 2026-09-10, tasks/todo.md 후속 과제.
+ *
+ * run_pdsch_beam_mgmt_p123_simulation()(평탄)과 run_pdsch_beam_mgmt_tdl_simulation()
+ * (P1 단독 TDL)을 그대로 합친 구조. P1/P3/P2 세 스윕 전부 wideband
+ * 스냅샷 채널(H_true/H_full)에서 동작하고 매 RE 재선택하지 않으므로,
+ * TDL 단독 함수 헤더에서 이미 분석적으로 확인한 "TDL 공유 스칼라
+ * g(RE)는 어느 빔이 선택되는가에 영향을 주지 않는다"는 논증이 P3/P2
+ * 정제 단계에도 그대로 적용된다 — P3의 순위는
+ * |w_ue^H·H_full·W_tx|²(N0 포함 관측치의 반복평균)의 후보간 비교이고,
+ * P2 역시 h_eff 위에서의 P1 재사용이라 둘 다 g(RE)와 무관. 따라서
+ * AvgGain_NoSweep/AvgGain_P3P2 지표는 평탄 버전과 동일하게 빔-도메인
+ * 유효채널(heff, wideband)로 계산하고, 실제 데이터 평면 등화/복호에서만
+ * 단일 지배경로 공유 SISO TDL tap-set(32+4=36개 안테나 전체 공통, 기존
+ * 관례)의 per-RE 게인 g(RE)를 곱한다.
+ * ─────────────────────────────────────────────────────────────────────────── */
+void run_pdsch_beam_mgmt_p123_tdl_simulation(const L1Config *cfg) {
+    int num_rb   = cfg->numRB;
+    int num_data = 6 * num_rb;
+    int num_rep  = cfg->beamMgmtNumRep;
+
+    MCSTableType tbl = mcs_table_from_str(cfg->mcsTableType);
+    MCSEntry mcs = get_mcs_entry(cfg->mcsIndex, tbl);
+    double cr  = get_code_rate(&mcs);
+    int    bps = mcs.modulationOrder;
+    int    crc_bits = 24;
+
+    int max_dbits = num_data * bps;
+    int tbsz = (int)(max_dbits * cr);
+    if (tbsz < 1)    tbsz = 1;
+
+    int B = tbsz + crc_bits;
+    NRSegInfo seg; nr_seg_compute(B, cr, &seg);
+    int payload = seg.Kprime - seg.L;
+    LDPCCodec ldpc;
+    ldpc_init_resolved(&ldpc, seg.Kprime, cr, seg.bg, seg.Zc, seg.Kb,
+                        seg.base_rows, seg.base_info_cols, seg.base_cols,
+                        seg.filler_size);
+    int acsz  = ldpc.coded_size;
+    int E     = num_data * bps;
+    int nd    = num_data;
+    int *Er = (int *)malloc(seg.C * sizeof(int));
+    nr_ldpc_er_alloc(E, /*Nl=*/1, bps, seg.C, Er);
+
+    double scs_hz = (double)cfg->scsKHz * 1000.0;
+
+    printf("=== PDSCH Beam Management P1->P3->P2 (UE Rx 빔 정제 + gNB Tx 빔 재정제), TDL 주파수선택적 페이딩 ===\n");
+    printf("MCS Index    : %d (Table %s)\n", cfg->mcsIndex, cfg->mcsTableType);
+    printf("Modulation   : %s (Qm=%d)\n", mcs.modulation, bps);
+    printf("Code Rate    : %.4f\n", cr);
+    printf("Num RB       : %d\n", num_rb);
+    printf("gNB Tx Cand  : %d (i1_1=16 x i1_2=16 x i2=4, rank-1 코드북 전체)\n",
+           BM_CAND_L * BM_CAND_M * BM_CAND_N2);
+    printf("UE Rx Cand   : %d (%d소자 ULA, 오버샘플링 x%d)\n", BM_UE_CAND, BM_UE_N, BM_UE_O);
+    printf("Num Rep      : %d (빔당 RSRP 반복 관측 횟수, wideband — TDL 무관)\n", num_rep);
+    printf("Channel      : 단일 클러스터 공유 SISO TDL tap-set(전 안테나 공통), DS=%.0fns, %d taps\n",
+           cfg->tdlDelaySpreadNs, TDL_MAX_TAPS);
+    printf("TB Size      : %d bits\n", tbsz);
+    printf("Trials/SNR   : %d\n\n", cfg->numTrials);
+
+    int    *tb[2], *tb_crc[2], *cb_bits[2], *coded[2], **rm[2], *selbits[2];
+    int    *decoded_cb[2], *decoded_tb[2];
+    cx_t   *sym[2];
+    double *allllr[2], *soft_buf[2];
+    cx_t   *rx_hat[2];
+    for (int s = 0; s < 2; s++) {
+        tb[s]       = (int    *)malloc(tbsz  * sizeof(int));
+        tb_crc[s]   = (int    *)malloc(B     * sizeof(int));
+        cb_bits[s]  = (int    *)malloc((size_t)seg.C * seg.Kprime * sizeof(int));
+        coded[s]    = (int    *)malloc(acsz  * sizeof(int));
+        rm[s]       = (int   **)malloc(seg.C * sizeof(int *));
+        for (int r = 0; r < seg.C; r++) rm[s][r] = (int *)malloc(Er[r] * sizeof(int));
+        selbits[s]  = (int    *)malloc(E     * sizeof(int));
+        sym[s]      = (cx_t  *)malloc(nd     * sizeof(cx_t));
+        allllr[s]   = (double *)malloc(E     * sizeof(double));
+        soft_buf[s] = (double *)malloc(acsz  * sizeof(double));
+        decoded_cb[s] = (int  *)malloc(ldpc.info_size * sizeof(int));
+        decoded_tb[s] = (int  *)malloc(B * sizeof(int));
+        rx_hat[s]   = (cx_t  *)malloc(nd     * sizeof(cx_t));
+    }
+    cx_t *cluster_taps = (cx_t *)malloc(TDL_MAX_TAPS * sizeof(cx_t));
+
+    printf("%-9s  %-11s  %-14s  %-14s  %-12s %-11s  %-12s %-11s\n",
+           "SNR(dB)", "P2==P1", "AvgGain_NoSweep", "AvgGain_P3P2", "BER_Genie", "BLER_Genie", "BER_Refined", "BLER_Refined");
+    for (int i = 0; i < 100; i++) printf("-");
+    printf("\n");
+
+    TDLChannel tdl_ch;
+    for (double snr = cfg->snrStart; snr <= cfg->snrEnd + 1e-6; snr += cfg->snrStep) {
+        tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        double N0    = 1.0 / pow(10.0, snr / 10.0);
+        double sigma = sqrt(N0 / 2.0);
+
+        long t_bits[2] = {0}, b_err[2] = {0};
+        int  e_blk[2] = {0};
+        int  p2_eq_p1_cnt = 0;
+        double gain_noswp_sum = 0.0, gain_refined_sum = 0.0;
+
+        for (int trial = 0; trial < cfg->numTrials; trial++) {
+
+            /* ① 참 방향 드로우: gNB 3개(l,m,n) + UE 1개(r) */
+            double l_true = (double)rand() / RAND_MAX * BM_CAND_L;
+            double m_true = (double)rand() / RAND_MAX * BM_CAND_M;
+            double n_true = (double)rand() / RAND_MAX * BM_CAND_N2;
+            double r_true = (double)rand() / RAND_MAX * BM_UE_CAND;
+            cx_t H_true[32];
+            beam_mgmt_true_channel(l_true, m_true, n_true, H_true);
+            cx_t H_full[BM_UE_N][32];
+            beam_mgmt_true_channel_mimo(H_true, r_true, H_full);
+
+            /* ② Genie: 이상적 단일안테나 상한(wideband, 정제 절차와 무관) */
+            int gl, gm, gn; double gg;
+            beam_mgmt_genie_best(H_true, &gl, &gm, &gn, &gg);
+            cx_t Wg[32];
+            codebook_type1_sp_32port_rank1(gl, gm, gn, Wg);
+            cx_t heff_genie = CX_ZERO;
+            for (int t = 0; t < 32; t++) heff_genie += conj(H_true[t]) * Wg[t];
+
+            /* ③ P1 -> P3 -> P2 (wideband) */
+            int sl1, sm1, sn1; double sg1;
+            beam_mgmt_p1_sweep(H_true, N0, num_rep, &sl1, &sm1, &sn1, &sg1);
+            cx_t W1[32];
+            codebook_type1_sp_32port_rank1(sl1, sm1, sn1, W1);
+
+            int ue_idx; double p3_gain;
+            beam_mgmt_p3_sweep(H_full, W1, N0, num_rep, &ue_idx, &p3_gain);
+            cx_t w_ue[BM_UE_N];
+            beam_mgmt_ue_steer((double)ue_idx, w_ue);
+
+            cx_t h_eff2[32];
+            beam_mgmt_p2_effective_channel(H_full, w_ue, h_eff2);
+            int sl2, sm2, sn2; double sg2;
+            beam_mgmt_p1_sweep(h_eff2, N0, num_rep, &sl2, &sm2, &sn2, &sg2);
+            if (sl2 == sl1 && sm2 == sm1 && sn2 == sn1) p2_eq_p1_cnt++;
+
+            cx_t W2[32];
+            codebook_type1_sp_32port_rank1(sl2, sm2, sn2, W2);
+            cx_t heff_refined = CX_ZERO;
+            for (int u = 0; u < BM_UE_N; u++) {
+                cx_t hg = CX_ZERO;
+                for (int g = 0; g < 32; g++) hg += conj(H_full[u][g]) * W2[g];
+                heff_refined += conj(w_ue[u]) * hg;
+            }
+
+            /* ④ "정제 안 함" 기준선(wideband, 평탄 버전과 동일) */
+            cx_t w_fixed[BM_UE_N];
+            beam_mgmt_ue_steer(0.0, w_fixed);
+            cx_t heff_noswp = CX_ZERO;
+            for (int u = 0; u < BM_UE_N; u++) {
+                cx_t hg = CX_ZERO;
+                for (int g = 0; g < 32; g++) hg += conj(H_full[u][g]) * W1[g];
+                heff_noswp += conj(w_fixed[u]) * hg;
+            }
+            gain_noswp_sum   += CX_NORM(heff_noswp);
+            gain_refined_sum += CX_NORM(heff_refined);
+
+            /* ⑤ 지배경로 클러스터의 공유 주파수선택적 게인(전 안테나 공통,
+             * 빔 순위엔 영향 없음 — 위 헤더 주석 참조) */
+            tdl_draw(&tdl_ch, cluster_taps);
+
+            /* ⑥ 두 경로(Genie/Refined) 각각 독립 CW 인코딩+검출+복호,
+             * 데이터 평면에서만 per-RE TDL 게인 적용 */
+            cx_t heff[2] = { heff_genie, heff_refined };
+            for (int s = 0; s < 2; s++) {
+                gen_random_bits(tb[s], tbsz);
+                attach_crc(tb[s], tbsz, CRC24A, tb_crc[s]);
+                nr_seg_split(tb_crc[s], &seg, cb_bits[s]);
+                for (int r = 0; r < seg.C; r++) {
+                    const int *info = cb_bits[s] + (size_t)r * seg.Kprime;
+                    ldpc_encode(&ldpc, info, coded[s]);
+                    nr_ldpc_rate_match_select(coded[s], acsz, ldpc.bg, ldpc.Zc,
+                                               ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                               /*rv=*/0, Er[r], rm[s][r]);
+                }
+                nr_seg_concat(&seg, (const int *const *)rm[s], Er, selbits[s]);
+                qam_modulate(selbits[s], E, mcs.modulation, sym[s]);
+
+                double nv_sum = 0.0;
+                for (int d = 0; d < nd; d++) {
+                    cx_t g_d = tdl_freq_response(&tdl_ch, cluster_taps, d);
+                    cx_t he  = g_d * heff[s];
+                    double he_abs2 = CX_NORM(he);
+                    double nv = (he_abs2 > 1e-12) ? N0 / he_abs2 : N0 * 1e6;
+                    nv_sum += nv;
+                    cx_t noise = CX_MAKE(randn() * sigma, randn() * sigma);
+                    cx_t y = he * sym[s][d] + noise;
+                    rx_hat[s][d] = (he_abs2 > 1e-12) ? y / he : CX_ZERO;
+                }
+                double env = nv_sum / nd;
+                qam_demap_llr(rx_hat[s], nd, mcs.modulation, env, allllr[s]);
+
+                int roff = 0;
+                int cb_crc_ok = 1;
+                for (int r = 0; r < seg.C; r++) {
+                    memset(soft_buf[s], 0, acsz * sizeof(double));
+                    nr_ldpc_rate_match_combine(soft_buf[s], acsz, ldpc.bg, ldpc.Zc,
+                                                ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                                /*rv=*/0, Er[r], allllr[s] + roff);
+                    roff += Er[r];
+                    ldpc_decode(&ldpc, soft_buf[s], 25, decoded_cb[s]);
+                    if (seg.C > 1 && !check_crc(decoded_cb[s], seg.Kprime, CRC24B))
+                        cb_crc_ok = 0;
+                    memcpy(decoded_tb[s] + (size_t)r * payload, decoded_cb[s], payload * sizeof(int));
+                }
+
+                int crc_ok = cb_crc_ok && check_crc(decoded_tb[s], B, CRC24A);
+                int be = 0;
+                for (int i = 0; i < tbsz; i++) if (tb[s][i] != decoded_tb[s][i]) be++;
+                b_err[s]  += be;
+                t_bits[s] += tbsz;
+                if (!crc_ok || be > 0) e_blk[s]++;
+            }
+        }   /* end trial loop */
+
+        double p2_eq_p1_rate = p2_eq_p1_cnt / (double)cfg->numTrials;
+        double avg_gain_noswp   = gain_noswp_sum   / cfg->numTrials;
+        double avg_gain_refined = gain_refined_sum / cfg->numTrials;
+        double ber_genie   = t_bits[0] > 0 ? (double)b_err[0] / t_bits[0] : 0.0;
+        double bler_genie  = e_blk[0] / (double)cfg->numTrials;
+        double ber_ref     = t_bits[1] > 0 ? (double)b_err[1] / t_bits[1] : 0.0;
+        double bler_ref    = e_blk[1] / (double)cfg->numTrials;
+
+        printf("%-9.1f  %-11.4f  %-14.4f  %-14.4f  %-12.4e %-11.4f  %-12.4e %-11.4f\n",
+               snr, p2_eq_p1_rate, avg_gain_noswp, avg_gain_refined,
+               ber_genie, bler_genie, ber_ref, bler_ref);
+    }   /* end SNR loop */
+
+    printf("\nPDSCH Beam Management P1->P3->P2 + TDL simulation complete.\n");
+
+    ldpc_free(&ldpc);
+    free(cluster_taps); free(Er);
+    for (int s = 0; s < 2; s++) {
+        free(tb[s]); free(tb_crc[s]); free(cb_bits[s]); free(coded[s]);
+        for (int r = 0; r < seg.C; r++) free(rm[s][r]);
+        free(rm[s]); free(selbits[s]);
+        free(sym[s]); free(allllr[s]); free(soft_buf[s]);
+        free(decoded_cb[s]); free(decoded_tb[s]); free(rx_hat[s]);
+    }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+ * 빔 관리 P1->P3->P2(UE Rx 빔 정제 + gNB Tx 빔 재정제), HARQ 순환버퍼
+ * IR/Chase (평탄 페이딩/TDL 모두 지원) — 2026-09-10, tasks/todo.md 후속 과제.
+ *
+ * run_pdsch_beam_mgmt_harq_simulation()(P1 단독 HARQ)과 정확히 같은
+ * 패턴: 빔 선택(P1->P3->P2, wideband)은 트라이얼당 1회만 수행하고 모든
+ * HARQ attempt에서 재사용, flat이면 채널도 트라이얼 내내 고정(잡음만
+ * attempt마다 재드로우), TDL이면 attempt마다 클러스터 tap-set을
+ * 재드로우(시간 다이버시티). Genie/Refined 두 경로는 "같은 재전송
+ * occasion 공유"(둘 다 CRC 통과해야 종료) 단순화 — 이 프로젝트 다른
+ * 다중스트림 HARQ 함수들과 동일한 관례(구현 정의).
+ * ─────────────────────────────────────────────────────────────────────────── */
+void run_pdsch_beam_mgmt_p123_harq_simulation(const L1Config *cfg) {
+    int num_rb   = cfg->numRB;
+    int num_data = 6 * num_rb;
+    int num_rep  = cfg->beamMgmtNumRep;
+
+    int is_tdl = (strcmp(cfg->channelModel, "TDL") == 0);
+    double scs_hz = (double)cfg->scsKHz * 1000.0;
+
+    MCSTableType tbl = mcs_table_from_str(cfg->mcsTableType);
+    MCSEntry mcs = get_mcs_entry(cfg->mcsIndex, tbl);
+    double cr   = get_code_rate(&mcs);
+    int    bps  = mcs.modulationOrder;
+    int    crc_bits = 24;
+
+    int E    = num_data * bps;
+    int tbsz = (int)(E * cr);
+    if (tbsz < 1)    tbsz = 1;
+
+    int B = tbsz + crc_bits;
+    NRSegInfo seg; nr_seg_compute(B, cr, &seg);
+    int payload = seg.Kprime - seg.L;
+
+    LDPCCodec ldpc;
+    ldpc_init_resolved(&ldpc, seg.Kprime, cr, seg.bg, seg.Zc, seg.Kb,
+                        seg.base_rows, seg.base_info_cols, seg.base_cols,
+                        seg.filler_size);
+    int acsz = ldpc.coded_size;
+
+    int *Er = (int *)malloc(seg.C * sizeof(int));
+    nr_ldpc_er_alloc(E, /*Nl=*/1, bps, seg.C, Er);
+
+    int is_chase = (strcmp(cfg->harqRvSeq,"CHASE")==0);
+    int rvseq[4] = {0,2,3,1};
+    int rvseq_len = is_chase ? 1 : 4;
+    int max_retx = cfg->harqMaxRetx > 0 ? cfg->harqMaxRetx : 1;
+
+    printf("=== PDSCH Beam Management P1->P3->P2 (HARQ Circular Buffer %s), %s ===\n",
+           is_chase ? "Chase" : "IR",
+           is_tdl ? "TDL Frequency-Selective Fading" : "Flat Fading");
+    printf("MCS Index    : %d (Table %s)\n", cfg->mcsIndex, cfg->mcsTableType);
+    printf("Modulation   : %s (Qm=%d)\n", mcs.modulation, bps);
+    printf("Target Rate  : %.4f\n", cr);
+    printf("Mother Rate  : %.4f (Ncb=%d/CB, actual NR LDPC BG%d/Zc=%d achieved rate)\n",
+           (double)seg.Kprime / acsz, acsz, ldpc.bg, ldpc.Zc);
+    printf("Code Blocks  : C=%d/scenario%s\n", seg.C, seg.C > 1 ? " (CRC24B/CB)" : "");
+    printf("Num RB       : %d\n", num_rb);
+    printf("gNB Tx Cand  : %d (i1_1=16 x i1_2=16 x i2=4, rank-1 코드북 전체)\n",
+           BM_CAND_L * BM_CAND_M * BM_CAND_N2);
+    printf("UE Rx Cand   : %d (%d소자 ULA, 오버샘플링 x%d)\n", BM_UE_CAND, BM_UE_N, BM_UE_O);
+    printf("Num Rep      : %d (빔 선택은 트라이얼당 1회, 모든 attempt에서 재사용)\n", num_rep);
+    printf("TB Size      : %d bits\n", tbsz);
+    printf("Max Retx     : %d\n", max_retx);
+    if (is_tdl)
+        printf("Channel      : 단일 클러스터 공유 SISO TDL(attempt마다 재드로우), DS=%.0fns, %d taps\n",
+               cfg->tdlDelaySpreadNs, TDL_MAX_TAPS);
+    else
+        printf("Channel      : 고정(빔도 채널도 트라이얼 내내 불변, attempt마다 잡음만 재드로우)\n");
+    printf("Trials/SNR   : %d\n\n", cfg->numTrials);
+
+    int   *tb[2], *tb_crc[2], *cb_bits[2], **coded_cw[2], **rm[2], *selbits[2];
+    int   *decoded_cb[2], *decoded_tb[2];
+    cx_t  *sym[2], *rx_hat[2];
+    double *allllr[2], **soft_buf[2];
+    for (int s = 0; s < 2; s++) {
+        tb[s]         = (int    *)malloc(tbsz     * sizeof(int));
+        tb_crc[s]     = (int    *)malloc(B        * sizeof(int));
+        cb_bits[s]    = (int    *)malloc((size_t)seg.C * seg.Kprime * sizeof(int));
+        coded_cw[s]   = (int   **)malloc(seg.C    * sizeof(int *));
+        rm[s]         = (int   **)malloc(seg.C    * sizeof(int *));
+        for (int r = 0; r < seg.C; r++) {
+            coded_cw[s][r] = (int *)malloc(acsz  * sizeof(int));
+            rm[s][r]       = (int *)malloc(Er[r] * sizeof(int));
+        }
+        selbits[s]    = (int    *)malloc(E        * sizeof(int));
+        decoded_cb[s] = (int    *)malloc(ldpc.info_size * sizeof(int));
+        decoded_tb[s] = (int    *)malloc(B        * sizeof(int));
+        sym[s]        = (cx_t  *)malloc(num_data  * sizeof(cx_t));
+        rx_hat[s]     = (cx_t  *)malloc(num_data  * sizeof(cx_t));
+        allllr[s]     = (double *)malloc(E        * sizeof(double));
+        soft_buf[s]   = (double **)malloc(seg.C   * sizeof(double *));
+        for (int r = 0; r < seg.C; r++) soft_buf[s][r] = (double *)malloc(acsz * sizeof(double));
+    }
+    cx_t *cluster_taps = (cx_t *)malloc(TDL_MAX_TAPS * sizeof(cx_t));
+
+    printf("%-9s  %-11s %10s%14s%14s%12s\n",
+           "SNR(dB)", "P2==P1", "BER(final)", "BLER(1st)", "BLER(HARQ)", "AvgTx");
+    for (int i = 0; i < 78; i++) printf("-");
+    printf("\n");
+
+    TDLChannel tdl_ch;
+    for (double snr = cfg->snrStart; snr <= cfg->snrEnd + 1e-6; snr += cfg->snrStep) {
+        if (is_tdl) tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        double N0    = 1.0 / pow(10.0, snr / 10.0);
+        double sigma = sqrt(N0 / 2.0);
+
+        int total_err=0, total_bits=0, blk_err_final=0, blk_err_1st=0;
+        long long total_attempts = 0;
+        int p2_eq_p1_cnt = 0;
+
+        for (int trial = 0; trial < cfg->numTrials; trial++) {
+
+            /* 빔 선택(P1->P3->P2): 트라이얼당 1회, wideband, TDL 무관 */
+            double l_true = (double)rand() / RAND_MAX * BM_CAND_L;
+            double m_true = (double)rand() / RAND_MAX * BM_CAND_M;
+            double n_true = (double)rand() / RAND_MAX * BM_CAND_N2;
+            double r_true = (double)rand() / RAND_MAX * BM_UE_CAND;
+            cx_t H_true[32];
+            beam_mgmt_true_channel(l_true, m_true, n_true, H_true);
+            cx_t H_full[BM_UE_N][32];
+            beam_mgmt_true_channel_mimo(H_true, r_true, H_full);
+
+            int gl, gm, gn; double gg;
+            beam_mgmt_genie_best(H_true, &gl, &gm, &gn, &gg);
+            cx_t Wg[32];
+            codebook_type1_sp_32port_rank1(gl, gm, gn, Wg);
+            cx_t heff_genie = CX_ZERO;
+            for (int t = 0; t < 32; t++) heff_genie += conj(H_true[t]) * Wg[t];
+
+            int sl1, sm1, sn1; double sg1;
+            beam_mgmt_p1_sweep(H_true, N0, num_rep, &sl1, &sm1, &sn1, &sg1);
+            cx_t W1[32];
+            codebook_type1_sp_32port_rank1(sl1, sm1, sn1, W1);
+
+            int ue_idx; double p3_gain;
+            beam_mgmt_p3_sweep(H_full, W1, N0, num_rep, &ue_idx, &p3_gain);
+            cx_t w_ue[BM_UE_N];
+            beam_mgmt_ue_steer((double)ue_idx, w_ue);
+
+            cx_t h_eff2[32];
+            beam_mgmt_p2_effective_channel(H_full, w_ue, h_eff2);
+            int sl2, sm2, sn2; double sg2;
+            beam_mgmt_p1_sweep(h_eff2, N0, num_rep, &sl2, &sm2, &sn2, &sg2);
+            if (sl2 == sl1 && sm2 == sm1 && sn2 == sn1) p2_eq_p1_cnt++;
+
+            cx_t W2[32];
+            codebook_type1_sp_32port_rank1(sl2, sm2, sn2, W2);
+            cx_t heff_refined = CX_ZERO;
+            for (int u = 0; u < BM_UE_N; u++) {
+                cx_t hg = CX_ZERO;
+                for (int g = 0; g < 32; g++) hg += conj(H_full[u][g]) * W2[g];
+                heff_refined += conj(w_ue[u]) * hg;
+            }
+
+            cx_t heff[2] = { heff_genie, heff_refined };
+
+            for (int s = 0; s < 2; s++) {
+                gen_random_bits(tb[s], tbsz);
+                attach_crc(tb[s], tbsz, CRC24A, tb_crc[s]);
+                nr_seg_split(tb_crc[s], &seg, cb_bits[s]);
+                for (int r = 0; r < seg.C; r++) {
+                    ldpc_encode(&ldpc, cb_bits[s] + (size_t)r * seg.Kprime, coded_cw[s][r]);
+                    for (int i = 0; i < acsz; i++) soft_buf[s][r][i] = 0.0;
+                }
+            }
+
+            int crc_ok[2]={0,0}, be[2]={0,0}, be_1st[2]={0,0}, crc_1st[2]={0,0};
+            int attempts = 0;
+
+            for (int attempt = 0; attempt < max_retx; attempt++) {
+                int rv = rvseq[attempt % rvseq_len];
+
+                for (int s = 0; s < 2; s++) {
+                    for (int r = 0; r < seg.C; r++)
+                        nr_ldpc_rate_match_select(coded_cw[s][r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], rm[s][r]);
+                    nr_seg_concat(&seg, (const int *const *)rm[s], Er, selbits[s]);
+                    qam_modulate(selbits[s], E, mcs.modulation, sym[s]);
+                }
+
+                /* TDL이면 클러스터 게인을 attempt마다 재드로우(시간
+                 * 다이버시티) — flat이면 빔·채널 모두 고정, 잡음만 재드로우 */
+                if (is_tdl) tdl_draw(&tdl_ch, cluster_taps);
+
+                double nv_sum[2] = {0.0, 0.0};
+                for (int d = 0; d < num_data; d++) {
+                    cx_t g_d = is_tdl ? tdl_freq_response(&tdl_ch, cluster_taps, d)
+                                       : CX_MAKE(1.0, 0.0);
+                    for (int s = 0; s < 2; s++) {
+                        cx_t he = g_d * heff[s];
+                        double he_abs2 = CX_NORM(he);
+                        double nv = (he_abs2 > 1e-12) ? N0 / he_abs2 : N0 * 1e6;
+                        nv_sum[s] += nv;
+                        cx_t noise = CX_MAKE(randn() * sigma, randn() * sigma);
+                        cx_t y = he * sym[s][d] + noise;
+                        rx_hat[s][d] = (he_abs2 > 1e-12) ? y / he : CX_ZERO;
+                    }
+                }
+
+                for (int s = 0; s < 2; s++) {
+                    double env = nv_sum[s] / num_data;
+                    qam_demap_llr(rx_hat[s], num_data, mcs.modulation, env, allllr[s]);
+                    int roff = 0;
+                    int cb_crc_ok = 1;
+                    for (int r = 0; r < seg.C; r++) {
+                        nr_ldpc_rate_match_combine(soft_buf[s][r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], allllr[s] + roff);
+                        roff += Er[r];
+                        ldpc_decode(&ldpc, soft_buf[s][r], 25, decoded_cb[s]);
+                        if (seg.C > 1 && !check_crc(decoded_cb[s], seg.Kprime, CRC24B)) cb_crc_ok = 0;
+                        memcpy(decoded_tb[s] + (size_t)r * payload, decoded_cb[s], payload * sizeof(int));
+                    }
+                    crc_ok[s] = cb_crc_ok && check_crc(decoded_tb[s], B, CRC24A);
+                    int biterr = 0;
+                    for (int i = 0; i < tbsz; i++)
+                        if (tb[s][i] != decoded_tb[s][i]) biterr++;
+                    be[s] = biterr;
+                    if (attempt == 0) { be_1st[s] = biterr; crc_1st[s] = crc_ok[s]; }
+                }
+
+                attempts = attempt + 1;
+                if (crc_ok[0] && crc_ok[1]) break;
+            }   /* end attempt loop */
+
+            int any_err_1st = 0, any_err_final = 0;
+            for (int s = 0; s < 2; s++) {
+                total_err  += be[s];
+                total_bits += tbsz;
+                if (!crc_1st[s] || be_1st[s] > 0) any_err_1st   = 1;
+                if (!crc_ok[s]  || be[s]    > 0) any_err_final = 1;
+            }
+            if (any_err_1st)   blk_err_1st++;
+            if (any_err_final) blk_err_final++;
+            total_attempts += attempts;
+        }   /* end trial loop */
+
+        double p2_eq_p1_rate = p2_eq_p1_cnt / (double)cfg->numTrials;
+        double ber        = total_bits > 0 ? (double)total_err / total_bits : 0.0;
+        double bler_1st   = (double)blk_err_1st   / cfg->numTrials;
+        double bler_final = (double)blk_err_final / cfg->numTrials;
+        double avg_tx     = (double)total_attempts / cfg->numTrials;
+        printf("%-9.1f  %-11.4f %10.4e%14.4f%14.4f%12.2f\n",
+               snr, p2_eq_p1_rate, ber, bler_1st, bler_final, avg_tx);
+    }   /* end SNR loop */
+
+    printf("\nPDSCH Beam Management P1->P3->P2 + %s + HARQ simulation complete.\n", is_tdl ? "TDL" : "Flat Fading");
 
     ldpc_free(&ldpc);
     free(cluster_taps); free(Er);

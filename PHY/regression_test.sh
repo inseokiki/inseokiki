@@ -129,11 +129,6 @@ expect_fail "OLLA_ENABLE=1 + unsupported MIMO_MODE (CL_4PORT) has no dedicated f
     "PHYSICAL_CHANNEL = PDSCH" "USE_DMRS = 1" "MIMO_MODE = CL_4PORT" "CHANNEL_MODEL = AWGN" "CODING = LDPC" "EQUALIZER = MMSE" \
     "OLLA_ENABLE = 1"
 
-expect_fail "BEAM_MGMT_RX_SWEEP=1 + TDL has no dedicated function (AWGN only)" \
-    "MCS_INDEX = 5" "MCS_TABLE = TABLE1" "SNR_START = 10" "SNR_END = 10" "SNR_STEP = 1" "NUM_TRIALS = 20" \
-    "PHYSICAL_CHANNEL = PDSCH" "USE_DMRS = 1" "MIMO_MODE = BEAM_MGMT" "CHANNEL_MODEL = TDL" "CODING = LDPC" "EQUALIZER = MMSE" \
-    "BEAM_MGMT_RX_SWEEP = 1"
-
 # ──────────────────────────────────────────
 # GROUP 2: MCS table dispatch (P0-1 regression)
 # ──────────────────────────────────────────
@@ -236,6 +231,9 @@ expect_pass "PDSCH BEAM_MGMT flat" "P1==Genie" \
 expect_pass "PDSCH BEAM_MGMT P1-P3-P2 (UE Rx sweep)" "P2==P1" \
     "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = BEAM_MGMT" "CHANNEL_MODEL = AWGN" "BEAM_MGMT_RX_SWEEP = 1"
 
+expect_pass "PDSCH BEAM_MGMT P1-P3-P2 TDL" "P2==P1" \
+    "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = BEAM_MGMT" "${TDL[@]}" "BEAM_MGMT_RX_SWEEP = 1"
+
 expect_pass "PDSCH BEAM_MGMT TDL" "P1==Genie" \
     "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = BEAM_MGMT" "${TDL[@]}"
 
@@ -262,6 +260,12 @@ expect_pass "PDSCH BEAM_MGMT HARQ flat" "BLER(HARQ)" \
 
 expect_pass "PDSCH BEAM_MGMT HARQ TDL" "BLER(HARQ)" \
     "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = BEAM_MGMT" "${TDL[@]}" "${HQ[@]}"
+
+expect_pass "PDSCH BEAM_MGMT P1-P3-P2 HARQ flat" "BLER(HARQ)" \
+    "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = BEAM_MGMT" "CHANNEL_MODEL = FLAT_FADING" "BEAM_MGMT_RX_SWEEP = 1" "${HQ[@]}"
+
+expect_pass "PDSCH BEAM_MGMT P1-P3-P2 HARQ TDL" "BLER(HARQ)" \
+    "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = BEAM_MGMT" "${TDL[@]}" "BEAM_MGMT_RX_SWEEP = 1" "${HQ[@]}"
 
 expect_pass "PDSCH CL_4PORT HARQ TDL" "BLER(HARQ)" \
     "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = CL_4PORT" "${TDL[@]}" "${HQ[@]}"

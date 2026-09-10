@@ -208,8 +208,12 @@ int main(int argc, char *argv[]) {
                 run_pdsch_cl_32port_harq_simulation(&cfg);
             else if (strcmp(cfg.mimoMode,"MU_MIMO")==0)
                 run_pdsch_mumimo_harq_simulation(&cfg);   /* flat/TDL 모두 지원 (함수 내부에서 분기) */
-            else if (strcmp(cfg.mimoMode,"BEAM_MGMT")==0)
-                run_pdsch_beam_mgmt_harq_simulation(&cfg);   /* flat/TDL 모두 지원 (함수 내부에서 분기) */
+            else if (strcmp(cfg.mimoMode,"BEAM_MGMT")==0) {
+                if (cfg.beamMgmtRxSweep)
+                    run_pdsch_beam_mgmt_p123_harq_simulation(&cfg);   /* flat/TDL 모두 지원 (함수 내부에서 분기) */
+                else
+                    run_pdsch_beam_mgmt_harq_simulation(&cfg);   /* flat/TDL 모두 지원 (함수 내부에서 분기) */
+            }
             else if (strcmp(cfg.mimoMode,"SM_2X2")==0 && strcmp(cfg.channelModel,"TDL")==0)
                 run_pdsch_sm2x2_tdl_harq_simulation(&cfg);
             else if (strcmp(cfg.mimoMode,"SIMO_MRC")==0 && strcmp(cfg.channelModel,"TDL")==0)
@@ -220,7 +224,10 @@ int main(int argc, char *argv[]) {
             if (strcmp(cfg.channelModel,"TDL")==0) run_pdsch_mumimo_tdl_simulation(&cfg);
             else                                    run_pdsch_mumimo_simulation(&cfg);
         } else if (strcmp(cfg.mimoMode,"BEAM_MGMT")==0) {
-            if (cfg.beamMgmtRxSweep)               run_pdsch_beam_mgmt_p123_simulation(&cfg);   /* UE Rx 빔스위핑 P3 + gNB Tx 재정제 P2, AWGN 전용 */
+            if (cfg.beamMgmtRxSweep) {
+                if (strcmp(cfg.channelModel,"TDL")==0) run_pdsch_beam_mgmt_p123_tdl_simulation(&cfg);   /* UE Rx 빔스위핑 P3 + gNB Tx 재정제 P2 */
+                else                                    run_pdsch_beam_mgmt_p123_simulation(&cfg);
+            }
             else if (strcmp(cfg.channelModel,"TDL")==0) run_pdsch_beam_mgmt_tdl_simulation(&cfg);
             else                                    run_pdsch_beam_mgmt_simulation(&cfg);
         } else if (strcmp(cfg.mimoMode,"SIMO_MRC")==0) {

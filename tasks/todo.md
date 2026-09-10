@@ -24,23 +24,47 @@
   사용자 요청(2026-09-02), "어느정도 시험되면"이라는 조건부 — 현재는
   아직 시점이 아님. 착수 시 정확한 범위(어떤 채널/모드를 포함할지,
   출력 형식)를 먼저 확인할 것.
-- [ ] MU-MIMO를 K>2 또는 다중 Rx 안테나(진짜 다중 스트림/사용자)로
-  확장 — TDL/HARQ는 완료(2026-09-01, K=2/Nt=4 고정). K>2는
-  `mumimo_zf_precode()`의 2×2 폐형 역행렬을 일반 K×K 역행렬로
-  교체해야 함(현재 K=2 전제로 짜여 있음).
 - [ ] `PHY/src/ber_sim.c` 정리 — `c_Makefile`에 전혀 포함되지 않는
   고아 파일(2026-07-15 이후 방치, 독립 실행형 BER 툴 시도로 보임).
   STRUCTURE.md 갱신 중 발견(2026-09-01). 삭제할지 `c_Makefile`에
   편입할지 결정 필요.
-- [ ] 빔 관리 P1->P3->P2(2026-09-03 완료, 아래 "완료" 참조)를 TDL/HARQ와
-  결합 — 현재는 AWGN 전용(`BEAM_MGMT_RX_SWEEP=1`+`CHANNEL_MODEL=TDL`
-  또는 `HARQ_ENABLE=1`은 `config_parser.c`가 명시적으로 차단 중).
-  기존 `run_pdsch_beam_mgmt_tdl_simulation()`/`_harq_simulation()`과
-  같은 패턴(TDL은 선택된 빔의 데이터 전송에만 적용, HARQ는 빔 선택
-  자체는 트라이얼당 1회 고정)을 그대로 적용 가능할 것으로 보이나
-  착수 전 확인 필요.
-
 ## 완료 (최근)
+
+- [x] 빔 관리 P1->P3->P2를 TDL/HARQ와 결합 — 2026-09-10 완료.
+  `run_pdsch_beam_mgmt_p123_tdl_simulation()`/`_p123_harq_simulation()`
+  신규 추가 — 기존 P1 단독 TDL/HARQ 함수와 정확히 같은 패턴(TDL은
+  선택된 빔의 데이터 전송에만 적용, HARQ는 빔 선택[P1→P3→P2 전체]이
+  트라이얼당 1회 고정, TDL이면 attempt마다 클러스터 tap-set만
+  재드로우). P1 단독 TDL 함수 헤더에서 이미 증명한 "TDL 공유 스칼라는
+  빔 순위에 영향 없음" 논증이 P3/P2 정제 단계(둘 다 wideband 스냅샷
+  채널에서 동작)에도 그대로 적용됨을 확인, 새 설계 없이 기계적 확장.
+  `config_parser.c`의 `BEAM_MGMT_RX_SWEEP=1`+TDL/HARQ 차단 가드 제거,
+  `main.c` 디스패치·`pdsch.h` 선언 갱신. 검증: 3개 신규 조합(TDL,
+  HARQ flat, HARQ TDL) 실제 실행 정상, 전체 소스 ASan/UBSan(고아 파일
+  `ber_sim.c` 제외) 클린. `regression_test.sh`의 낡은 음성
+  테스트("BEAM_MGMT_RX_SWEEP=1 + TDL has no dedicated function")를
+  제거하고 신규 3케이스 추가 — **92/92 통과**(기존 90 − 낡은 음성
+  테스트 1 + 신규 3).
+
+- [x] MU-MIMO K>2 확장(K=2→4, Nt=4로 꽉 채움) — 2026-09-09 완료.
+  `mumimo.c`의 K=2 전제 폐형 2×2 역행렬(`inv2x2_local`)을 부분
+  피벗팅(열마다 절댓값 최대 원소 선택) 적용 일반 K×K Gauss-Jordan
+  역행렬(`invKxK_local`)로 교체 — ZF-BF는 대수적으로 K<=Nt에서만
+  성립하므로(우측 유사역행렬 존재 조건) K를 Nt=4까지만 확장(더
+  키우려면 Nt도 같이 키워야 함, `mumimo.h` 문서에 명시). `pdsch.c`의
+  flat/TDL 두 함수에 하드코딩돼 있던 "BER_U0/BLER_U0/BER_U1/BLER_U1"
+  2열 고정 출력 포맷을 K열 루프로 일반화(HARQ 함수는 애초에 사용자
+  결합 지표만 출력해 변경 불필요). 검증: (1) 별도 스크래치 하네스로
+  H·W≈I_K(사용자 간 간섭 ~1e-14, 대각 성분 항상 실수 양수), 열별
+  전력 정규화(‖W[:,k]‖²=1/K) 확인 + H=2I 손계산 케이스 정확히 일치,
+  (2) 실제 4가지 시뮬레이션 함수(flat/TDL/HARQ flat/HARQ TDL)를
+  K=4로 직접 실행해 출력 포맷·크래시 여부 확인, (3) 전체 회귀(ASan/
+  UBSan 포함, `ber_sim.c` 제외 전체 소스 재빌드) 클린, `regression_test.sh`
+  **90/90 유지**. TDL 케이스에서 동일 SNR 대비 BLER이 K=2 시절보다
+  나빠 보일 수 있는데(관측: SNR=10dB에서 K=2였을 때보다 BLER 상승),
+  이는 버그가 아니라 완전 로딩(K=Nt) ZF-BF의 잘 알려진 물리적 한계
+  (공간 자유도 여유가 0이 되어 잡음 증폭이 커짐)로 판단 — 3GPP 비규정
+  구현 선택 영역이라 추가 확인 불필요.
 
 - [x] Polar 코드 표준 정합화 Phase 4(CA-SCL 디코더) + PBCH/PDCCH/PUCCH/
   main.c 전 채널 연결 — 2026-09-04 완료. CA-SCL(List size, CRC-aided

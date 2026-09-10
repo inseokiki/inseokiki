@@ -8,10 +8,14 @@
  *  서로 다른 여러 사용자(UE)에게 공간적으로 분리된 스트림을
  *  동시에 서비스한다.
  *
- *  스코프(1차 구현): gNB Nt=4 안테나, K=2 사용자, 각 사용자 1개
- *  Rx 안테나(MU-MISO 다운링크 — 실무·교과서에서 가장 흔한 MU-MIMO
- *  기본형). 사용자별 다중 스트림/랭크 적응은 후속 과제로 분리
- *  (tasks/todo.md 참조).
+ *  스코프: gNB Nt=4 안테나, K=4 사용자(각 1개 Rx 안테나, MU-MISO
+ *  다운링크 — 실무·교과서에서 가장 흔한 MU-MIMO 기본형), K=Nt로 꽉 찬
+ *  케이스(2026-09-09, tasks/todo.md MU-MIMO K>2 확장 — K=2 고정이던
+ *  이전 버전의 폐형 2×2 역행렬을 mumimo.c의 일반 K×K Gauss-Jordan으로
+ *  교체). ZF-BF는 대수적으로 K<=Nt에서만 성립(우측 유사역행렬이
+ *  존재하려면 H가 행 기준 full-rank여야 함) — K를 더 키우려면 Nt도
+ *  같이 키워야 한다. 사용자별 다중 스트림/랭크 적응은 후속 과제로
+ *  분리(tasks/todo.md 참조).
  *
  *  프리코딩: Zero-Forcing Beamforming — H(K×Nt)의 우측 유사역행렬
  *  H^+ = H^H(HH^H)^-1을 프리코더로 써서 사용자 간 간섭을 설계상
@@ -32,7 +36,7 @@
 #include "utils.h"
 
 #define MUMIMO_NT 4   /* gNB Tx 안테나 수 */
-#define MUMIMO_K  2   /* 동시 서빙 사용자 수 (각 1 Rx 안테나) */
+#define MUMIMO_K  4   /* 동시 서빙 사용자 수 (각 1 Rx 안테나) — ZF-BF 성립 조건상 <=MUMIMO_NT */
 
 /* i.i.d. Rayleigh 채널: H[k][t], k=0..K-1(사용자), t=0..Nt-1(gNB 안테나) */
 void mumimo_channel_draw(cx_t H[MUMIMO_K][MUMIMO_NT]);
