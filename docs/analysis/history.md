@@ -1954,6 +1954,65 @@ test_polar/test_ldpc 4개 + 신규 4개, 첫 실행에 바로 전부 통과). �
 
 ---
 
+### `PHY_UNIT_VALIDATION_PLAN.md` §5 2단계 잔여분 — 기초 행렬·채널 공간상관 직접 단위 테스트 (2026-09-10)
+
+위 항목에서 "이번 패스에서 의도적으로 제외"로 남겨뒀던 두 그룹("기초
+행렬"의 `herm4x4_eig`, "채널"의 공간상관)을 같은 날 이어서 처리 —
+`PHY_UNIT_VALIDATION_PLAN.md` §5 2단계가 명시한 5개 그룹(CRC/QAM-LLR/
+변환 2종/기초 행렬/채널) 전부 커버 완료.
+
+**`test_matrix.c`**: `utils.c`의 `herm4x4_eig()`(4×4 Hermitian 행렬의
+Cyclic Jacobi 고유분해 — `eigen_16port.c`(DL EIGEN_16PORT Tx측 SVD)와
+`ul_eigen_bf.c`(UL Eigen-BF 4-Tx Rx측 SVD)가 공유하는 범용 선형대수
+유틸리티)을 검증. 대각 입력(offdiag가 이미 0이라 Jacobi sweep이 첫
+검사에서 즉시 break, `V`는 항등행렬 그대로 유지된 채 마지막 정렬
+단계만 작동 — eigval=대각원소 내림차순 정확 일치, eigvec=항등행렬
+열의 정확한 순열)과 항등 입력(자명한 특수 케이스)의 정확한 closed-form,
+rank-1 외적 `A=v·v^H`(v=[1,2,3,4], 실수)의 손으로 유도한 스펙트럼
+([|v|²=30, 0, 0, 0], 최상위 고유벡터가 정확히 `v/|v|`인 표준 선형대수
+사실)을 대조. **독립성**: 일반 무작위 Hermitian 500회 시행(`A=G+G^H`,
+G는 랜덤 복소 4×4 — 항상 Hermitian이 되는 구성)에 대해 입력 A로부터
+직접 계산한 두 불변량 — trace(A)==sum(eigval)와 `‖A‖_F²==sum(eigval²)`
+(임의의 올바른 스펙트럼 분해라면 성립해야 하는 표준 항등식, 알고리즘의
+개별 회전 스텝과 무관) — 을 확인, 그리고 스펙트럼 분해의 정의 자체인
+재구성 항등식 `V·diag(eigval)·V^H == A`와 정규직교성 `V^H V == I`,
+고유값 내림차순 정렬을 확인. 첫 실행에 12/12 항목 전부 통과.
+
+**`test_mimo_correlation.c`**: `mimo.c`의 Tx측 공간상관(Kronecker 모델
+`mimo_apply_tx_correlation_4x4/4x8/4x32`)을 검증 — 착수 전 `channel.c`/
+`tdl.c`에 공간상관 관련 코드가 전혀 없음을 grep으로 먼저 확인했고
+(`grep -n "corr" include/channel.h include/tdl.h` → 매치 0), 계획
+문서의 "채널(channel.c/tdl.c/mimo.c 공간상관)"이 실제로 가리키는 건
+`mimo.c`의 이 세 함수뿐임을 확정한 뒤 그 범위로 진행. rho≤0(rho_xpol도
+동일)이 정확히 no-op(`> 0.0` 게이트, 음수 포함)임을 바이트 단위로
+확인, N1=2 블록(4포트)의 `a=½(√(1+ρ)+√(1-ρ))`/`b=½(√(1+ρ)-√(1-ρ))`가
+만족해야 하는 `a²+b²=1, 2ab=rho` 대수적 항등식을 elementary-input(포트
+0만 1) 출력에서 역산한 a,b로 검증(구현의 회전 스텝과 무관한 독립
+성질), R_ant(포트 0-1/2-3)→R_pol(포트 0-2/1-3) 순서 합성 응답을 손으로
+유도해 대조. N1=4(8포트/32포트)는 Cholesky 인자가 `chol_exp_corr4()`
+(static, 테스트에서 직접 호출 불가)로만 계산되는데, 지수상관행렬
+`R[i][j]=rho^|i-j|`가 AR(1)/Markov 프로세스의 공분산 구조라는 사실에서
+`L[i][0]=rho^i`, `L[i][j]=rho^(i-j)·√(1-rho²)`(1≤j≤i) 닫힌형이 표준
+교과서 결과임을 손으로 재유도 — 이 닫힌형을 elementary-column
+입력(안테나 인덱스 n에 1, 나머지 0)에 대한 기대 출력과 대조해 static
+함수를 우회하면서도 독립적으로 검증. R_pol은 4x4와 동일한 2×2 블록이
+안테나 인덱스마다 반복됨을, R_horiz(32포트)는 같은 AR(1) Cholesky
+닫힌형이 n1 축을 따라 재사용됨을 각각 elementary-input으로 확인.
+rho=1.0(내부적으로 1-1e-9로 clamp)이 NaN/Inf를 내지 않음도 확인.
+첫 실행에 24/24 항목 전부 통과.
+
+**검증**: `run_numeric_tests.sh` 10/10 통과(기존 8 + 신규 2). 신규 2개
+전부 `-fsanitize=address,undefined`로 별도 재빌드·재실행해 런타임
+오류 0건 확인. `PHY/tests/README.md`에 2개 항목 설명 추가.
+
+**미구현/후속**: `PHY_UNIT_VALIDATION_PLAN.md` §5 2단계는 이제 전부
+커버됐지만, PHY-03에서부터 이어지는 UT-06(독립 참조 벡터 —
+`test_ldpc.c`/`test_polar.c`/`test_mumimo.c`가 한계를 주석으로만
+명시하고 실제 외부 참조 벡터는 여전히 미추가)은 이번 세션에서도 손대지
+않음 — `tasks/todo.md` "진행 중"에 유일하게 남은 항목.
+
+---
+
 ## 🔄 업데이트 이력 (원본 CLAUDE.md 기준)
 
 | 날짜 | 내용 |

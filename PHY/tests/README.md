@@ -69,6 +69,24 @@ system.
   non-power-of-2 M (1,2,3,4,5,6,12,15,24,25,48 — this direct-sum
   implementation exists specifically for the non-power-of-2 case, since
   3GPP restricts M to products of {2,3,5}), and round-trip.
+- `test_matrix.c` — `utils.c`'s `herm4x4_eig()` (Cyclic Jacobi
+  eigendecomposition of a 4x4 Hermitian matrix, shared by
+  `eigen_16port.c`/`ul_eigen_bf.c`): exact closed forms for diagonal and
+  identity input (no rotation needed), a rank-1 outer-product case with
+  a hand-derivable spectrum ([|v|^2,0,0,0]), and — over 500 random
+  Hermitian trials each — trace/Frobenius-norm invariants, the
+  reconstruction identity `V*diag(eigval)*V^H == A`, orthonormality
+  (`V^H V == I`), and descending eigenvalue order.
+- `test_mimo_correlation.c` — `mimo.c`'s Tx-side spatial correlation
+  (Kronecker model: `mimo_apply_tx_correlation_4x4/4x8/4x32`) — note
+  channel.c/tdl.c have no spatial-correlation code themselves, this is
+  the actual scope of the plan's "채널 공간상관" row. Exact no-op at
+  rho<=0, the N1=2 block's `a^2+b^2=1, 2ab=rho` algebraic identity
+  recovered from elementary-input output, hand-derived composed
+  R_ant-then-R_pol responses, a hand-derived AR(1)/Markov-correlation
+  Cholesky closed form (`L[i][0]=rho^i`, `L[i][j]=rho^(i-j)*sqrt(1-
+  rho^2)`) checked against the N1=4 (8-port/32-port) Cholesky path via
+  elementary-column inputs, and a `rho=1.0` clamp finiteness check.
 
 ## Adding a new test
 

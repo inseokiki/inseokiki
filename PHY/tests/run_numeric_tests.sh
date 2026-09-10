@@ -51,6 +51,8 @@ run_test test_crc crc.o
 run_test test_modulation modulation.o
 run_test test_ofdm ofdm.o
 run_test test_dft_precode dft_precode.o
+run_test test_matrix utils.o
+run_test test_mimo_correlation mimo.o utils.o
 
 echo "========================================"
 echo "Numeric test results: $PASS/$((PASS+FAIL)) passed"

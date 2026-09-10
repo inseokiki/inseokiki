@@ -28,14 +28,36 @@
   고아 파일(2026-07-15 이후 방치, 독립 실행형 BER 툴 시도로 보임).
   STRUCTURE.md 갱신 중 발견(2026-09-01). 삭제할지 `c_Makefile`에
   편입할지 결정 필요.
-- [ ] `PHY_UNIT_VALIDATION_PLAN.md` §5 2단계 잔여분 — "기초 행렬"
-  (`herm4x4_eig` 등 EVD 연산)과 "채널"(channel.c/tdl.c/mimo.c 공간상관)
-  직접 단위 테스트. CRC/QAM-LLR/OFDM-FFT/DFT-precode 4개는 2026-09-10
-  완료(아래 "완료" 참조), 이 2개는 이번 패스에서 의도적으로 미착수.
 - [ ] `test_ldpc.c`/`test_polar.c`/`test_mumimo.c`의 UT-06(독립 참조
   벡터) 미해결 — 2026-09-10 세션에서 한계를 주석으로만 명시, 실제
   외부/독립 참조 벡터는 아직 추가 안 됨(위 "완료" PHY-03 항목 참조).
 ## 완료 (최근)
+
+- [x] `PHY_UNIT_VALIDATION_PLAN.md` §5 2단계 잔여분 — "기초 행렬"
+  (`herm4x4_eig`)과 "채널"(channel.c/tdl.c/mimo.c 공간상관) 직접 단위
+  테스트 — 2026-09-10 완료. 이로써 §5 2단계의 6개 그룹(CRC/QAM-LLR/
+  변환/기초 행렬/채널) 중 계획 문서가 명시한 5개(변환은 OFDM-FFT +
+  DFT-precode 2개로 구성)를 전부 커버 — 유일하게 남은 건 아래 "진행 중"
+  UT-06(독립 참조 벡터)뿐.
+  - `test_matrix.c`(신규): `utils.c`의 `herm4x4_eig()`(4×4 Hermitian
+    고유분해, `eigen_16port.c`/`ul_eigen_bf.c` 공유) — 대각/항등 입력의
+    정확한 closed-form(회전 불필요), rank-1 외적(`v·v^H`)의 손으로
+    유도한 스펙트럼([|v|²,0,0,0]), 그리고 무작위 Hermitian 500회
+    시행에 대해 trace/Frobenius-norm 불변량, 재구성 항등식
+    `V·diag(eigval)·V^H == A`, 정규직교성(`V^H V == I`), 고유값 내림차순.
+  - `test_mimo_correlation.c`(신규): `mimo.c`의 Tx측 공간상관(Kronecker
+    모델, `mimo_apply_tx_correlation_4x4/4x8/4x32`) — channel.c/tdl.c
+    자체에는 공간상관 코드가 없음을 grep으로 확인, 계획 문서의 "채널
+    공간상관"이 실제로 가리키는 건 이 함수들. rho≤0에서 정확한 no-op,
+    N1=2 블록의 `a²+b²=1, 2ab=rho` 대수적 항등식을 elementary-input
+    출력에서 역산해 검증, R_ant→R_pol 합성 응답을 손으로 유도해 대조,
+    N1=4(8/32포트) Cholesky 경로를 AR(1)/Markov 상관행렬의 잘 알려진
+    닫힌형 Cholesky 인자(`L[i][0]=rho^i`, `L[i][j]=rho^(i-j)·√(1-rho²)`)
+    로 독립 검증(`chol_exp_corr4`는 static이라 직접 호출 불가, 대신 이
+    닫힌형을 손으로 재유도), rho=1.0 clamp가 NaN/Inf를 내지 않음.
+  - **검증**: `run_numeric_tests.sh` 10/10 통과(기존 8 + 신규 2), 신규
+    2개 전부 ASan/UBSan 클린(런타임 오류 0건). `PHY/tests/README.md`에
+    2개 항목 문서화 추가.
 
 - [x] `PHY_UNIT_VALIDATION_PLAN.md` §5 2단계 — 전용 테스트 파일이 없던
   기반 블록(CRC, QAM/LLR, OFDM·FFT/IFFT, DFT/IDFT precoding) 직접
