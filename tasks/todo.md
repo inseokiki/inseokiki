@@ -31,7 +31,47 @@
 - [ ] `test_ldpc.c`/`test_polar.c`/`test_mumimo.c`의 UT-06(독립 참조
   벡터) 미해결 — 2026-09-10 세션에서 한계를 주석으로만 명시, 실제
   외부/독립 참조 벡터는 아직 추가 안 됨(위 "완료" PHY-03 항목 참조).
+- [ ] `PHY_UNIT_VALIDATION_PLAN.md` §5 3단계 잔여분 — "추정·검출"(채널
+  추정·등화, SU-MIMO 검출·EVD·codebook — 전용 단위 파일 없음)과
+  "HARQ·적응 상태"(buffer reset/RV 변화/TB·CB 격리/재전송 상한, RI/PMI·
+  OLLA·ULPC·빔관리 결정론적 상태 천이) — 2026-09-11 세션은 "코딩·rate
+  matching" 그룹만 진행(아래 "완료" 참조), 사용자가 3개 그룹 중 이것을
+  먼저 선택.
 ## 완료 (최근)
+
+- [x] `PHY_UNIT_VALIDATION_PLAN.md` §5 3단계 "코딩·rate matching" 그룹
+  — 2026-09-11 완료. LDPC/rate matching은 `test_ldpc.c`에, Polar는
+  `test_polar.c`에 직접 추가(파일 분리 없이 기존 §5 2단계 파일 확장 —
+  이미 같은 모듈을 다루는 파일이 있었으므로).
+  - **LDPC/rate matching**(`test_ldpc.c`): `nr_select_bg()`의 TS 38.212
+    6.2.2 BG 선택 경계(A≤292, A≤3824&&R≤0.67, R≤0.25) 6개 경계값 쌍,
+    `nr_select_zc()`의 최소-Zc 탐색을 동일 `ZC_SETS`(스펙 원본 데이터)에
+    대한 독립 탐색과 대조, `nr_ldpc_k0()`를 Table 5.4.2.1-2 rv0~3
+    공식의 독립 재서술과 대조, `nr_ldpc_er_alloc()`의 sum(E)==G/Nl·Qm
+    배수/floor·ceil 분배 불변량, 그리고 LDPC 인코더 syndrome 검사
+    (`H·codeword==0 mod 2` — `build_H_nr()`가 만든 H를 `ldpc_encode_nr()`
+    결과에 적용, 두 함수는 서로 호출하지 않는 별개 경로라 실질적
+    교차검증, syndrome 계산 자체도 이번에 새로 작성해 `ldpc_decode()`의
+    BP 루프를 재사용하지 않음).
+  - **Polar**(`test_polar.c`): `polar_encode()`(rate-1, K=N)를 손으로
+    유도한 **재귀적** Arikan 커널 변환(N=4에서 직접 검산 후 구현 —
+    `polar.c`의 반복적 버터플라이 `polar_transform()`은 static이라 애초에
+    직접 호출 불가, 구조적으로 다른 독립 구현)과 대조(N=8/16/32/64).
+    `polar_interleaver()`를 TS 38.212 Table 5.4.1.1-1과 대조 — 로컬
+    1차 소스(`3gpp/38212-hc0/38212-hc0.docx`)를 이번에 새로 XML 테이블
+    셀 파싱으로 직접 재추출해 독립 확인(기존 `polar_rate_match.c`의
+    테이블을 베낀 게 아님 — 결과적으로 정확히 일치함을 이번에 확인).
+    `polar_uci_npc()`의 18≤K≤25 경계 6개 값. `polar_decode_scl()`의
+    문서화된 반환값 계약(무잡음: 항상 1+decoded==info; 고잡음 400회
+    시행: CRC-fail fallback(반환 0) 경로가 실제로 발생하고, 반환값과
+    무관하게 `decoded[]`가 항상 유효한 0/1 배열 — 이번 세션 앞부분에서
+    고친 "CRC 전부 실패 시 최악 후보 반환" 버그의 직접 회귀 테스트).
+  - **검증**: `run_numeric_tests.sh` 10/10 통과(파일 개수는 그대로,
+    기존 test_ldpc/test_polar 확장), 두 파일 모두 ASan/UBSan 재빌드·
+    재실행 클린. `PHY/tests/README.md`에 두 항목 설명 갱신.
+  - **남은 것**: §5 3단계의 "추정·검출", "HARQ·적응 상태" 두 그룹은
+    사용자가 이번 세션에서 명시적으로 미선택 — 아래 "진행 중"에 후속
+    과제로 등록.
 
 - [x] `PHY_UNIT_VALIDATION_PLAN.md` §5 2단계 잔여분 — "기초 행렬"
   (`herm4x4_eig`)과 "채널"(channel.c/tdl.c/mimo.c 공간상관) 직접 단위

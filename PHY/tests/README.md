@@ -36,15 +36,34 @@ system.
   noise-free round-trip (reliability sequence, input interleaving, PC
   bits) across PBCH/PDCCH/UCI configurations, CA-SCL(L=1)≡plain-SC
   equivalence, CA-SCL(L=8) BLER improvement over plain SC, and PDCCH's
-  RNTI-masked CRC path selection (correct/incorrect RNTI).
-- `test_ldpc.c` — `nr_sch.c`/`nr_rate_matching.c`/`ldpc.c`: TS 38.212
-  5.2.2 segmentation round-trip for both C=1 and C>1 (reusing the
-  already-known-valid (TBS=8426, MCS10/TABLE1) combination from
+  RNTI-masked CRC path selection (correct/incorrect RNTI). Also (§5
+  3단계, 2026-09-11): `polar_encode()` at rate-1 (K=N) matches an
+  independently-derived *recursive* Arikan-kernel transform (structurally
+  different from `polar.c`'s own iterative butterfly, which isn't even
+  exported); `polar_interleaver()` matches TS 38.212 Table 5.4.1.1-1,
+  independently re-transcribed from the local primary-source docx (not
+  copied from `polar_rate_match.c`'s own table); `polar_uci_npc()`'s
+  18≤K≤25 boundary; and `polar_decode_scl()`'s documented return-value
+  contract (1 iff CRC-passing, `decoded[]` always a valid 0/1 array even
+  when the CRC-fail fallback path is exercised — direct regression
+  coverage for the p==0 fallback-candidate bug fixed 2026-09-10).
+- `test_ldpc.c` — `nr_sch.c`/`nr_rate_matching.c`/`ldpc.c`/`ldpc_nr.c`:
+  TS 38.212 5.2.2 segmentation round-trip for both C=1 and C>1 (reusing
+  the already-known-valid (TBS=8426, MCS10/TABLE1) combination from
   `regression_test.sh`'s "PDSCH legacy AWGN C=2 segmentation" case —
   see `nr_sch.h`'s documented open question on non-integer B'/C before
   picking a different B), and the 5.4.2.1 circular-buffer's boundary
   behavior (exact non-filler-length selection, wrap-around, Chase
-  combining).
+  combining). Also (§5 3단계, 2026-09-11): `nr_select_bg()`'s TS 38.212
+  6.2.2 base-graph-selection boundary (A≤292, A≤3824&&R≤0.67, R≤0.25),
+  `nr_select_zc()`'s minimal-Zc search cross-checked against an
+  independent search over the same `ZC_SETS` spec data, `nr_ldpc_k0()`
+  against an independent re-statement of Table 5.4.2.1-2's rv0-3
+  formula, `nr_ldpc_er_alloc()`'s sum/multiple-of-NlQm/floor-ceil-split
+  invariants, and an LDPC encoder syndrome check (`H·codeword==0 mod 2`,
+  using `build_H_nr()`'s output — a code path separate from
+  `ldpc_encode_nr()` — cross-checked via a freshly-written syndrome
+  computation, not `ldpc_decode()`'s own BP loop).
 - `test_crc.c` — `crc.c`: CRC16 cross-checked against the public
   CRC-16/XMODEM known check value ("123456789" → 0x31C3), full-codeword
   divisibility-by-generator for all 4 CRC types (CRC24A/B/C, CRC16),

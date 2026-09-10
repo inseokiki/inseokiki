@@ -18,6 +18,8 @@
 #include "nr_sch.h"
 #include "nr_rate_matching.h"
 #include "ldpc.h"
+#include "ldpc_nr.h"
+#include "ldpc_tables.h"
 #include "crc.h"
 #include "mcs_table.h"
 #include <stdio.h>
@@ -247,6 +249,186 @@ static void harq_buffer_boundary_check(void) {
     ldpc_free(&ldpc);
 }
 
+/* TS 38.212 6.2.2 base graph selection: this file re-states the rule
+ * from nr_select_bg()'s own doc comment (ldpc_nr.h) -- an independent
+ * re-implementation of the SAME documented rule, not a call into the
+ * function under test, so it catches a divergence between the code and
+ * its own documented contract (e.g. a `<` vs `<=` slip at a boundary). */
+static void expect_bg(int B, double R, int expect_bg_val, const char *label) {
+    int bg, Kcb, Kb, base_rows, base_info_cols, base_cols;
+    nr_select_bg(B, R, &bg, &Kcb, &Kb, &base_rows, &base_info_cols, &base_cols);
+    char m[160];
+    snprintf(m, sizeof(m), "%s (B=%d,R=%.3f): nr_select_bg gives BG%d (expected BG%d)", label, B, R, bg, expect_bg_val);
+    CHECK(bg == expect_bg_val, m);
+    int expect_Kcb = (bg == 1) ? 8448 : 3840;
+    int expect_rows = (bg == 1) ? BG1_ROWS : BG2_ROWS;
+    int expect_info = (bg == 1) ? BG1_INFO_COLS : BG2_INFO_COLS;
+    int expect_cols = (bg == 1) ? BG1_COLS : BG2_COLS;
+    CHECK(Kcb == expect_Kcb && base_rows == expect_rows && base_info_cols == expect_info && base_cols == expect_cols,
+          "nr_select_bg: Kcb/base_rows/base_info_cols/base_cols match the chosen BG's fixed table dimensions");
+}
+
+static void test_nr_select_bg_boundary(void) {
+    /* A<=292 term (B=A+24): straddle A=292 at a low rate that wouldn't
+     * otherwise force BG2 by the other two terms. */
+    expect_bg(292 + 24, 0.9, 2, "A==292 boundary (<=292 -> BG2)");
+    expect_bg(293 + 24, 0.9, 1, "A==293 boundary (>292, R=0.9>0.67, R>0.25 -> BG1)");
+
+    /* A<=3824 && R<=0.67 term. */
+    expect_bg(3824 + 24, 0.67, 2, "A==3824,R==0.67 boundary (both <= -> BG2)");
+    expect_bg(3824 + 24, 0.68, 1, "A==3824,R==0.68 boundary (R>0.67 -> BG1, A term alone insufficient)");
+    expect_bg(3825 + 24, 0.67, 1, "A==3825,R==0.67 boundary (A>3824 -> BG1, R term alone insufficient here since R>0.25)");
+
+    /* R<=0.25 term, independent of A (large A that would otherwise be BG1). */
+    expect_bg(10000 + 24, 0.25, 2, "large A, R==0.25 boundary (<=0.25 -> BG2 regardless of A)");
+    expect_bg(10000 + 24, 0.26, 1, "large A, R==0.26 boundary (>0.25, A far above 3824 -> BG1)");
+}
+
+/* TS 38.212 5.2.2 lifting size selection: independently search the SAME
+ * raw spec data table (ZC_SETS -- data, not nr_select_zc()'s own search
+ * logic) for the minimal Zc with Kb*Zc>=Kprime, and check nr_select_zc()
+ * agrees -- an independent re-implementation of the search over the
+ * published data, not a call into the function under test. */
+static int independent_min_zc(int Kb, int Kprime) {
+    int best = -1;
+    for (int s = 0; s < ZC_NUM_SETS; s++)
+        for (int i = 0; i < ZC_SET_LEN[s]; i++) {
+            int zc = ZC_SETS[s][i];
+            if ((long)Kb * zc >= Kprime && (best < 0 || zc < best)) best = zc;
+        }
+    return best;
+}
+
+static void test_nr_select_zc_invariants(void) {
+    int Kbs[] = { 22, 10, 9, 8, 6 };
+    /* Kprime as fractions of this Kb's own max capacity (Kb*384, the
+     * largest Table 5.3.2-1 Zc) so every (Kb,frac) combo stays in the
+     * valid, satisfiable range regardless of which Kb is being tested. */
+    double fracs[] = { 0.02, 0.15, 0.4, 0.7, 0.95 };
+    int all_ok = 1, minimal_ok = 1;
+    for (size_t bi = 0; bi < sizeof(Kbs) / sizeof(Kbs[0]); bi++) {
+        int Kb = Kbs[bi];
+        for (size_t fi = 0; fi < sizeof(fracs) / sizeof(fracs[0]); fi++) {
+            int Kprime = (int)(Kb * 384 * fracs[fi]);
+            if (Kprime < 1) Kprime = 1;
+            int base_info_cols = 22;   /* value doesn't affect Zc search itself */
+            int Zc, K, filler_size;
+            nr_select_zc(Kb, Kprime, base_info_cols, &Zc, &K, &filler_size);
+
+            int expect_zc = independent_min_zc(Kb, Kprime);
+            if (expect_zc < 0 || Zc != expect_zc) minimal_ok = 0;
+            if ((long)Kb * Zc < Kprime) all_ok = 0;
+            if (K != base_info_cols * Zc) all_ok = 0;
+            if (filler_size != K - Kprime || filler_size < 0) all_ok = 0;
+        }
+    }
+    CHECK(minimal_ok, "nr_select_zc: returned Zc matches the minimal Zc found by an independent search over the same ZC_SETS data");
+    CHECK(all_ok, "nr_select_zc: Kb*Zc>=Kprime, K==base_info_cols*Zc, filler_size==K-Kprime>=0 hold across all (Kb,Kprime) combos tried");
+}
+
+/* TS 38.212 Table 5.4.2.1-2 k0 formula, independently re-stated from
+ * nr_rate_matching.h's own doc comment (not a call into nr_ldpc_k0()). */
+static int independent_k0(int bg, int Zc, int Ncb, int rv) {
+    if (rv == 0) return 0;
+    if (bg == 1) {
+        if (rv == 1) return (int)(17.0 * Ncb / (66.0 * Zc)) * Zc;
+        if (rv == 2) return (int)(33.0 * Ncb / (66.0 * Zc)) * Zc;
+        return (int)(56.0 * Ncb / (66.0 * Zc)) * Zc;
+    } else {
+        if (rv == 1) return (int)(13.0 * Ncb / (50.0 * Zc)) * Zc;
+        if (rv == 2) return (int)(25.0 * Ncb / (50.0 * Zc)) * Zc;
+        return (int)(43.0 * Ncb / (50.0 * Zc)) * Zc;
+    }
+}
+
+static void test_nr_ldpc_k0_formula(void) {
+    int cases[][2] = { {1, 64}, {1, 176}, {1, 384}, {2, 64}, {2, 176}, {2, 384} };
+    int ok = 1;
+    for (size_t c = 0; c < sizeof(cases) / sizeof(cases[0]); c++) {
+        int bg = cases[c][0], Zc = cases[c][1];
+        int base_cols = (bg == 1) ? BG1_COLS : BG2_COLS;
+        int Ncb = base_cols * Zc;
+        for (int rv = 0; rv < 4; rv++) {
+            int got = nr_ldpc_k0(bg, Zc, Ncb, rv);
+            int want = independent_k0(bg, Zc, Ncb, rv);
+            if (got != want) ok = 0;
+        }
+    }
+    CHECK(ok, "nr_ldpc_k0: matches an independent re-statement of Table 5.4.2.1-2's formula for BG1/BG2, rv=0..3, several Zc");
+}
+
+/* TS 38.212 5.4.2.1 E_r allocation: sum(E)==G always, every E[r] is a
+ * multiple of Nl*Qm, and the floor/ceil split matches an independent
+ * recomputation from (G,Nl,Qm,C). */
+static void test_nr_ldpc_er_alloc_invariants(void) {
+    struct { int G, Nl, Qm, C; } cases[] = {
+        { 12000, 1, 2, 1 }, { 12000, 1, 4, 3 }, { 12005 * 6, 1, 6, 5 },
+        { 9800, 2, 4, 4 }, { 100000, 4, 8, 7 },
+    };
+    int sum_ok = 1, mult_ok = 1, split_ok = 1;
+    for (size_t c = 0; c < sizeof(cases) / sizeof(cases[0]); c++) {
+        int G = cases[c].G, Nl = cases[c].Nl, Qm = cases[c].Qm, C = cases[c].C;
+        int *E = malloc((size_t)C * sizeof(int));
+        nr_ldpc_er_alloc(G, Nl, Qm, C, E);
+
+        long sum = 0;
+        for (int r = 0; r < C; r++) { sum += E[r]; if (E[r] % (Nl * Qm) != 0) mult_ok = 0; }
+        if (sum != G) sum_ok = 0;
+
+        int Gp = G / (Nl * Qm);
+        int rem = Gp % C;
+        int expect_floor = (Gp / C) * Nl * Qm;
+        int expect_ceil  = (Gp / C + 1) * Nl * Qm;
+        for (int r = 0; r < C; r++) {
+            int expect = (r <= C - rem - 1) ? expect_floor : expect_ceil;
+            if (E[r] != expect) split_ok = 0;
+        }
+        free(E);
+    }
+    CHECK(sum_ok, "nr_ldpc_er_alloc: sum(E[0..C-1]) == G exactly, all cases");
+    CHECK(mult_ok, "nr_ldpc_er_alloc: every E[r] is an exact multiple of Nl*Qm");
+    CHECK(split_ok, "nr_ldpc_er_alloc: floor/ceil split matches an independent recomputation from (G,Nl,Qm,C)");
+}
+
+/* Encoder correctness via syndrome: H*codeword==0 (mod 2) is the
+ * defining property of a valid LDPC codeword. Cross-path check --
+ * build_H_nr() (called by ldpc_init()) and ldpc_encode_nr() are
+ * separate implementations that both read the BG1/BG2 tables
+ * independently (ldpc_encode_prepare_nr()'s doc comment: "does not
+ * depend on build_H_nr() having run"), so this is not a tautology --
+ * a bug in either path's table interpretation would surface here even
+ * though neither function calls the other. The syndrome computation
+ * itself is freshly written here, not reused from ldpc_decode()'s BP
+ * loop. */
+static void test_ldpc_encode_syndrome(int block_size, double code_rate, const char *label) {
+    LDPCCodec ldpc;
+    ldpc_init(&ldpc, block_size, code_rate);
+
+    int *info = malloc(ldpc.info_size * sizeof(int));
+    int *coded = malloc(ldpc.coded_size * sizeof(int));
+    srand(31415);
+    int all_zero_syndrome = 1;
+    for (int trial = 0; trial < 20; trial++) {
+        for (int i = 0; i < ldpc.info_size; i++) info[i] = rand() & 1;
+        ldpc_encode(&ldpc, info, coded);
+
+        for (int r = 0; r < ldpc.num_parity; r++) {
+            int parity = 0;
+            for (int j = ldpc.H_row_ptr[r]; j < ldpc.H_row_ptr[r + 1]; j++)
+                parity ^= coded[ldpc.H_col[j]];
+            if (parity != 0) { all_zero_syndrome = 0; break; }
+        }
+        if (!all_zero_syndrome) break;
+    }
+    char m[160];
+    snprintf(m, sizeof(m), "%s (block_size=%d,R=%.3f,BG%d,Zc=%d): H*codeword==0 (mod 2) for all %d parity checks, 20 random-info trials",
+             label, block_size, code_rate, ldpc.bg, ldpc.Zc, ldpc.num_parity);
+    CHECK(all_zero_syndrome, m);
+
+    free(info); free(coded);
+    ldpc_free(&ldpc);
+}
+
 int main(void) {
     /* Small TB -- expect C=1 (no segmentation needed). */
     segmentation_roundtrip("small TB", 1000, 10, MCS_TABLE1, 1);
@@ -258,6 +440,14 @@ int main(void) {
     segmentation_roundtrip("large TB (C=2)", 8426, 10, MCS_TABLE1, 2);
 
     harq_buffer_boundary_check();
+
+    test_nr_select_bg_boundary();
+    test_nr_select_zc_invariants();
+    test_nr_ldpc_k0_formula();
+    test_nr_ldpc_er_alloc_invariants();
+    test_ldpc_encode_syndrome(5000, 0.5, "BG1 mid-rate");
+    test_ldpc_encode_syndrome(200, 0.3, "BG2 low-rate small block");
+    test_ldpc_encode_syndrome(6000, 0.8, "BG1 high-rate large block");
 
     printf("\n%s\n", g_fail ? "SOME TESTS FAILED" : "ALL TESTS PASSED");
     return g_fail ? 1 : 0;

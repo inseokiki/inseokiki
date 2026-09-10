@@ -2013,6 +2013,83 @@ rho=1.0(내부적으로 1-1e-9로 clamp)이 NaN/Inf를 내지 않음도 확인.
 
 ---
 
+### `PHY_UNIT_VALIDATION_PLAN.md` §5 3단계 "코딩·rate matching" 그룹 — LDPC/Polar 직접 검증 확장 (2026-09-11)
+
+§5 2단계(기반 블록)가 전부 끝난 뒤, §5 3단계("코딩·rate matching·추정·
+검출 블록을 검증하고, 그다음 HARQ/적응 상태를 검증한다")로 진행 — 범위가
+넓어 사용자에게 세 그룹(코딩·rate matching / 추정·검출 / HARQ·적응 상태)
+중 어디부터 시작할지 먼저 확인, "코딩·rate matching(추천)"을 선택받음.
+계획 문서 §2 표가 이 그룹에 명시한 항목: LDPC(encoder 독립 벡터,
+syndrome, BG/Zc 경계, decoder 실패 경로), Segmentation·rate matching
+(RV0~3, Er 배분, filler, 거부 입력), Polar(독립 encoder/rate matching
+벡터, 지원 모드 경계, 잘못된 CRC 시 반환 정책). 이미 같은 모듈을 다루는
+파일이 있어 새 파일을 만들지 않고 `test_ldpc.c`/`test_polar.c`를 직접
+확장.
+
+**`test_ldpc.c` 확장**: `nr_select_bg()`의 TS 38.212 6.2.2 BG 선택 규칙
+(A≤292, A≤3824&&R≤0.67, R≤0.25 → BG2, else BG1)을 함수의 doc comment에서
+그대로 재서술한 독립 구현과 대조 — 6개 경계값 쌍(A=292/293, A=3824에서
+R=0.67/0.68, A=3825/R=0.67, 대A에서 R=0.25/0.26) 모두 통과, 각각
+Kcb/base_rows/base_info_cols/base_cols도 선택된 BG의 고정 테이블
+크기와 일치함을 확인. `nr_select_zc()`는 처음에 Kb×Kprime 전수 조합으로
+테스트 데이터를 짰다가 Kb=6~10에 Kprime=8000처럼 애초에 만족 불가능한
+조합이 섞여 `nr_select_zc()`가 정상적으로 `exit(1)`(설계된 동작)하며
+멈추는 걸 발견 — Kprime을 각 Kb의 최대 용량(Kb×384)에 대한 비율로
+바꿔 모든 조합이 항상 유효하도록 재설계 후 통과. 최종적으로 `ZC_SETS`
+(TS 38.212 Table 5.3.2-1 원본 데이터, `ldpc_tables.h`)에 대한 독립
+최소-Zc 탐색과 `nr_select_zc()`의 반환값이 일치함을 확인. `nr_ldpc_k0()`는
+`nr_rate_matching.h`의 doc comment에 있는 Table 5.4.2.1-2 rv0~3 공식을
+그대로 독립 재구현해 BG1/BG2 × 여러 Zc에서 대조. `nr_ldpc_er_alloc()`은
+sum(E)==G, 모든 E[r]이 Nl·Qm의 배수, floor/ceil 분배가 독립 재계산과
+일치함을 5개 (G,Nl,Qm,C) 조합에서 확인. 마지막으로 LDPC 인코더 syndrome
+검사(계획 문서가 명시적으로 요구한 항목) — `ldpc_init()`이 이미 호출하는
+`build_H_nr()`의 출력(H_row_ptr/H_col, `ldpc.h`의 public 필드)을 그대로
+가져와 `ldpc_encode_nr()`(→`ldpc_encode()`)의 출력에 대해 `H·codeword==0
+(mod 2)`를 이번 세션에 새로 작성한 순회 함수로 확인 — `build_H_nr()`와
+`ldpc_encode_nr()`은 서로 호출하지 않는 별개 경로(`ldpc_encode_prepare_nr()`
+doc comment: "does not depend on build_H_nr() having run")라 진짜
+교차검증이고, syndrome 계산도 `ldpc_decode()`의 BP 루프를 재사용하지
+않음. BG1/BG2, 저·중·고율 3가지 조합 각 20회 랜덤 정보비트 시행, 전부
+syndrome 0.
+
+**`test_polar.c` 확장**: `polar_encode()`를 rate-1(K=N, I_IL=0, n_PC=0 —
+`generate_frozen_bits()`가 frozen_mask/pc_mask를 전부 0으로 만드는
+조건이라 encode 출력이 정확히 Arikan 커널 변환 자체가 됨)로 호출해,
+손으로 유도한 **재귀적** 분할-결합 공식(v=u_left XOR u_right, w=u_right,
+x=[transform(v),transform(w)])과 대조 — `polar.c`의 실제 구현
+(`polar_transform()`, 반복적 버터플라이, static이라 애초에 직접 테스트
+불가)과 수학적으로 동치임을 N=4에서 손으로 먼저 검산(양쪽 다 x=[u0⊕u1⊕
+u2⊕u3, u1⊕u3, u2⊕u3, u3]로 일치)한 뒤 N=8/16/32/64에서 50회씩 랜덤
+검증. `polar_interleaver()`는 TS 38.212 Table 5.4.1.1-1과 대조 —
+`polar_rate_match.c`의 기존 테이블을 그대로 베끼지 않고, 로컬 1차
+소스(`3gpp/38212-hc0/38212-hc0.docx`)를 이번에 새로 Python
+`xml.etree`로 해당 표의 `<w:tbl>` 셀을 직접 파싱해 재추출(초기
+3gpp-server MCP `get_section` 호출이 반복 타임아웃되어 로컬 원본
+docx를 직접 파싱하는 경로로 전환) — 4행×16열의 표가 실제로는 8쌍씩
+4행에 걸쳐 (i,P(i)) 쌍이 나열된 레이아웃임을 확인하고 재조립한 결과가
+기존 `sub_block_pattern[32]`와 정확히 일치함을 확인(N=64/128의 ratio
+스케일링 규칙도 별도로 독립 재계산해 대조). `polar_uci_npc()`의
+18≤K≤25 경계를 K=17/18/25/26/30/31 6개 값으로 추가 확인. 마지막으로
+`polar_decode_scl()`의 문서화된 반환값 계약 — 무잡음에서는 50회 전부
+반환값 1 + decoded==info, 고잡음(sigma=3.0) 400회 시행에서는 반환값
+0(CRC 전부 실패) 경로가 실제로 발생함을 확인하면서 반환값과 무관하게
+`decoded[]`가 항상 유효한 0/1 배열임(가비지/미초기화 없음)을 확인 —
+이번 세션 앞부분에서 고친 "CA-SCL이 CRC에 전부 실패하면 최악 후보를
+반환하던" 버그의 직접 회귀 테스트.
+
+**검증**: `run_numeric_tests.sh` 10/10 통과(파일 2개 확장, 개수는 그대로),
+`test_ldpc`/`test_polar` 둘 다 ASan/UBSan 재빌드·재실행 클린(런타임 오류
+0건). `PHY/tests/README.md`에 두 항목 설명 갱신.
+
+**미구현/후속**: §5 3단계의 나머지 두 그룹 — "추정·검출"(채널 추정·등화,
+SU-MIMO 검출·EVD·codebook — 둘 다 전용 단위 파일 없음)과 "HARQ·적응
+상태"(HARQ buffer reset/RV 변화/TB·CB 격리/재전송 상한, RI/PMI·OLLA·
+ULPC·빔관리 결정론적 상태 천이) — 는 사용자가 이번 세션에서 명시적으로
+선택하지 않아 착수하지 않음, `tasks/todo.md` "진행 중"에 등록. UT-06
+(독립 참조 벡터)도 여전히 미해결.
+
+---
+
 ## 🔄 업데이트 이력 (원본 CLAUDE.md 기준)
 
 | 날짜 | 내용 |
