@@ -1884,6 +1884,76 @@ targeted test 이름/그룹 선택 옵션·결과에 seed/config/커밋해시 �
 
 ---
 
+### `PHY_UNIT_VALIDATION_PLAN.md` §5 2단계 — 기반 블록(CRC/QAM-LLR/OFDM/DFT-precode) 직접 단위 테스트 (2026-09-10)
+
+PHY-03에서 저장소에 정식 편입된 `PHY/tests/`(RNG/MU-MIMO/Polar/LDPC 4종,
+위 항목 참조) 이후, `lab/PHY_UNIT_VALIDATION_PLAN.md`(독립 검토 문서)가
+§5 실행 순서 2단계로 명시한 "CRC·QAM/LLR·변환·기초 행렬·채널 등 기반
+블록의 직접 테스트"를 이어감. 이 세션은 그중 전용 테스트 파일이 아예
+없던 4개 블록(CRC, QAM/LLR, OFDM·FFT/IFFT, DFT/IDFT precoding)만
+명시적으로 범위를 좁혀 진행 — "기초 행렬"(`herm4x4_eig` 등 EVD)과
+"채널"(channel.c/tdl.c/mimo.c 공간상관)은 의도적으로 제외, `tasks/todo.md`
+"진행 중"에 후속 과제로 등록.
+
+**`test_crc.c`**: CRC16을 업계에 널리 알려진 CRC-16/XMODEM(=CRC-CCITT,
+poly 0x1021, init 0, no reflection/final XOR) 공개 기지값("123456789"→
+0x31C3)과 직접 대조 — 이 프로젝트 CRC24A/B/24C는 NR 전용 다항식이라
+짧은 공개 기지값이 없으므로("확인 안 됨은 명시" 원칙에 따라 임의로
+만들지 않음), 대신 임의 CRC 다항식이면 항상 성립하는 두 구조적 성질만
+검증: 전체 코드워드(데이터+CRC)가 생성다항식으로 나누어떨어짐
+(`compute_crc()`를 코드워드 전체에 재적용, `check_crc()` 자체를 호출하지
+않는 독립 경로), 그리고 임의 위치 1비트 오류가 항상 검출됨(4종 전체,
+각 74/66비트 전수). `attach_crc`의 bit-order(데이터 프리픽스가 원본과
+완전 동일 + 부착된 CRC 비트가 `compute_crc()` 직접 출력과 일치)와
+RNTI masking(rnti=0이 plain `attach_crc`와 바이트 단위로 동일한 no-op,
+정확한/틀린 RNTI 통과·거부, masked 코드워드가 plain `check_crc()`는
+반드시 실패)도 포함.
+
+**`test_modulation.c`**: TS 38.211 §5.1의 재귀적 PAM 정의(`compute_pam()`)를
+독립적으로 non-recursive closed-form(`closed_form_level()`)으로 재유도해
+QPSK/16QAM/64QAM 전 심볼(4/16/64개)에 대해 `qam_modulate()` 출력과
+정확히 일치하는지 대조 — round-trip 자기일관성만으로는 못 잡는
+"일관되게 틀린 매핑"(예: 재귀 방향 반전) 버그를 잡을 수 있는 독립
+검증. 평균 심볼전력이 모든 등확률 비트패턴에 대해 정확히 1.0(스펙이
+1/√2, 1/√10, 1/√42 정규화 상수를 쓰는 문서화된 이유)임을 매핑 공식과
+무관하게 exhaustive 평균으로 확인. 무잡음 modulate→demodulate가 전
+비트패턴을 정확히 복원함, QPSK LLR이 이 코드베이스의 부호 규약(LLR>0=
+bit 0 선호, polar.c와 일치)을 따르고 크기가 2/noise_var로 정확히
+스케일함(noise_var를 2배로 하면 LLR 크기가 정확히 절반)을 확인.
+
+**`test_ofdm.c`**: `radix2_fft()`를 OFDM 래퍼 없이 직접 — 단위 impulse의
+순방향 FFT가 전부 1인 벡터(N=4~64), all-ones의 역방향 FFT가 [N,0,...,0]
+(기하급수/단위근 직교성), 복소 단일톤의 순방향 FFT가 해당 bin에서만
+스파이크(N=8/64)임을 정의로부터 직접 유도한 closed-form과 대조.
+`ofdm_modulate()` 레벨에서는 주파수축 bin-0 impulse가 CP 포함 전체
+시간축에서 정확히 1/N 진폭의 상수 신호가 됨(직류 신호의 CP는 정의상
+꼬리와 동일), CP가 코어 심볼의 마지막 cp_len 샘플의 정확한 복사본임을
+버퍼 레이아웃에서 직접 확인, Parseval 에너지 보존(IDFT만 1/N 스케일하는
+이 컨벤션에서 `sum|time|^2 == (1/N)*sum|freq|^2`), N=1024/4096(실제
+설정에 쓰이는 CP 길이 72/288)에서 modulate↔demodulate round-trip.
+
+**`test_dft_precode.c`**(TS 38.211 §6.3.1.4 PUSCH transform precoding):
+M=2/M=4 유니터리 DFT 행렬(`W[k][n]=exp(-j2πkn/M)/√M`)을 손으로 유도해
+구체적 수치 입력(M=2: `[a,b]→[(a+b)/√2,(a-b)/√2]`, M=4: `[1,2,3,4]→
+[5,-1+j,-1,-1-j]`)과 정확히 대조. 이 direct-sum 구현이 실제로 존재하는
+이유인 2의 거듭제곱이 아닌 M(3GPP는 M을 {2,3,5}의 곱으로 제한)을
+포함해 M=1,2,3,4,5,6,12,15,24,25,48에서 impulse/all-ones closed-form
+응답, 순방향/역방향 각각의 Parseval(양방향 모두 1/√M 스케일이라
+ofdm.c와 달리 방향 무관하게 에너지 보존), round-trip을 확인.
+
+**검증**: `run_numeric_tests.sh` 8/8 통과(기존 test_rng/test_mumimo/
+test_polar/test_ldpc 4개 + 신규 4개, 첫 실행에 바로 전부 통과). 신규
+4개 전부 `-fsanitize=address,undefined`로 별도 재빌드·재실행해 런타임
+오류 0건 확인. `PHY/tests/README.md`에 4개 항목 설명 추가.
+
+**미구현/후속**: `PHY_UNIT_VALIDATION_PLAN.md` §5 2단계의 "기초 행렬"·
+"채널" 부분, 그리고 PHY-03에서 이미 남아있던 UT-06(독립 참조 벡터 —
+`test_ldpc.c`/`test_polar.c`/`test_mumimo.c`는 한계를 주석으로만
+명시하고 실제 외부 참조 벡터는 미추가)은 이번 세션에서도 그대로
+미해결 — 둘 다 `tasks/todo.md` "진행 중"에 등록.
+
+---
+
 ## 🔄 업데이트 이력 (원본 CLAUDE.md 기준)
 
 | 날짜 | 내용 |

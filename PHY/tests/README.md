@@ -45,9 +45,34 @@ system.
   picking a different B), and the 5.4.2.1 circular-buffer's boundary
   behavior (exact non-filler-length selection, wrap-around, Chase
   combining).
+- `test_crc.c` — `crc.c`: CRC16 cross-checked against the public
+  CRC-16/XMODEM known check value ("123456789" → 0x31C3), full-codeword
+  divisibility-by-generator for all 4 CRC types (CRC24A/B/C, CRC16),
+  every single-bit-flip position detected, `attach_crc`'s bit-order
+  (unpermuted data prefix + `compute_crc()`-matching suffix), and RNTI
+  masking (rnti=0 no-op, correct/wrong RNTI, masked-vs-plain check_crc).
+- `test_modulation.c` — `modulation.c`: exhaustive constellation-mapping
+  check for QPSK/16QAM/64QAM against an independently-derived
+  non-recursive TS 38.211 §5.1 closed-form (all symbols), average
+  symbol power == 1.0, noise-free modulate→demodulate round-trip, and
+  QPSK LLR sign convention + exact 2/noise_var magnitude scaling.
+- `test_ofdm.c` — `ofdm.c`: `radix2_fft()` forward/inverse impulse and
+  single-tone closed-form identities (N=4..64), `ofdm_modulate()`'s
+  frequency-impulse→constant-time-signal case (amplitude exactly 1/N,
+  including inside the CP), CP-is-exact-tail-copy structural check,
+  Parseval energy conservation, and modulate→demodulate round-trip
+  (N=1024/4096, realistic CP lengths).
+- `test_dft_precode.c` — `dft_precode.c` (TS 38.211 §6.3.1.4 PUSCH
+  transform precoding): hand-derived M=2/M=4 unitary-DFT matrices
+  applied to concrete numeric examples, impulse/all-ones closed-form
+  responses and Parseval per direction for both power-of-2 and
+  non-power-of-2 M (1,2,3,4,5,6,12,15,24,25,48 — this direct-sum
+  implementation exists specifically for the non-power-of-2 case, since
+  3GPP restricts M to products of {2,3,5}), and round-trip.
 
 ## Adding a new test
 
 Add `tests/test_<module>.c` with its own `main()` returning 0/1, then add
-one line to `run_numeric_tests.sh`'s `TESTS=(...)` array naming the
-project `.o` files it needs from `../build/`.
+one `run_test test_<module> <obj1.o> <obj2.o> ...` line to
+`run_numeric_tests.sh` naming the project `.o` files it needs from
+`../build/`.

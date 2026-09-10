@@ -47,6 +47,10 @@ run_test test_rng utils.o
 run_test test_mumimo mumimo.o utils.o
 run_test test_polar polar.o polar_tables.o polar_rate_match.o crc.o
 run_test test_ldpc nr_sch.o nr_rate_matching.o ldpc.o ldpc_tables.o ldpc_nr.o crc.o mcs_table.o
+run_test test_crc crc.o
+run_test test_modulation modulation.o
+run_test test_ofdm ofdm.o
+run_test test_dft_precode dft_precode.o
 
 echo "========================================"
 echo "Numeric test results: $PASS/$((PASS+FAIL)) passed"

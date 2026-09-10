@@ -28,7 +28,42 @@
   고아 파일(2026-07-15 이후 방치, 독립 실행형 BER 툴 시도로 보임).
   STRUCTURE.md 갱신 중 발견(2026-09-01). 삭제할지 `c_Makefile`에
   편입할지 결정 필요.
+- [ ] `PHY_UNIT_VALIDATION_PLAN.md` §5 2단계 잔여분 — "기초 행렬"
+  (`herm4x4_eig` 등 EVD 연산)과 "채널"(channel.c/tdl.c/mimo.c 공간상관)
+  직접 단위 테스트. CRC/QAM-LLR/OFDM-FFT/DFT-precode 4개는 2026-09-10
+  완료(아래 "완료" 참조), 이 2개는 이번 패스에서 의도적으로 미착수.
+- [ ] `test_ldpc.c`/`test_polar.c`/`test_mumimo.c`의 UT-06(독립 참조
+  벡터) 미해결 — 2026-09-10 세션에서 한계를 주석으로만 명시, 실제
+  외부/독립 참조 벡터는 아직 추가 안 됨(위 "완료" PHY-03 항목 참조).
 ## 완료 (최근)
+
+- [x] `PHY_UNIT_VALIDATION_PLAN.md` §5 2단계 — 전용 테스트 파일이 없던
+  기반 블록(CRC, QAM/LLR, OFDM·FFT/IFFT, DFT/IDFT precoding) 직접
+  단위 테스트 추가 — 2026-09-10 완료. **범위 주의**: 계획 문서의 2단계
+  전체(CRC/QAM-LLR/변환/기초 행렬/채널)가 아니라 이 세션이 명시적으로
+  제안·승인받은 4개 블록만 — "기초 행렬"(`herm4x4_eig` 등)과
+  "채널"(channel.c/tdl.c/mimo.c 공간상관)은 이번 패스에서 의도적으로
+  제외, 아래 "진행 중" 섹션에 후속 과제로 등록 필요.
+  - `test_crc.c`(신규): CRC16 공개 CRC-16/XMODEM 기지값("123456789"→
+    0x31C3) 대조, 전 CRC 타입(24A/B/C/16) 전체 코드워드가 생성다항식으로
+    나누어떨어지는 성질, 모든 1비트 오류 검출, `attach_crc` bit-order,
+    RNTI masking(rnti=0 no-op, 정오 RNTI, masked↔plain 불일치).
+  - `test_modulation.c`(신규): QPSK/16QAM/64QAM 전 심볼에 대해 재귀식이
+    아닌 독립 non-recursive closed-form(TS 38.211 §5.1)과 대조, 평균
+    심볼전력==1.0, 무잡음 modulate↔demodulate round-trip, QPSK LLR
+    부호규칙 + 2/noise_var 정확한 스케일링.
+  - `test_ofdm.c`(신규): `radix2_fft()` 순방향/역방향 impulse·단일톤
+    closed-form(N=4~64), `ofdm_modulate()`의 주파수-impulse→시간축
+    상수(진폭 정확히 1/N, CP 포함) 성질, CP가 코어 심볼 뒷부분의 정확한
+    복사본인지 구조 검사, Parseval 에너지 보존, round-trip(N=1024/4096).
+  - `test_dft_precode.c`(신규, TS 38.211 §6.3.1.4): M=2/M=4 유니터리
+    DFT 행렬을 손으로 유도해 구체적 수치 예제와 대조, 2의 거듭제곱이
+    아닌 M(3GPP가 요구하는 {2,3,5}의 곱 — 이 direct-sum 구현이 존재하는
+    실제 이유)을 포함한 M=1~48에서 impulse/all-ones closed-form 응답과
+    양방향 Parseval, round-trip.
+  - **검증**: `run_numeric_tests.sh` 8/8 통과(기존 4 + 신규 4), 신규
+    4개 전부 ASan/UBSan 클린(런타임 오류 0건). `PHY/tests/README.md`에
+    4개 항목 문서화 추가.
 
 - [x] lab의 `PHY_REVIEW_2026-09-10.md` 검토 기반 PHY-01~06 보강 —
   2026-09-10 완료(`lab/CLAUDE_IMPLEMENTATION_HANDOFF.md` 지시서 기반,
