@@ -40,92 +40,26 @@
 ## 완료 (최근)
 
 - [x] `PHY_UNIT_VALIDATION_PLAN.md` §5 3단계 "코딩·rate matching" 그룹
-  — 2026-09-11 완료. LDPC/rate matching은 `test_ldpc.c`에, Polar는
-  `test_polar.c`에 직접 추가(파일 분리 없이 기존 §5 2단계 파일 확장 —
-  이미 같은 모듈을 다루는 파일이 있었으므로).
-  - **LDPC/rate matching**(`test_ldpc.c`): `nr_select_bg()`의 TS 38.212
-    6.2.2 BG 선택 경계(A≤292, A≤3824&&R≤0.67, R≤0.25) 6개 경계값 쌍,
-    `nr_select_zc()`의 최소-Zc 탐색을 동일 `ZC_SETS`(스펙 원본 데이터)에
-    대한 독립 탐색과 대조, `nr_ldpc_k0()`를 Table 5.4.2.1-2 rv0~3
-    공식의 독립 재서술과 대조, `nr_ldpc_er_alloc()`의 sum(E)==G/Nl·Qm
-    배수/floor·ceil 분배 불변량, 그리고 LDPC 인코더 syndrome 검사
-    (`H·codeword==0 mod 2` — `build_H_nr()`가 만든 H를 `ldpc_encode_nr()`
-    결과에 적용, 두 함수는 서로 호출하지 않는 별개 경로라 실질적
-    교차검증, syndrome 계산 자체도 이번에 새로 작성해 `ldpc_decode()`의
-    BP 루프를 재사용하지 않음).
-  - **Polar**(`test_polar.c`): `polar_encode()`(rate-1, K=N)를 손으로
-    유도한 **재귀적** Arikan 커널 변환(N=4에서 직접 검산 후 구현 —
-    `polar.c`의 반복적 버터플라이 `polar_transform()`은 static이라 애초에
-    직접 호출 불가, 구조적으로 다른 독립 구현)과 대조(N=8/16/32/64).
-    `polar_interleaver()`를 TS 38.212 Table 5.4.1.1-1과 대조 — 로컬
-    1차 소스(`3gpp/38212-hc0/38212-hc0.docx`)를 이번에 새로 XML 테이블
-    셀 파싱으로 직접 재추출해 독립 확인(기존 `polar_rate_match.c`의
-    테이블을 베낀 게 아님 — 결과적으로 정확히 일치함을 이번에 확인).
-    `polar_uci_npc()`의 18≤K≤25 경계 6개 값. `polar_decode_scl()`의
-    문서화된 반환값 계약(무잡음: 항상 1+decoded==info; 고잡음 400회
-    시행: CRC-fail fallback(반환 0) 경로가 실제로 발생하고, 반환값과
-    무관하게 `decoded[]`가 항상 유효한 0/1 배열 — 이번 세션 앞부분에서
-    고친 "CRC 전부 실패 시 최악 후보 반환" 버그의 직접 회귀 테스트).
-  - **검증**: `run_numeric_tests.sh` 10/10 통과(파일 개수는 그대로,
-    기존 test_ldpc/test_polar 확장), 두 파일 모두 ASan/UBSan 재빌드·
-    재실행 클린. `PHY/tests/README.md`에 두 항목 설명 갱신.
-  - **남은 것**: §5 3단계의 "추정·검출", "HARQ·적응 상태" 두 그룹은
-    사용자가 이번 세션에서 명시적으로 미선택 — 아래 "진행 중"에 후속
-    과제로 등록.
+  — 2026-09-11 완료. `test_ldpc.c`(BG/Zc 선택·k0·Er 배분을 스펙 공식/
+  데이터의 독립 재구현과 대조 + 인코더 syndrome 검사)와 `test_polar.c`
+  (rate-1 인코딩을 독립 재귀적 Arikan 커널과 대조, `polar_interleaver`를
+  로컬 1차 소스에서 새로 재추출한 스펙 표와 대조, `polar_decode_scl`
+  반환값 계약·CRC-fail fallback 버그 회귀) 확장. `run_numeric_tests.sh`
+  10/10, ASan/UBSan 클린. 남은 두 그룹("추정·검출", "HARQ·적응 상태")은
+  위 "진행 중" 참조. 상세는 `docs/analysis/history.md` 참조.
 
 - [x] `PHY_UNIT_VALIDATION_PLAN.md` §5 2단계 잔여분 — "기초 행렬"
-  (`herm4x4_eig`)과 "채널"(channel.c/tdl.c/mimo.c 공간상관) 직접 단위
-  테스트 — 2026-09-10 완료. 이로써 §5 2단계의 6개 그룹(CRC/QAM-LLR/
-  변환/기초 행렬/채널) 중 계획 문서가 명시한 5개(변환은 OFDM-FFT +
-  DFT-precode 2개로 구성)를 전부 커버 — 유일하게 남은 건 아래 "진행 중"
-  UT-06(독립 참조 벡터)뿐.
-  - `test_matrix.c`(신규): `utils.c`의 `herm4x4_eig()`(4×4 Hermitian
-    고유분해, `eigen_16port.c`/`ul_eigen_bf.c` 공유) — 대각/항등 입력의
-    정확한 closed-form(회전 불필요), rank-1 외적(`v·v^H`)의 손으로
-    유도한 스펙트럼([|v|²,0,0,0]), 그리고 무작위 Hermitian 500회
-    시행에 대해 trace/Frobenius-norm 불변량, 재구성 항등식
-    `V·diag(eigval)·V^H == A`, 정규직교성(`V^H V == I`), 고유값 내림차순.
-  - `test_mimo_correlation.c`(신규): `mimo.c`의 Tx측 공간상관(Kronecker
-    모델, `mimo_apply_tx_correlation_4x4/4x8/4x32`) — channel.c/tdl.c
-    자체에는 공간상관 코드가 없음을 grep으로 확인, 계획 문서의 "채널
-    공간상관"이 실제로 가리키는 건 이 함수들. rho≤0에서 정확한 no-op,
-    N1=2 블록의 `a²+b²=1, 2ab=rho` 대수적 항등식을 elementary-input
-    출력에서 역산해 검증, R_ant→R_pol 합성 응답을 손으로 유도해 대조,
-    N1=4(8/32포트) Cholesky 경로를 AR(1)/Markov 상관행렬의 잘 알려진
-    닫힌형 Cholesky 인자(`L[i][0]=rho^i`, `L[i][j]=rho^(i-j)·√(1-rho²)`)
-    로 독립 검증(`chol_exp_corr4`는 static이라 직접 호출 불가, 대신 이
-    닫힌형을 손으로 재유도), rho=1.0 clamp가 NaN/Inf를 내지 않음.
-  - **검증**: `run_numeric_tests.sh` 10/10 통과(기존 8 + 신규 2), 신규
-    2개 전부 ASan/UBSan 클린(런타임 오류 0건). `PHY/tests/README.md`에
-    2개 항목 문서화 추가.
+  (`herm4x4_eig`)과 "채널"(mimo.c 공간상관) 직접 단위 테스트 —
+  2026-09-10 완료. `test_matrix.c`/`test_mimo_correlation.c` 신규
+  (trace/Frobenius 불변량·재구성·정규직교성, AR(1) Cholesky 닫힌형
+  독립 대조 등). 이로써 §5 2단계 5개 그룹 전부 커버. `run_numeric_
+  tests.sh` 10/10, ASan/UBSan 클린. 상세는 `docs/analysis/history.md` 참조.
 
 - [x] `PHY_UNIT_VALIDATION_PLAN.md` §5 2단계 — 전용 테스트 파일이 없던
   기반 블록(CRC, QAM/LLR, OFDM·FFT/IFFT, DFT/IDFT precoding) 직접
-  단위 테스트 추가 — 2026-09-10 완료. **범위 주의**: 계획 문서의 2단계
-  전체(CRC/QAM-LLR/변환/기초 행렬/채널)가 아니라 이 세션이 명시적으로
-  제안·승인받은 4개 블록만 — "기초 행렬"(`herm4x4_eig` 등)과
-  "채널"(channel.c/tdl.c/mimo.c 공간상관)은 이번 패스에서 의도적으로
-  제외, 아래 "진행 중" 섹션에 후속 과제로 등록 필요.
-  - `test_crc.c`(신규): CRC16 공개 CRC-16/XMODEM 기지값("123456789"→
-    0x31C3) 대조, 전 CRC 타입(24A/B/C/16) 전체 코드워드가 생성다항식으로
-    나누어떨어지는 성질, 모든 1비트 오류 검출, `attach_crc` bit-order,
-    RNTI masking(rnti=0 no-op, 정오 RNTI, masked↔plain 불일치).
-  - `test_modulation.c`(신규): QPSK/16QAM/64QAM 전 심볼에 대해 재귀식이
-    아닌 독립 non-recursive closed-form(TS 38.211 §5.1)과 대조, 평균
-    심볼전력==1.0, 무잡음 modulate↔demodulate round-trip, QPSK LLR
-    부호규칙 + 2/noise_var 정확한 스케일링.
-  - `test_ofdm.c`(신규): `radix2_fft()` 순방향/역방향 impulse·단일톤
-    closed-form(N=4~64), `ofdm_modulate()`의 주파수-impulse→시간축
-    상수(진폭 정확히 1/N, CP 포함) 성질, CP가 코어 심볼 뒷부분의 정확한
-    복사본인지 구조 검사, Parseval 에너지 보존, round-trip(N=1024/4096).
-  - `test_dft_precode.c`(신규, TS 38.211 §6.3.1.4): M=2/M=4 유니터리
-    DFT 행렬을 손으로 유도해 구체적 수치 예제와 대조, 2의 거듭제곱이
-    아닌 M(3GPP가 요구하는 {2,3,5}의 곱 — 이 direct-sum 구현이 존재하는
-    실제 이유)을 포함한 M=1~48에서 impulse/all-ones closed-form 응답과
-    양방향 Parseval, round-trip.
-  - **검증**: `run_numeric_tests.sh` 8/8 통과(기존 4 + 신규 4), 신규
-    4개 전부 ASan/UBSan 클린(런타임 오류 0건). `PHY/tests/README.md`에
-    4개 항목 문서화 추가.
+  단위 테스트 추가 — 2026-09-10 완료. `test_crc.c`/`test_modulation.c`/
+  `test_ofdm.c`/`test_dft_precode.c` 신규. `run_numeric_tests.sh` 8/8,
+  ASan/UBSan 클린. 상세는 `docs/analysis/history.md` 참조.
 
 - [x] lab의 `PHY_REVIEW_2026-09-10.md` 검토 기반 PHY-01~06 보강 —
   2026-09-10 완료(`lab/CLAUDE_IMPLEMENTATION_HANDOFF.md` 지시서 기반,
