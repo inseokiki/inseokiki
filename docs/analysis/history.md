@@ -2090,6 +2090,60 @@ ULPC·빔관리 결정론적 상태 천이) — 는 사용자가 이번 세션�
 
 ---
 
+### `PHY_UNIT_VALIDATION_PLAN.md` §5 3단계 "추정·검출" 그룹 — 채널추정/SU-MIMO 검출 직접 검증 (2026-09-11)
+
+"코딩·rate matching" 그룹에 이어 같은 §5 3단계의 두 번째 그룹 "추정·검출"
+진행 — 계획 문서 §2 표의 "채널 추정·등화"(전용 단위 파일 미발견, "잡음
+없는 알려진 H, pilot/data 인덱스, 정규화, 잡음·경계 fixture")와 "SU-MIMO
+검출·EVD·codebook"(EVD는 `herm4x4_eig`가 §5 2단계에서 `test_matrix.c`로
+이미 커버돼 이번엔 검출만) 행을 대상으로, 새 파일 두 개 작성.
+
+**`test_channel_estimation.c`**(신규): `ls_estimate()`는 잡음 없는
+rx=h·tx에서 h를 정확히 복원함을 확인. `interpolate_channel()`은 선형
+채널(h[k]=A+Bk)을 구성해 파일럿 지점에서 정확히 통과(knot pass-through)
+하고 파일럿 구간 내부 전체에서 정확히 재현됨(선형함수의 선형보간은
+항등)을 확인, 파일럿 범위 밖에서는 최근접 파일럿 값으로 flat
+extrapolation됨(문서화된 동작)도 확인. `mmse_channel_estimate()`가
+`mmse_build_filter()`+`mmse_apply_filter()`의 합성과 정확히 같음(같은
+모듈의 두 API 간 교차검증), 그리고 Wiener 필터 W=R(R+N0·I)⁻¹의 잘 알려진
+극한 거동(N0→0에서 W→항등, N0→∞에서 W→0)을 확인 — N0→0 극한 검증
+과정에서 처음엔 허용오차를 1e-5로 뒀다가 근접-파일럿(26개 RE 폭에
+5개, 150ns 지연확산)이라 R 자체가 조건수가 나쁘다는 걸 별도 스윕
+스크립트(N0=1e-10~1e-2)로 확인하고 1e-4로 완화(잔차가 N0 증가에 따라
+단조증가함을 확인해 "극한 자체가 틀렸다"가 아니라 "부동소수점 조건수
+한계"임을 검증). `mmse_build_avg_filter()`는 파일럿 1개+타깃이 그
+파일럿과 정확히 겹치는 특수 케이스(Δf=0 → ρ(0)=1)를 손으로 풀어
+w_avg=1/(1+N0) 정확히 일치함을 확인. `dft_channel_estimate()`는 구조적
+성질 2가지 — 시간영역 지지대역이 이미 num_taps 안에 있으면 truncation이
+no-op(출력==입력 정확히 일치)이고, 지지대역이 완전히 num_taps 밖에
+있으면 출력이 정확히 0벡터가 됨. `zf_equalize()`/`mmse_equalize()`는
+독립 재계산한 공식과 정확히 대조, N0→0에서 MMSE가 ZF와 일치하고
+alpha→1임을 확인.
+
+**`test_mimo_detection.c`**(신규): `mrc_combine()`/`mrc_combine_4rx()`는
+잡음 없는 y=h·x에서 x를 정확히 복원(및 h=0 폴백). `mimo_zf_detect()`
+(2×2)는 정칙 H에서 잡음 없는 y=H·tx round-trip이 정확히 성립함을 30회
+랜덤 시행 + 손으로 계산한 예제(H=[[2,1],[1,1]], y=[5,2] → x_hat=[3,-1])
+로 확인. `mimo_mmse_detect()`/`mimo_mmse_detect_4x4()`는 N0→0 극한이
+잡음 없는 tx로 수렴함을 확인(대각우세 구성으로 정칙성 보장한 무작위
+4×4 H 20회). `mimo_zf_detect_4x4()`는 특이 H(행 2개가 중복)에서 문서화된
+폴백(x_hat=0, noise_var=N0)이 모든 레이어에서 정확히 나옴을 확인.
+`mimo_mmse_detect_4rx2/4rx3()`는 4Rx 과결정 2/3-레이어 시스템에서 N0→0
+극한이 잡음 없는 tx로 수렴함을 확인.
+
+**검증**: `run_numeric_tests.sh` 12/12 통과(기존 10 + 신규 2), 신규 2개
+전부 ASan/UBSan 재빌드·재실행 클린(런타임 오류 0건). `PHY/tests/
+README.md`에 두 항목 설명 추가.
+
+**미구현/후속**: §5 3단계 마지막 그룹 "HARQ·적응 상태"(buffer reset/RV
+변화/TB·CB 격리/재전송 상한, RI/PMI·OLLA·ULPC·빔관리 결정론적 상태
+천이)는 이번 세션에서도 미착수 — `tasks/todo.md` "진행 중"에 등록.
+"SU-MIMO 검출·EVD·codebook" 행의 codebook 기하(Type I SP 코드북 벡터
+단위노름/직교성 등)도 이번 두 파일의 범위 밖으로 명시적으로 제외 —
+별도 후속 항목으로 등록. UT-06(독립 참조 벡터)도 여전히 미해결.
+
+---
+
 ## 🔄 업데이트 이력 (원본 CLAUDE.md 기준)
 
 | 날짜 | 내용 |

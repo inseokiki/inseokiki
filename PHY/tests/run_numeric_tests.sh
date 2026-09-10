@@ -53,6 +53,8 @@ run_test test_ofdm ofdm.o
 run_test test_dft_precode dft_precode.o
 run_test test_matrix utils.o
 run_test test_mimo_correlation mimo.o utils.o
+run_test test_channel_estimation channel_estimation.o dft_precode.o
+run_test test_mimo_detection mimo.o utils.o
 
 echo "========================================"
 echo "Numeric test results: $PASS/$((PASS+FAIL)) passed"

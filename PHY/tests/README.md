@@ -106,6 +106,25 @@ system.
   Cholesky closed form (`L[i][0]=rho^i`, `L[i][j]=rho^(i-j)*sqrt(1-
   rho^2)`) checked against the N1=4 (8-port/32-port) Cholesky path via
   elementary-column inputs, and a `rho=1.0` clamp finiteness check.
+- `test_channel_estimation.c` — `channel_estimation.c`: `ls_estimate()`
+  exact noise-free recovery; `interpolate_channel()`'s exact knot
+  pass-through, exact interior reproduction of a linear channel, and
+  flat extrapolation outside the pilot range; `mmse_channel_estimate()`
+  ≡ `mmse_build_filter()`+`mmse_apply_filter()` exactly, plus its Wiener-
+  filter N0→0/N0→∞ limits (→identity/→zero); `mmse_build_avg_filter()`'s
+  hand-solved single-pilot/coincident-target scalar case; `dft_channel_
+  estimate()`'s truncation structure (already-in-window support is a
+  no-op, entirely-out-of-window support zeroes everything); `zf_equalize()`/
+  `mmse_equalize()` against independently-recomputed formulas, including
+  the N0→0 MMSE→ZF limit.
+- `test_mimo_detection.c` — `mimo.c`'s SU-MIMO detectors: `mrc_combine()`/
+  `mrc_combine_4rx()` noise-free exact recovery; `mimo_zf_detect()` (2x2)
+  noise-free round-trip plus a hand-computed example; `mimo_mmse_detect()`/
+  `mimo_mmse_detect_4x4()`'s N0→0 ZF limit; `mimo_zf_detect_4x4()`'s
+  singular-H (duplicate rows) fallback contract; `mimo_mmse_detect_4rx2/
+  4rx3()`'s N0→0 limit for the 4Rx-overdetermined 2/3-layer case. (EVD
+  itself is covered by `test_matrix.c`; codebook geometry is deferred —
+  see `tasks/todo.md`.)
 
 ## Adding a new test
 

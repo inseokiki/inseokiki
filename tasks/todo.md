@@ -31,22 +31,30 @@
 - [ ] `test_ldpc.c`/`test_polar.c`/`test_mumimo.c`의 UT-06(독립 참조
   벡터) 미해결 — 2026-09-10 세션에서 한계를 주석으로만 명시, 실제
   외부/독립 참조 벡터는 아직 추가 안 됨(위 "완료" PHY-03 항목 참조).
-- [ ] `PHY_UNIT_VALIDATION_PLAN.md` §5 3단계 잔여분 — "추정·검출"(채널
-  추정·등화, SU-MIMO 검출·EVD·codebook — 전용 단위 파일 없음)과
-  "HARQ·적응 상태"(buffer reset/RV 변화/TB·CB 격리/재전송 상한, RI/PMI·
-  OLLA·ULPC·빔관리 결정론적 상태 천이) — 2026-09-11 세션은 "코딩·rate
-  matching" 그룹만 진행(아래 "완료" 참조), 사용자가 3개 그룹 중 이것을
-  먼저 선택.
+- [ ] `PHY_UNIT_VALIDATION_PLAN.md` §5 3단계 잔여분 — "HARQ·적응 상태"
+  (buffer reset/RV 변화/TB·CB 격리/재전송 상한, RI/PMI·OLLA·ULPC·빔관리
+  결정론적 상태 천이) — 2026-09-11 세션은 "코딩·rate matching"과
+  "추정·검출" 두 그룹만 진행(아래 "완료" 참조), 이 그룹은 아직 미착수.
+- [ ] SU-MIMO codebook 기하 검증(Type I SP 코드북 벡터 단위노름/직교성
+  등) — `PHY_UNIT_VALIDATION_PLAN.md` §2 표의 "SU-MIMO 검출·EVD·codebook"
+  행 중 codebook 부분. EVD(`herm4x4_eig`)는 `test_matrix.c`로, 검출은
+  `test_mimo_detection.c`로 이미 커버(2026-09-11) — codebook.c/
+  codebook_8port.c/codebook_32port.c 자체 기하 검증만 남음.
+
 ## 완료 (최근)
 
-- [x] `PHY_UNIT_VALIDATION_PLAN.md` §5 3단계 "코딩·rate matching" 그룹
-  — 2026-09-11 완료. `test_ldpc.c`(BG/Zc 선택·k0·Er 배분을 스펙 공식/
-  데이터의 독립 재구현과 대조 + 인코더 syndrome 검사)와 `test_polar.c`
-  (rate-1 인코딩을 독립 재귀적 Arikan 커널과 대조, `polar_interleaver`를
-  로컬 1차 소스에서 새로 재추출한 스펙 표와 대조, `polar_decode_scl`
-  반환값 계약·CRC-fail fallback 버그 회귀) 확장. `run_numeric_tests.sh`
-  10/10, ASan/UBSan 클린. 남은 두 그룹("추정·검출", "HARQ·적응 상태")은
-  위 "진행 중" 참조. 상세는 `docs/analysis/history.md` 참조.
+- [x] `PHY_UNIT_VALIDATION_PLAN.md` §5 3단계 "코딩·rate matching" +
+  "추정·검출" 그룹 — 2026-09-11 완료. "코딩·rate matching": `test_ldpc.c`
+  (BG/Zc 선택·k0·Er 배분을 스펙 공식/데이터의 독립 재구현과 대조 +
+  인코더 syndrome 검사)와 `test_polar.c`(rate-1 인코딩을 독립 재귀적
+  Arikan 커널과 대조, `polar_interleaver`를 로컬 1차 소스에서 새로
+  재추출한 스펙 표와 대조, `polar_decode_scl` 반환값 계약·CRC-fail
+  fallback 버그 회귀) 확장. "추정·검출": `test_channel_estimation.c`
+  (LS/MMSE/DFT 추정 + ZF/MMSE 등화, 신규)와 `test_mimo_detection.c`
+  (MRC/ZF/MMSE 2x2·4x4·4Rx-과결정, 신규) 추가 — EVD는 이미 `test_matrix.c`
+  가 커버해 제외, codebook 기하는 위 "진행 중"에 후속 등록. `run_numeric_
+  tests.sh` 12/12, ASan/UBSan 클린. 남은 그룹("HARQ·적응 상태")은 위
+  "진행 중" 참조. 상세는 `docs/analysis/history.md` 참조.
 
 - [x] `PHY_UNIT_VALIDATION_PLAN.md` §5 2단계 잔여분 — "기초 행렬"
   (`herm4x4_eig`)과 "채널"(mimo.c 공간상관) 직접 단위 테스트 —
