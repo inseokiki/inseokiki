@@ -177,6 +177,19 @@ int main(int argc, char *argv[]) {
     config_parser_print(&parser);
     printf("\n");
 
+    /* PHY-05 (2026-09-10, lab/PHY_REVIEW_2026-09-10.md): make both RNG
+     * sources this project uses (utils.c's own xorshift64, and libc
+     * rand() used directly by beam_mgmt-related direction draws in
+     * pdsch.c) reproducible from one user-visible SEED. This is a real
+     * behavior change from before -- previously neither source was ever
+     * explicitly seeded (rng_s stayed at its hardcoded default constant,
+     * and rand() used the C standard's implementation-defined default),
+     * so every run happened to reproduce the same sequence by accident,
+     * not by design, and there was no way to get a genuinely different
+     * realization across runs. */
+    rng_seed(cfg.seed);
+    srand(cfg.seed);
+
     if      (strcmp(cfg.physicalChannel,"PBCH"  )==0) {
         if (strcmp(cfg.channelModel,"AWGN")==0) run_pbch_simulation(&cfg);
         else                                     run_pbch_fading_simulation(&cfg);

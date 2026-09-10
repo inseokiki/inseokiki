@@ -12,8 +12,19 @@
 /* xorshift64 RNG */
 static unsigned long long rng_s = 0x9e3779b97f4a7c15ULL;
 
+/* randn()'s Box-Muller spare, hoisted out of the function so rng_seed()
+ * can reset it (PHY-05, 2026-09-10, lab/PHY_REVIEW_2026-09-10.md): a
+ * mid-process reseed (e.g. between independent trial batches) must not
+ * leak a cached spare value generated under the OLD seed's stream into
+ * the NEW stream's first randn() call -- that would make the new
+ * stream's very first draw a function of both seeds, breaking
+ * reproducibility. */
+static int    randn_spare_valid = 0;
+static double randn_spare = 0.0;
+
 void rng_seed(unsigned int seed) {
     rng_s = (unsigned long long)seed | 1ULL;
+    randn_spare_valid = 0;
 }
 
 static unsigned long long rng_next(void) {
@@ -28,9 +39,7 @@ static double rng_uniform(void) {
 }
 
 double randn(void) {
-    static int spare_valid = 0;
-    static double spare;
-    if (spare_valid) { spare_valid = 0; return spare; }
+    if (randn_spare_valid) { randn_spare_valid = 0; return randn_spare; }
     double u, v, s;
     do {
         u = 2.0 * rng_uniform() - 1.0;
@@ -38,8 +47,8 @@ double randn(void) {
         s = u*u + v*v;
     } while (s >= 1.0 || s == 0.0);
     double m = sqrt(-2.0 * log(s) / s);
-    spare = v * m;
-    spare_valid = 1;
+    randn_spare = v * m;
+    randn_spare_valid = 1;
     return u * m;
 }
 

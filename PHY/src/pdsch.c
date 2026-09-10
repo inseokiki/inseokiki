@@ -8846,8 +8846,20 @@ void run_pdsch_beam_mgmt_simulation(const L1Config *cfg) {
  *             -> 재정제된 gNB Tx 빔 W2
  * "정제 안 함" 기준선(No-Rx-Sweep)은 UE가 항상 후보 idx=0 고정 빔만
  * 쓴다고 가정(실측 없이 임의 고정 — 빔 스위핑 자체를 안 하는 상황을
- * 대표) — Genie(이상적 상한)/No-Rx-Sweep(정제 전)/P3+P2 Refined(정제 후)
- * 세 기준으로 비교. */
+ * 대표) — 1AntRef(단일 안테나 참조값)/No-Rx-Sweep(정제 전)/P3+P2
+ * Refined(정제 후) 세 기준으로 비교.
+ *
+ * **PHY-02(2026-09-10, lab/PHY_REVIEW_2026-09-10.md) 명칭 정정**: 이전에는
+ * "Genie"라 부르며 마치 Refined(4소자 배열 결합)의 공정한 이상적 상한인
+ * 것처럼 표기했으나, 실제로는 H_true(단일 기준 경로)만으로 계산한 단일
+ * 안테나 채널 이득이라 UE 배열의 결합 손실을 아예 반영하지 않는다 —
+ * Refined는 같은 총 채널 에너지에서 UE 결합 정확도(|<w_ue,w_ue_true>|<=1)
+ * 손실을 추가로 부담하므로, 1AntRef는 "이 채널에서 UE 배열이 없다면
+ * 얻었을 이득"이지 "이 채널에서 4소자 배열이 이상적으로 낼 수 있는
+ * 최대 이득"이 아니다 — 후자를 구하려면 H_full·Tx 전력·Rx 배열·코드북을
+ * 그대로 쓰는 별도의 잡음 없는 Tx+Rx 결합 탐색이 필요하며 이번 수정
+ * 범위 밖(후속 과제, tasks/todo.md 참조). 지금은 라벨만 정확하게 고쳐
+ * "1AntRef"가 무엇을 의미하는지 오해가 없도록 한다. */
 void run_pdsch_beam_mgmt_p123_simulation(const L1Config *cfg) {
     int num_rb   = cfg->numRB;
     int num_data = 6 * num_rb;
@@ -8910,7 +8922,7 @@ void run_pdsch_beam_mgmt_p123_simulation(const L1Config *cfg) {
     }
 
     printf("%-9s  %-11s  %-14s  %-14s  %-12s %-11s  %-12s %-11s\n",
-           "SNR(dB)", "P2==P1", "AvgGain_NoSweep", "AvgGain_P3P2", "BER_Genie", "BLER_Genie", "BER_Refined", "BLER_Refined");
+           "SNR(dB)", "P2==P1", "AvgGain_NoSweep", "AvgGain_P3P2", "BER_1AntRef", "BLER_1AntRef", "BER_Refined", "BLER_Refined");
     for (int i = 0; i < 100; i++) printf("-");
     printf("\n");
 
@@ -8935,7 +8947,8 @@ void run_pdsch_beam_mgmt_p123_simulation(const L1Config *cfg) {
             cx_t H_full[BM_UE_N][32];
             beam_mgmt_true_channel_mimo(H_true, r_true, H_full);
 
-            /* ② Genie: 이상적 단일안테나 상한(기존과 동일, 정제 절차와 무관) */
+            /* ② 1AntRef: 단일 안테나 참조값(정제 절차와 무관, Refined의 공정한
+             * 상한은 아님 -- 위 함수 헤더 PHY-02 주석 참조) */
             int gl, gm, gn; double gg;
             beam_mgmt_genie_best(H_true, &gl, &gm, &gn, &gg);
             cx_t Wg[32];
@@ -9525,6 +9538,10 @@ void run_pdsch_beam_mgmt_harq_simulation(const L1Config *cfg) {
  * 유효채널(heff, wideband)로 계산하고, 실제 데이터 평면 등화/복호에서만
  * 단일 지배경로 공유 SISO TDL tap-set(32+4=36개 안테나 전체 공통, 기존
  * 관례)의 per-RE 게인 g(RE)를 곱한다.
+ *
+ * PHY-02(2026-09-10) 명칭 정정: "1AntRef"(구 "Genie")는 Refined(4소자 배열
+ * 결합)의 공정한 상한이 아니다 — run_pdsch_beam_mgmt_p123_simulation() 헤더의
+ * PHY-02 주석 참조.
  * ─────────────────────────────────────────────────────────────────────────── */
 void run_pdsch_beam_mgmt_p123_tdl_simulation(const L1Config *cfg) {
     int num_rb   = cfg->numRB;
@@ -9593,7 +9610,7 @@ void run_pdsch_beam_mgmt_p123_tdl_simulation(const L1Config *cfg) {
     cx_t *cluster_taps = (cx_t *)malloc(TDL_MAX_TAPS * sizeof(cx_t));
 
     printf("%-9s  %-11s  %-14s  %-14s  %-12s %-11s  %-12s %-11s\n",
-           "SNR(dB)", "P2==P1", "AvgGain_NoSweep", "AvgGain_P3P2", "BER_Genie", "BLER_Genie", "BER_Refined", "BLER_Refined");
+           "SNR(dB)", "P2==P1", "AvgGain_NoSweep", "AvgGain_P3P2", "BER_1AntRef", "BLER_1AntRef", "BER_Refined", "BLER_Refined");
     for (int i = 0; i < 100; i++) printf("-");
     printf("\n");
 
@@ -9620,7 +9637,8 @@ void run_pdsch_beam_mgmt_p123_tdl_simulation(const L1Config *cfg) {
             cx_t H_full[BM_UE_N][32];
             beam_mgmt_true_channel_mimo(H_true, r_true, H_full);
 
-            /* ② Genie: 이상적 단일안테나 상한(wideband, 정제 절차와 무관) */
+            /* ② 1AntRef: 단일 안테나 참조값(wideband, 정제 절차와 무관, Refined의
+             * 공정한 상한은 아님 -- 아래 TDL 함수 헤더 PHY-02 주석 참조) */
             int gl, gm, gn; double gg;
             beam_mgmt_genie_best(H_true, &gl, &gm, &gn, &gg);
             cx_t Wg[32];
@@ -9758,9 +9776,10 @@ void run_pdsch_beam_mgmt_p123_tdl_simulation(const L1Config *cfg) {
  * 패턴: 빔 선택(P1->P3->P2, wideband)은 트라이얼당 1회만 수행하고 모든
  * HARQ attempt에서 재사용, flat이면 채널도 트라이얼 내내 고정(잡음만
  * attempt마다 재드로우), TDL이면 attempt마다 클러스터 tap-set을
- * 재드로우(시간 다이버시티). Genie/Refined 두 경로는 "같은 재전송
- * occasion 공유"(둘 다 CRC 통과해야 종료) 단순화 — 이 프로젝트 다른
- * 다중스트림 HARQ 함수들과 동일한 관례(구현 정의).
+ * 재드로우(시간 다이버시티). 1AntRef(구 "Genie", PHY-02 명칭 정정 —
+ * run_pdsch_beam_mgmt_p123_simulation() 헤더 참조)/Refined 두 경로는
+ * "같은 재전송 occasion 공유"(둘 다 CRC 통과해야 종료) 단순화 — 이
+ * 프로젝트 다른 다중스트림 HARQ 함수들과 동일한 관례(구현 정의).
  * ─────────────────────────────────────────────────────────────────────────── */
 void run_pdsch_beam_mgmt_p123_harq_simulation(const L1Config *cfg) {
     int num_rb   = cfg->numRB;

@@ -27,8 +27,8 @@
    so no channel estimation is needed. */
 void run_pucch_format0_simulation(const L1Config *cfg) {
     int uci_bits = cfg->pucchUciBits;
-    if (uci_bits < 1) uci_bits = 1;
-    if (uci_bits > 2) uci_bits = 2;
+    /* config_parser.c's validate_config() already rejects PUCCH_UCI_BITS outside
+     * [1,2] for Format 0/1 (PHY-01, 2026-09-10) -- no silent clamp needed here. */
     int num_cand = 1 << uci_bits;
     const int len = 12;
     const int u = 1;
@@ -93,8 +93,8 @@ void run_pucch_format0_simulation(const L1Config *cfg) {
    to plain repetition/MRC-style combining. */
 void run_pucch_format1_simulation(const L1Config *cfg) {
     int uci_bits = cfg->pucchUciBits;
-    if (uci_bits < 1) uci_bits = 1;
-    if (uci_bits > 2) uci_bits = 2;
+    /* config_parser.c's validate_config() already rejects PUCCH_UCI_BITS outside
+     * [1,2] for Format 0/1 (PHY-01, 2026-09-10) -- no silent clamp needed here. */
     int num_sym = cfg->pucchNumSymbols;
     if (num_sym < 1) num_sym = 1;
     const int len = 12;
@@ -170,8 +170,8 @@ void run_pucch_format1_simulation(const L1Config *cfg) {
    the AWGN version when h=1 for every branch. */
 void run_pucch_format1_tdl_simulation(const L1Config *cfg) {
     int uci_bits = cfg->pucchUciBits;
-    if (uci_bits < 1) uci_bits = 1;
-    if (uci_bits > 2) uci_bits = 2;
+    /* config_parser.c's validate_config() already rejects PUCCH_UCI_BITS outside
+     * [1,2] for Format 0/1 (PHY-01, 2026-09-10) -- no silent clamp needed here. */
     int num_sym = cfg->pucchNumSymbols;
     if (num_sym < 1) num_sym = 1;
     const int len = 12;
@@ -263,8 +263,8 @@ void run_pucch_format1_tdl_simulation(const L1Config *cfg) {
    configured RV sequence. */
 void run_pucch_format1_tdl_harq_simulation(const L1Config *cfg) {
     int uci_bits = cfg->pucchUciBits;
-    if (uci_bits < 1) uci_bits = 1;
-    if (uci_bits > 2) uci_bits = 2;
+    /* config_parser.c's validate_config() already rejects PUCCH_UCI_BITS outside
+     * [1,2] for Format 0/1 (PHY-01, 2026-09-10) -- no silent clamp needed here. */
     int num_sym = cfg->pucchNumSymbols;
     if (num_sym < 1) num_sym = 1;
     const int len = 12;
@@ -365,8 +365,8 @@ void run_pucch_format1_tdl_harq_simulation(const L1Config *cfg) {
    alarm on decoded bits, not block CRC). */
 void run_pucch_format2_simulation(const L1Config *cfg) {
     int K = cfg->pucchUciBits;
-    if (K < 3)  K = 3;
-    if (K > 11) K = 11;
+    /* config_parser.c's validate_config() already rejects PUCCH_UCI_BITS outside
+     * [3,11] for Format 2/3 (PHY-01, 2026-09-10) -- no silent clamp needed here. */
     const int N = 32;
     int num_prb = cfg->pucchNumPrb > 0 ? cfg->pucchNumPrb : 1;
     int num_sym = cfg->pucchNumSymbols;
@@ -436,8 +436,8 @@ void run_pucch_format2_simulation(const L1Config *cfg) {
    dft_precode/idft_precode really are lossless under a flat channel. */
 void run_pucch_format3_simulation(const L1Config *cfg) {
     int K = cfg->pucchUciBits;
-    if (K < 3)  K = 3;
-    if (K > 11) K = 11;
+    /* config_parser.c's validate_config() already rejects PUCCH_UCI_BITS outside
+     * [3,11] for Format 2/3 (PHY-01, 2026-09-10) -- no silent clamp needed here. */
     const int N = 64;
     int num_prb = cfg->pucchNumPrb > 0 ? cfg->pucchNumPrb : 1;
     int num_sym = cfg->pucchNumSymbols;
@@ -523,8 +523,8 @@ void run_pucch_format3_simulation(const L1Config *cfg) {
    existing AWGN Format 3. */
 void run_pucch_format3_tdl_simulation(const L1Config *cfg) {
     int K = cfg->pucchUciBits;
-    if (K < 3)  K = 3;
-    if (K > 11) K = 11;
+    /* config_parser.c's validate_config() already rejects PUCCH_UCI_BITS outside
+     * [3,11] for Format 2/3 (PHY-01, 2026-09-10) -- no silent clamp needed here. */
     const int N = 64;
     int num_prb = cfg->pucchNumPrb > 0 ? cfg->pucchNumPrb : 1;
     int num_sym = cfg->pucchNumSymbols;
@@ -653,8 +653,8 @@ void run_pucch_format3_tdl_simulation(const L1Config *cfg) {
    every other TDL+HARQ function in this LLS. */
 void run_pucch_format3_tdl_harq_simulation(const L1Config *cfg) {
     int K = cfg->pucchUciBits;
-    if (K < 3)  K = 3;
-    if (K > 11) K = 11;
+    /* config_parser.c's validate_config() already rejects PUCCH_UCI_BITS outside
+     * [3,11] for Format 2/3 (PHY-01, 2026-09-10) -- no silent clamp needed here. */
     const int N = 64;
     int num_prb = cfg->pucchNumPrb > 0 ? cfg->pucchNumPrb : 1;
     int num_sym = cfg->pucchNumSymbols;

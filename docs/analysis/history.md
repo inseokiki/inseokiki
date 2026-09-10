@@ -1761,6 +1761,127 @@ BER/BLER이 path1(noDFE)과 소수점까지 정확히 일치(1.5370e-01=1.5370e-
 남은 항목은 P0-2c(다중 코드블록 세그멘테이션)뿐, `tasks/todo.md`에
 후속 과제로 등록, 착수 전 사용자 확인 필요.
 
+> 이 아래 몇 세션(2026-09-03~09-09: P0-2c 다중 코드블록 세그멘테이션,
+> Polar 표준 정합화 Phase 1-4, MU-MIMO K=2→4 확장, 빔관리 P1→P3→P2
+> TDL/HARQ 결합)은 `tasks/todo.md` "완료" 섹션에는 기록됐으나 이
+> history.md 이관이 누락된 채 남아있다 — 발견만 해두고 이번 세션
+> 범위 밖이라 손대지 않음, 별도 확인 필요.
+
+### `lab/PHY_REVIEW_2026-09-10.md` 검토 기반 PHY-01~06 보강 (2026-09-10)
+
+`lab/CLAUDE_IMPLEMENTATION_HANDOFF.md` 지시서 기반, `lab/HARNESS_ANALYSIS.md`
+백업 하네스 보강(같은 세션, lab 저장소 쪽 별도 기록) 이후 순서로 진행.
+
+**PHY-01(설정-실행 불일치)**: `PUCCH_UCI_BITS`가 지원 범위를 벗어나도
+`pucch.c`의 각 `run_pucch_format*_simulation()`이 조용히 clamp하던
+문제 — 예를 들어 `PUCCH_UCI_BITS=20`을 Format 3에 주면 실제로는
+11비트로 실행되면서도 출력엔 그 사실이 드러나지 않음. `config_parser.c`의
+`validate_config()`에 Format별 지원 범위 검증을 신설해 범위 밖 값을
+명시 거부로 전환 — Format 0/1은 1~2비트(TS 38.213 §9.2.1, HARQ-ACK
+[+SR] 전용 포맷의 규격 범위), Format 2/3은 3~11비트(이 LLS 코덱이
+실제로 구현한 범위, 12비트 이상은 코딩/CRC/rate matching 미구현이라
+확대하려면 별도 설계 필요 — 이번엔 최소 수정인 "명시 거부"만 함).
+이제 도달 불가능해진 `pucch.c`의 clamp 8곳(4함수 × 2줄) 제거.
+
+부수 발견: `regression_test.sh`의 `PUCCH_BASE` 배열이 `PUCCH_UCI_BITS = 1`을
+미리 선언해두고 있었는데, `config_parser.c`의 `kv_get()`은 같은 키가
+중복되면 "첫 번째" 값을 쓴다 — 그래서 F2/F3 테스트가 뒤에 붙이는
+`PUCCH_UCI_BITS = 10`/`= 20` 같은 override가 전부 조용히 무시되고
+기본값 1이 쓰이고 있었다(기존 clamp가 이 사실을 가려왔음 — 값이
+뭐든 clamp가 3~11 범위로 억지로 밀어넣어 "성공"했기 때문). `PUCCH_BASE`에서
+`PUCCH_UCI_BITS`를 빼고 각 테스트가 직접 명시하도록 수정, PHY-01
+회귀 3건(Format 3 UCI=20/2 거부, Format 0 UCI=3 거부) 추가.
+
+**PHY-02(빔관리 비교 기준 오인)**: `run_pdsch_beam_mgmt_p123_simulation()`/
+`_p123_tdl_simulation()`/`_p123_harq_simulation()` 3종이 출력하던
+"Genie"(H_true만으로 계산한 단일 안테나 채널 이득)가 "Refined"(UE
+4소자 배열 결합 후 이득)의 공정한 상한처럼 보였으나, 실제로는 Refined가
+지불하는 "UE 결합 정확도(|<w_ue,w_ue_true>|<=1)" 손실을 Genie는
+아예 모델링하지 않는다 — 리뷰가 제시한 두 대안(①이름만 정정 ②H_full·
+Tx전력·Rx배열·코드북을 그대로 쓰는 별도 잡음없는 Tx+Rx 결합 탐색
+추가) 중, 새 알고리즘 설계가 필요 없는 ①을 선택 — 출력 열/주석을
+"1AntRef"로 재명명 + 상세 근거 주석(왜 상한이 아닌지 수식으로 설명)
+추가. 진짜 배열 상한이 필요해지면 ②는 후속 과제로 `tasks/todo.md`에
+남김.
+
+**PHY-03(수치 하네스 영구화)**: 이전 세션들에서 임시 스크래치
+파일(`/tmp`)로만 썼던 MU-MIMO/Polar 검증 하네스를 저장소에 정식
+편입 — `PHY/tests/`(신규 디렉토리) + `run_numeric_tests.sh`(빌드+실행
+드라이버, `README.md`에 사용법). `test_mumimo.c`: H·W 비대각~0/대각
+실수·양수/열별전력 1/K/특이입력(중복 사용자 채널) 시 유한한 0벡터
+폴백 — **PHY-03이 지적한 정정**: H·W는 항등행렬이 아니라 대각행렬이라는
+점을 명시적으로 검증(대각값이 트라이얼마다 달라짐을 확인하는 테스트
+포함, 예전 "HW≈I" 식 오해를 되풀이하지 않도록). `test_polar.c`: 무잡음
+round-trip(PBCH/PDCCH/UCI 각 설정), CA-SCL(L=1)≡평상시 SC 등가성,
+CA-SCL(L=8) BLER 개선, PDCCH RNTI-masked CRC 정상/오류 케이스.
+`test_ldpc.c`(신규 커버리지, 기존 스크래치 없었음): TS 38.212 §5.2.2
+세그멘테이션 C=1/C=2 round-trip(C=2는 `regression_test.sh`의 "PDSCH
+legacy AWGN C=2 segmentation"과 동일한 (TBS=8426, MCS10/TABLE1) 조합
+재사용 — `nr_sch.h`에 문서화된 K'=B'/C 비정수 미해결 이슈를 피하려고
+이미 검증된 조합을 그대로 가져다 씀), §5.4.2.1 순환버퍼 경계(정확히
+non-filler 개수만큼 선택 시 순서대로 전부 커버/그 이상이면 처음부터
+wrap-around/Chase combining이 신뢰도를 절대 낮추지 않음). 4/4 통과,
+ASan/UBSan 클린.
+
+**PHY-04(K별 빌드 검증)**: `mumimo.h`의 `MUMIMO_K`를 임시로 2로 바꿔
+재빌드 → 수치 테스트 4/4 재확인 + 실제 `MIMO_MODE=MU_MIMO` 시뮬레이션
+실행해 출력 열이 `BER_U0/BLER_U0/BER_U1/BLER_U1`(2열)만 나오는 것까지
+확인 → 4로 원복(`git diff`로 커밋 상태와 완전히 동일함 확인). 런타임
+설정화(`MUMIMO_K`를 config 값으로)는 review가 "필수 선행 작업 아님"이라
+명시해 이번엔 하지 않음.
+
+**PHY-05(난수 재현성)**: `utils.c`의 자체 xorshift64 RNG(`rng_seed()`/
+`randn()`/`gen_random_bits()` 등)와, `pdsch.c`의 빔관리 방향 추첨이
+직접 쓰는 libc `rand()`가 그동안 전부 명시적으로 시드된 적이 없었음
+(`rng_seed()`는 정의만 있고 아무 데서도 호출 안 됨, `srand()`도 호출
+안 됨) — 우연히 둘 다 고정 기본 상태로 시작해 "매번 같은 결과"이긴
+했지만, 의도된 재현성이 아니라 "한 번도 안 바뀐 것"뿐이었고, 다른
+seed로 독립적인 실현을 얻을 방법이 아예 없었다. `config_parser.c`에
+`SEED`(기본 12345) 신설, `main.c`가 config 로드 직후 `rng_seed(cfg.seed)`
++`srand(cfg.seed)` 양쪽 호출(두 스트림을 완전히 하나로 통합하는 건
+beam_mgmt 쪽 호출부를 여럿 고쳐야 하는 더 큰 리팩터라 이번 범위
+밖 — 대신 하나의 SEED 값으로 둘 다 명시적으로 재현 가능하게 함),
+`config_parser_print()`가 Seed 값을 출력. 검증 중 별도 버그 발견·수정:
+`randn()`의 Box-Muller "spare"(가우시안 쌍 중 하나를 다음 호출에
+캐시)가 함수-로컬 static이라 `rng_seed()`가 이를 초기화하지 않았음 —
+실험 도중 재시드하면 이전 스트림에서 캐시된 spare가 새 스트림의
+첫 draw에 새어들 수 있는 잠재 버그. spare를 파일 스코프로 옮기고
+`rng_seed()`가 함께 리셋하도록 수정. `test_rng.c` 신규(같은 seed
+재실행 일치/다른 seed 결과 다름/홀수 번 draw 후 mid-process reseed가
+새로 시작한 것과 완전히 같은 시퀀스를 내는지 확인) — 마지막 케이스가
+바로 이 spare 버그를 잡아내는 회귀. `config/sim_config.txt`에 `SEED`
+항목 설명 추가.
+
+**PHY-06(문서-구현 드리프트 동기화)**: `STRUCTURE.md`의 `mumimo.c`
+항목("Nt=4/K=2", K=2 폐형 2×2 언급)이 2026-09-09 완료된 K=4 일반
+K×K 확장을 반영 못 하고 있던 것, `beam_mgmt.c` 항목("UE Rx 스위핑은
+미포함")이 같은 날 완료된 P1→P3→P2를 반영 못 하고 있던 것, `ldpc.c`
+항목("다중 CB 세그멘테이션 없음... 후속 과제 P0-2c")이 이미 완료된
+P0-2c를 여전히 미완료처럼 적고 있던 것을 각각 현재 구현에 맞게
+갱신. `CLAUDE.md`의 회귀 케이스 수 표기 87→95(이번 세션 PHY-01
+회귀 3건 반영, `grep -c '^expect_pass\|^expect_fail' regression_test.sh`
+정적 카운트로 확인 — 함수 정의 자체를 세는 것 방지하려 실제 호출만
+카운트). `nr_sch.h`의 "아직 pdsch.c/pusch.c에 안 묶임" 설명을 P0-2c로
+실제 배선 완료된 현재 상태로 갱신.
+
+**검증**: 타겟 회귀(PUCCH Format 0/1/2/3 flat/TDL/HARQ 8종 + PHY-01
+신규 거부 3종 + 빔관리 P123 flat/TDL/HARQ 7종) 18/18 통과, 수치
+테스트(`test_rng`/`test_mumimo`/`test_polar`/`test_ldpc`) 4/4 통과 +
+ASan/UBSan 클린, 영향받은 경로(PDSCH SISO/PUCCH F3/빔관리 P123/PUCCH
+거부 케이스) 전체 소스 ASan/UBSan 클린. 지시서에 따라 전체 95케이스
+회귀는 이번 세션에서 실행하지 않음(사용자 명시 요청/merge·release
+전 조건 미충족).
+
+**미구현/후속**: PHY-07(중복 점진적 축소)은 "다음 수정 경로부터"라는
+전방향 원칙이라 이번 세션이 건드린 경로엔 새로 추가된 중복이 없어
+실행 항목 없음. PHY_REVIEW 5절 "권장 사항" 중 negative test 강화
+(기대 오류 코드+메시지 확인)는 `expect_fail()` 재작성으로 완료했지만,
+targeted test 이름/그룹 선택 옵션·결과에 seed/config/커밋해시 메타데이터
+저장·저-trial BLER=0 경계 처리·독립 참조 구현과의 표준 교차검증은
+이번 세션에서 구현하지 않음. 채널×MIMO×TDL×HARQ×코딩 지원/거부/근사
+모델 종합표는 review가 "유지"라고 표현했지만 그런 표가 기존에 없어
+신규 작성 여부는 사용자 확인 필요, 이번엔 손대지 않음.
+
 ---
 
 ## 🔄 업데이트 이력 (원본 CLAUDE.md 기준)

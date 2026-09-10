@@ -51,6 +51,15 @@ TB_SIZE = 0
 # Number of simulation trials per SNR point
 NUM_TRIALS = 10000
 
+# RNG seed (2026-09-10, PHY-05): seeds BOTH this project's own RNG
+# (utils.c's xorshift64, used by most trial/channel/noise draws) and libc
+# rand() (used directly by beam_mgmt.c-related direction draws in
+# pdsch.c) -- they remain two separate streams, but both become
+# reproducible from this one value. Same SEED + same config always
+# reproduces the same run; change SEED to get a different, independent
+# realization (e.g. for averaging over multiple seeds).
+SEED = 12345
+
 # DMRS + Channel Estimation (0=off, 1=on, only valid for PDSCH)
 USE_DMRS = 0
 

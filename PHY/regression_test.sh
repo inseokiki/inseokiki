@@ -26,12 +26,27 @@ run_sim() {
 }
 
 # expect_fail LABEL KEY=VAL ...
+# All current uses trigger config_parser.c's validate_config(), which reports
+# each problem as "[config error] ..." and always exits with code 1 (see
+# CFG_ERR macro). Checking for that exact signature -- not just "any non-zero
+# exit" -- means a crash (SIGSEGV=139, SIGABRT=134, etc.) or an unrelated
+# failure is reported as a FAIL here instead of silently counting as the
+# expected rejection (lab/PHY_REVIEW_2026-09-10.md 5절 권장사항, 2026-09-10).
 expect_fail() {
     local label="$1"; shift
     local cfg="$TMPD/${label// /_}.cfg"
     write_cfg "$cfg" "$@"
-    if run_sim "$cfg" > /dev/null 2>&1; then
-        fail "$label (expected non-zero exit)"
+    local out rc
+    out=$(run_sim "$cfg" 2>&1)
+    rc=$?
+    if [[ $rc -eq 0 ]]; then
+        fail "$label (expected rejection, exited 0)"
+    elif [[ $rc -ne 1 ]]; then
+        fail "$label (expected deliberate config-error exit code 1, got $rc -- possible crash)"
+        echo "  output tail: $(echo "$out" | tail -3)"
+    elif ! echo "$out" | grep -qF "config error"; then
+        fail "$label (exit=1 but no '[config error]' message -- not the expected rejection path)"
+        echo "  output tail: $(echo "$out" | tail -3)"
     else
         pass "$label"
     fi
@@ -128,6 +143,27 @@ expect_fail "OLLA_ENABLE=1 + unsupported MIMO_MODE (CL_4PORT) has no dedicated f
     "MCS_INDEX = 5" "MCS_TABLE = TABLE1" "SNR_START = 10" "SNR_END = 10" "SNR_STEP = 1" "NUM_TRIALS = 20" \
     "PHYSICAL_CHANNEL = PDSCH" "USE_DMRS = 1" "MIMO_MODE = CL_4PORT" "CHANNEL_MODEL = AWGN" "CODING = LDPC" "EQUALIZER = MMSE" \
     "OLLA_ENABLE = 1"
+
+# PHY-01 (2026-09-10, lab/PHY_REVIEW_2026-09-10.md): PUCCH_UCI_BITS outside the
+# actually-supported range must be rejected explicitly, not silently clamped
+# (previously PUCCH_UCI_BITS=20 on Format 3 ran "successfully" while silently
+# using 11 bits -- config and execution must agree or the run must fail).
+expect_fail "PUCCH Format 3 + PUCCH_UCI_BITS=20 (unsupported, was silently clamped to 11)" \
+    "SNR_START = 10" "SNR_END = 10" "SNR_STEP = 1" "NUM_TRIALS = 5" \
+    "PHYSICAL_CHANNEL = PUCCH" "PUCCH_FORMAT = 3" "PUCCH_UCI_BITS = 20" \
+    "PUCCH_NUM_SYMBOLS = 4" "PUCCH_NUM_PRB = 1" "CHANNEL_MODEL = AWGN" \
+    "CODING = LDPC" "EQUALIZER = MMSE" "MCS_INDEX = 10" "MCS_TABLE = TABLE1"
+
+expect_fail "PUCCH Format 3 + PUCCH_UCI_BITS=2 (below supported range)" \
+    "SNR_START = 10" "SNR_END = 10" "SNR_STEP = 1" "NUM_TRIALS = 5" \
+    "PHYSICAL_CHANNEL = PUCCH" "PUCCH_FORMAT = 3" "PUCCH_UCI_BITS = 2" \
+    "PUCCH_NUM_SYMBOLS = 4" "PUCCH_NUM_PRB = 1" "CHANNEL_MODEL = AWGN" \
+    "CODING = LDPC" "EQUALIZER = MMSE" "MCS_INDEX = 10" "MCS_TABLE = TABLE1"
+
+expect_fail "PUCCH Format 0 + PUCCH_UCI_BITS=3 (Format 0/1 support only 1-2 bits)" \
+    "SNR_START = 10" "SNR_END = 10" "SNR_STEP = 1" "NUM_TRIALS = 5" \
+    "PHYSICAL_CHANNEL = PUCCH" "PUCCH_FORMAT = 0" "PUCCH_UCI_BITS = 3" \
+    "CHANNEL_MODEL = AWGN" "MCS_INDEX = 10" "MCS_TABLE = TABLE1"
 
 # ──────────────────────────────────────────
 # GROUP 2: MCS table dispatch (P0-1 regression)
@@ -369,17 +405,24 @@ expect_pass "PDCCH TDL"  "BER" "${CTRL_BASE[@]}" "PHYSICAL_CHANNEL = PDCCH" "${T
 expect_pass "CSI-RS" "" "${CTRL_BASE[@]}" "PHYSICAL_CHANNEL = CSIRS" "CHANNEL_MODEL = AWGN"
 expect_pass "SRS"    "" "${CTRL_BASE[@]}" "PHYSICAL_CHANNEL = SRS"   "CHANNEL_MODEL = AWGN"
 
+# PUCCH_UCI_BITS는 의도적으로 여기 넣지 않는다 -- config_parser.c의 kv_get()은
+# 같은 키가 여러 번 나오면 "첫 번째" 값을 쓴다(2026-09-10, PHY-01 검증 중 발견).
+# 이 배열에 기본값을 넣어두면 아래 각 테스트가 뒤에 붙이는
+# "PUCCH_UCI_BITS = N" override가 전부 조용히 무시되고 이 기본값만 쓰인다 --
+# 예전엔 pucch.c가 범위를 벗어난 값을 무조건 clamp했기 때문에 이 override
+# 무시가 드러나지 않았을 뿐, F2/F3 테스트들은 실제로는 의도한 비트수를 한
+# 번도 검증하지 못하고 있었다. 각 테스트가 자기 PUCCH_UCI_BITS를 직접 명시한다.
 PUCCH_BASE=("${CTRL_BASE[@]}" "PHYSICAL_CHANNEL = PUCCH"
-            "PUCCH_UCI_BITS = 1" "PUCCH_NUM_SYMBOLS = 4" "PUCCH_NUM_PRB = 1")
+            "PUCCH_NUM_SYMBOLS = 4" "PUCCH_NUM_PRB = 1")
 
-expect_pass "PUCCH F0 AWGN"     "BER" "${PUCCH_BASE[@]}" "PUCCH_FORMAT = 0" "CHANNEL_MODEL = AWGN"
-expect_pass "PUCCH F1 AWGN"     "BER" "${PUCCH_BASE[@]}" "PUCCH_FORMAT = 1" "CHANNEL_MODEL = AWGN"
-expect_pass "PUCCH F1 TDL"      "BER" "${PUCCH_BASE[@]}" "PUCCH_FORMAT = 1" "${TDL[@]}"
+expect_pass "PUCCH F0 AWGN"     "BER" "${PUCCH_BASE[@]}" "PUCCH_FORMAT = 0" "PUCCH_UCI_BITS = 1" "CHANNEL_MODEL = AWGN"
+expect_pass "PUCCH F1 AWGN"     "BER" "${PUCCH_BASE[@]}" "PUCCH_FORMAT = 1" "PUCCH_UCI_BITS = 1" "CHANNEL_MODEL = AWGN"
+expect_pass "PUCCH F1 TDL"      "BER" "${PUCCH_BASE[@]}" "PUCCH_FORMAT = 1" "PUCCH_UCI_BITS = 1" "${TDL[@]}"
 expect_pass "PUCCH F2 AWGN"     "BER" "${PUCCH_BASE[@]}" "PUCCH_FORMAT = 2" "PUCCH_UCI_BITS = 10" "CHANNEL_MODEL = AWGN"
-expect_pass "PUCCH F3 AWGN"     "BER" "${PUCCH_BASE[@]}" "PUCCH_FORMAT = 3" "PUCCH_UCI_BITS = 20" "CHANNEL_MODEL = AWGN"
-expect_pass "PUCCH F3 TDL"      "BER" "${PUCCH_BASE[@]}" "PUCCH_FORMAT = 3" "PUCCH_UCI_BITS = 20" "${TDL[@]}"
-expect_pass "PUCCH F1 TDL HARQ" "BLER" "${PUCCH_BASE[@]}" "PUCCH_FORMAT = 1" "${TDL[@]}" "${HQ[@]}"
-expect_pass "PUCCH F3 TDL HARQ" "BLER" "${PUCCH_BASE[@]}" "PUCCH_FORMAT = 3" "PUCCH_UCI_BITS = 20" "${TDL[@]}" "${HQ[@]}"
+expect_pass "PUCCH F3 AWGN"     "BER" "${PUCCH_BASE[@]}" "PUCCH_FORMAT = 3" "PUCCH_UCI_BITS = 11" "CHANNEL_MODEL = AWGN"
+expect_pass "PUCCH F3 TDL"      "BER" "${PUCCH_BASE[@]}" "PUCCH_FORMAT = 3" "PUCCH_UCI_BITS = 11" "${TDL[@]}"
+expect_pass "PUCCH F1 TDL HARQ" "BLER" "${PUCCH_BASE[@]}" "PUCCH_FORMAT = 1" "PUCCH_UCI_BITS = 1" "${TDL[@]}" "${HQ[@]}"
+expect_pass "PUCCH F3 TDL HARQ" "BLER" "${PUCCH_BASE[@]}" "PUCCH_FORMAT = 3" "PUCCH_UCI_BITS = 11" "${TDL[@]}" "${HQ[@]}"
 
 PRACH_BASE=("${CTRL_BASE[@]}" "PHYSICAL_CHANNEL = PRACH"
             "PRACH_ROOT_SEQ_INDEX = 1" "PRACH_NUM_CS = 13" "PRACH_MAX_DELAY_SAMPLES = 8")

@@ -9,12 +9,12 @@
  *  segmentation parameters (C, L, B', K') for a transport block,
  *  splits its bits into C code blocks (attaching CRC24B to each when
  *  C>1), and concatenates C rate-matched code blocks back into one
- *  sequence (5.5). It is deliberately standalone and NOT wired into
- *  any pdsch.c/pusch.c run_* function yet -- per the Phase 2 plan,
- *  this is built and unit-tested independently first; actually
- *  integrating it (and, separately, exercising TBS>Kcb at all -- every
- *  existing caller still caps block_size at 8424 bits today) is a
- *  follow-up decision, not made by this module. TS 38.212 5.4.2.1's
+ *  sequence (5.5). Originally built and unit-tested standalone before
+ *  wiring (per the Phase 2 plan); as of P0-2c (2026-09-03) it IS wired
+ *  into every pdsch.c/pusch.c run_* function that uses LDPC (all 50 of
+ *  them, pilot + non-HARQ + HARQ) -- TBS is no longer capped at 8424
+ *  bits, C>1 segmentation is exercised for real (see tests/test_ldpc.c
+ *  for a permanent C=1/C>1 round-trip check). TS 38.212 5.4.2.1's
  *  per-code-block rate matching output length E_r is
  *  nr_rate_matching.h's nr_ldpc_er_alloc() (2026-09-03), used together
  *  with this module's NRSegInfo.C to drive one nr_ldpc_rate_match_select()

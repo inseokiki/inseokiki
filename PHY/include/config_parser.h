@@ -101,6 +101,12 @@ typedef struct {
     int    beamMgmtNumRep;  /* SSB/CSI-RS 빔당 RSRP 반복 관측 횟수, 기본 4 */
     int    beamMgmtRxSweep; /* 1이면 P1->P3(UE Rx 빔 정제)->P2(gNB Tx 빔
                                 재정제) 절차 사용, 기본 0(P1만, 기존 동작) */
+    /* ── 난수 재현성 (PHY-05, 2026-09-10, lab/PHY_REVIEW_2026-09-10.md) ── */
+    unsigned int seed;      /* main()이 rng_seed()/srand() 양쪽에 그대로 전달 --
+                                이 프로젝트의 자체 xorshift64(utils.c)와 beam_mgmt
+                                방향 추첨에 쓰이는 libc rand()가 별개 스트림이라
+                                (통합은 더 큰 리팩터라 이번 범위 밖), 하나의 SEED
+                                값으로 둘 다 명시적으로 재현 가능하게 만든다. */
 } L1Config;
 
 typedef struct {

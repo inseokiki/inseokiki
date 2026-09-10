@@ -99,6 +99,7 @@ void config_parser_init(ConfigParser *p) {
     c->ollaSnrGapDb   = 3.0;
     c->beamMgmtNumRep = 4;
     c->beamMgmtRxSweep = 0;
+    c->seed = 12345;
     c->harqEnable = 0; c->harqMaxRetx = 4;
     c->tdlDelaySpreadNs = 300.0;
     c->transformPrecoding = 1;
@@ -335,6 +336,29 @@ static void validate_config(const L1Config *c) {
     if (c->beamMgmtRxSweep && strcmp(c->mimoMode,"BEAM_MGMT")!=0)
         CFG_ERR("BEAM_MGMT_RX_SWEEP=1 requires MIMO_MODE=BEAM_MGMT.");
 
+    /* PUCCH UCI 비트 수 지원 범위 (2026-09-10, PHY-01 -- lab/PHY_REVIEW_2026-09-10.md).
+     * pucch.c의 각 run_pucch_format*_simulation()이 이 범위 밖 값을 조용히
+     * clamp하던 것을, 설정과 실제 실행이 어긋나지 않도록 여기서 명시적으로 거부한다.
+     * Format 0/1: 1~2비트(TS 38.213 9.2.1, HARQ-ACK[+SR] 전용 포맷의 규격 범위).
+     * Format 2/3: 이 LLS의 시뮬레이션 코덱이 실제로 지원하는 범위는 3~11비트 —
+     * 12비트 이상은 코딩/CRC/rate matching을 아직 구현하지 않았다(확대하려면
+     * 별도 설계 필요, tasks/todo.md 참조). PUCCH가 아니면 이 절 전체를 건너뛴다. */
+    if (strcmp(c->physicalChannel,"PUCCH")==0) {
+        if (c->pucchFormat==0 || c->pucchFormat==1) {
+            if (c->pucchUciBits < 1 || c->pucchUciBits > 2)
+                CFG_ERR("PUCCH_FORMAT=%d + PUCCH_UCI_BITS=%d is invalid -- Format 0/1 supports "
+                         "only 1-2 bits (TS 38.213 9.2.1, HARQ-ACK[+SR]-only formats). Set "
+                         "PUCCH_UCI_BITS to 1 or 2.", c->pucchFormat, c->pucchUciBits);
+        } else if (c->pucchFormat==2 || c->pucchFormat==3) {
+            if (c->pucchUciBits < 3 || c->pucchUciBits > 11)
+                CFG_ERR("PUCCH_FORMAT=%d + PUCCH_UCI_BITS=%d is invalid -- this LLS's Format 2/3 "
+                         "codec only supports 3-11 bits (coding/CRC/rate matching for >=12-bit "
+                         "UCI is not yet implemented, see tasks/todo.md). Set PUCCH_UCI_BITS to "
+                         "3-11, or request the 12+-bit extension explicitly.",
+                         c->pucchFormat, c->pucchUciBits);
+        }
+    }
+
     /* 리소스 그리드 기본 정합성 */
     if (c->numRB > 0 && c->nfft > 0 && c->numRB * 12 > c->nfft)
         CFG_ERR("12 * NUM_RB=%d exceeds NFFT=%d", c->numRB * 12, c->nfft);
@@ -425,6 +449,7 @@ int config_parser_load(ConfigParser *p, const char *filename) {
     c->ollaSnrGapDb   = kv_dbl(p, "OLLA_SNR_GAP_DB", 3.0);
     c->beamMgmtNumRep = kv_int(p, "BEAM_MGMT_NUM_REP", 4);
     c->beamMgmtRxSweep = kv_int(p, "BEAM_MGMT_RX_SWEEP", 0);
+    c->seed = (unsigned int)kv_int(p, "SEED", 12345);
     kv_str(p, "MODULATION",      "QPSK",   c->modulation,     CFG_STR_MAX);
     kv_str(p, "CODING",          "LDPC",   c->coding,         CFG_STR_MAX);
     kv_str(p, "CHANNEL_MODEL",   "AWGN",   c->channelModel,   CFG_STR_MAX);
@@ -480,6 +505,7 @@ void config_parser_print(const ConfigParser *p) {
     if (strcmp(c->physicalChannel, "NONE") != 0) {
         printf("Phys Channel : %s\n",  c->physicalChannel);
         printf("Num Trials   : %d\n",  c->numTrials);
+        printf("Seed         : %u\n",  c->seed);
         if (strcmp(c->physicalChannel, "PDCCH") == 0) {
             printf("DCI Size     : %d\n",    c->dciSize);
             printf("RNTI         : 0x%04x\n", c->rnti);
