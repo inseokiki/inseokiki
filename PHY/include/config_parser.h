@@ -36,7 +36,6 @@ typedef struct {
     char   mcsTableType[CFG_STR_MAX];
     int    tbSize;
     int    numTrials;
-    int    numBits;
     int    useDmrs;
     char   equalizer[CFG_STR_MAX];
     char   mimoMode[CFG_STR_MAX];
@@ -44,6 +43,7 @@ typedef struct {
     int    harqMaxRetx;
     char   harqRvSeq[CFG_STR_MAX];
     double tdlDelaySpreadNs;
+    char   tdlProfile[CFG_STR_MAX];
     int    transformPrecoding;
     int    puschDfeEnable;
     int    puschTurboEnable;
@@ -112,12 +112,14 @@ typedef struct {
 typedef struct {
     char key[CFG_STR_MAX];
     char val[CFG_STR_MAX];
+    int  used;
 } KVEntry;
 
 typedef struct {
     L1Config cfg;
     KVEntry  kv[CFG_KV_MAX];
     int      nkv;
+    int      parseErrors;
 } ConfigParser;
 
 void config_parser_init(ConfigParser *p);

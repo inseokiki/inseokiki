@@ -108,4 +108,13 @@ void codebook_type1_sp_4port_ri_pmi_select(
     int *r1_i1_1, int *r1_i2,
     int *r2_i1_1, int *r2_i1_3, int *r2_i2);
 
+/* Effective per-layer SNR [dB] for an already-chosen (rank,i1_1,i1_3,i2)
+ * candidate -- see codebook.c for the full design note (tasks/todo.md
+ * "OLLA를 CL_XPORT로 확장"). Does NOT search or influence RI/PMI
+ * selection itself; only converts the winning candidate's own capacity
+ * into one scalar SNR for a caller's own link-adaptation logic (e.g.
+ * olla_select_mcs()). i1_3 is ignored when rank==1. */
+double codebook_type1_sp_4port_effective_snr_db(const cx_t H[4][4], double N0,
+    int rank, int i1_1, int i1_3, int i2);
+
 #endif

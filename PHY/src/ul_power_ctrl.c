@@ -58,7 +58,7 @@
  * SINR_err = SINR_target − SINR_meas 에 따라 δ 반환.
  * δ ∈ {−1, 0, +1, +3} dB  (TS 38.213 Table 7.2.1-1 accumulated)
  * ─────────────────────────────────────────────────────────────────── */
-static double tpc_decide(double sinr_err) {
+double ulpc_tpc_decide(double sinr_err) {
     if      (sinr_err >  3.0) return  3.0;
     else if (sinr_err >  0.5) return  1.0;
     else if (sinr_err < -0.5) return -1.0;
@@ -149,7 +149,7 @@ void run_ulpc_simulation(const L1Config *cfg) {
 
         /* TPC 결정 후 f(i) 업데이트 (다음 SF에 반영) */
         double sinr_err = SINR_tgt - sinr_cl;
-        double delta    = tpc_decide(sinr_err);
+        double delta    = ulpc_tpc_decide(sinr_err);
 
         printf("%-5d  %+7.2f  %+8.2f dBm  %+8.2f dBm  %+7.2f dB  %+7.2f dB  %+7.2f dB  %+.0f\n",
                sf, pl_t, ptx_cl, ptx_ol, sinr_cl, sinr_ol, f_acc, delta);
@@ -199,7 +199,7 @@ void run_ulpc_simulation(const L1Config *cfg) {
                 sinr_cl_sum += sinr_cl;
             }
             double err = SINR_tgt - sinr_cl;
-            fa += tpc_decide(err);
+            fa += ulpc_tpc_decide(err);
             if (fa >  30.0) fa =  30.0;
             if (fa < -30.0) fa = -30.0;
         }

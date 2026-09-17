@@ -411,3 +411,38 @@ void codebook_type1_sp_32port_ri_pmi_select(
                     }
                 }
 }
+
+double codebook_type1_sp_32port_effective_snr_db(
+        const cx_t H[4][32], double N0,
+        int rank, int i1_1, int i1_2, int i1_3, int i2) {
+    if (rank < 1 || rank > 4 || N0 <= 0.0) return -INFINITY;
+
+    cx_t he[4][4] = {{0}};
+    if (rank == 1) {
+        cx_t W[32];
+        codebook_type1_sp_32port_rank1(i1_1, i1_2, i2, W);
+        for (int r = 0; r < 4; r++)
+            for (int t = 0; t < 32; t++) he[r][0] += H[r][t] * W[t];
+    } else if (rank == 2) {
+        cx_t W[32][2];
+        codebook_type1_sp_32port_rank2(i1_1, i1_2, i1_3, i2, W);
+        for (int r = 0; r < 4; r++)
+            for (int c = 0; c < 2; c++)
+                for (int t = 0; t < 32; t++) he[r][c] += H[r][t] * W[t][c];
+    } else if (rank == 3) {
+        cx_t W[32][3];
+        codebook_type1_sp_32port_rank3(i1_1, i1_2, i1_3, i2, W);
+        for (int r = 0; r < 4; r++)
+            for (int c = 0; c < 3; c++)
+                for (int t = 0; t < 32; t++) he[r][c] += H[r][t] * W[t][c];
+    } else {
+        cx_t W[32][4];
+        codebook_type1_sp_32port_rank4(i1_1, i1_2, i1_3, i2, W);
+        for (int r = 0; r < 4; r++)
+            for (int c = 0; c < 4; c++)
+                for (int t = 0; t < 32; t++) he[r][c] += H[r][t] * W[t][c];
+    }
+    double cap = post_detect_capacity(he, rank, N0);
+    if (cap < 0.0) cap = 0.0;
+    return 10.0 * log10(pow(2.0, cap / rank) - 1.0);
+}

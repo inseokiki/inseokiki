@@ -112,6 +112,47 @@ static void llr_sign_and_scaling_check(void) {
           "QPSK LLR: doubling noise_var exactly halves LLR magnitude at a fixed received point (2/noise_var scaling)");
 }
 
+/* qam_demap_llr_re() (tasks/todo.md "RE별 effective noise variance 기반
+ * LLR", P1-1): a per-RE noise_var[] that happens to be constant across
+ * all n symbols must reproduce qam_demap_llr()'s scalar-noise_var output
+ * bit-for-bit (both formulas reduce to the identical sc=2/noise_var per
+ * symbol in that case) -- this is the exact property TDL call sites rely
+ * on when they stop averaging nv_re[] into one scalar and start passing
+ * the array directly. Also checks the actually-varying case against a
+ * hand-derived per-RE scaling. */
+static void llr_re_matches_scalar_when_constant(void) {
+    cx_t syms[5] = {
+        CX_MAKE(10.0, 10.0), CX_MAKE(-3.0, 4.0), CX_MAKE(0.5, -0.5),
+        CX_MAKE(-7.0, -2.0), CX_MAKE(2.0, 6.0)
+    };
+    double nv_const[5] = {0.7, 0.7, 0.7, 0.7, 0.7};
+    double llr_scalar[5*4], llr_re[5*4];
+    qam_demap_llr(syms, 5, "16QAM", 0.7, llr_scalar);
+    qam_demap_llr_re(syms, 5, "16QAM", nv_const, llr_re);
+    int all_eq = 1;
+    for (int i = 0; i < 5*4; i++) if (fabs(llr_scalar[i] - llr_re[i]) > 1e-12) all_eq = 0;
+    CHECK(all_eq, "qam_demap_llr_re() with a constant noise_var[] array matches qam_demap_llr()'s scalar path exactly, for every RE/bit");
+
+    /* Per-RE case: each RE's own noise_var scales only that RE's own bits
+     * by 2/noise_var[i], independent of every other RE's value -- checked
+     * by comparing RE i's LLR under a per-RE array against RE i's LLR
+     * from a separate all-constant call using RE i's own noise_var (the
+     * two calls must agree exactly on that one RE since qam_demap_llr_re()
+     * processes each RE independently with no cross-RE state). */
+    double nv_varying[5] = {0.1, 5.0, 0.7, 50.0, 0.02};
+    double llr_varying[5*4];
+    qam_demap_llr_re(syms, 5, "16QAM", nv_varying, llr_varying);
+    int per_re_ok = 1;
+    for (int i = 0; i < 5; i++) {
+        double nv_i[5] = {nv_varying[i], nv_varying[i], nv_varying[i], nv_varying[i], nv_varying[i]};
+        double llr_i[5*4];
+        qam_demap_llr_re(syms, 5, "16QAM", nv_i, llr_i);
+        for (int k = 0; k < 4; k++)
+            if (fabs(llr_varying[i*4+k] - llr_i[i*4+k]) > 1e-12) per_re_ok = 0;
+    }
+    CHECK(per_re_ok, "qam_demap_llr_re(): each RE's LLR depends only on that RE's own noise_var[i], not on neighboring REs' values");
+}
+
 int main(void) {
     exhaustive_mapping_check("QPSK", 1, 1.0 / sqrt(2.0));
     exhaustive_mapping_check("16QAM", 2, 1.0 / sqrt(10.0));
@@ -122,6 +163,7 @@ int main(void) {
     demod_roundtrip_noise_free("64QAM", 6);
 
     llr_sign_and_scaling_check();
+    llr_re_matches_scalar_when_constant();
 
     printf("\n%s\n", g_fail ? "SOME TESTS FAILED" : "ALL TESTS PASSED");
     return g_fail ? 1 : 0;

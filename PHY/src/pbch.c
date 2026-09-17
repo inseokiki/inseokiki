@@ -128,6 +128,7 @@ void run_pbch_fading_simulation(const L1Config *cfg) {
     cx_t *eq_syms       = (cx_t *)malloc(nsym * sizeof(cx_t));
     cx_t *h_known       = (cx_t *)malloc(nsym * sizeof(cx_t));
     double *llr_qam     = (double *)malloc(E * sizeof(double));
+    double *nv_all       = (double *)malloc(nsym * sizeof(double));
     double *llr_dm      = (double *)malloc(N * sizeof(double));
     int *decoded        = (int *)malloc(K * sizeof(int));
     cx_t taps[TDL_MAX_TAPS];
@@ -139,7 +140,7 @@ void run_pbch_fading_simulation(const L1Config *cfg) {
     TDLChannel tdl_ch;
     FlatFadingChannel flat_ch;
     for (double snr = cfg->snrStart; snr <= cfg->snrEnd+0.001; snr += cfg->snrStep) {
-        if (is_tdl) tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        if (is_tdl) tdl_channel_init(&tdl_ch, cfg->tdlProfile[0], cfg->tdlDelaySpreadNs, scs_hz, snr);
         else        flat_fading_init(&flat_ch, snr);
         double N0 = 1.0 / pow(10.0, snr / 10.0);
         int blk_err = 0;
@@ -169,13 +170,14 @@ void run_pbch_fading_simulation(const L1Config *cfg) {
                 qam_demap_llr_mmse(eq_syms, nsym, "QPSK", h_known, N0, llr_qam);
             } else {
                 zf_equalize(rx_syms, h_known, nsym, eq_syms);
-                double inv_sum = 0.0;
+                /* per-RE ZF noise variance, kept as an array instead of
+                 * averaged (tasks/todo.md "RE별 effective noise variance
+                 * 기반 LLR", P1-1 follow-up: pdcch.c/pucch.c/pbch.c) */
                 for (int d=0; d<nsym; d++) {
                     double hp = CX_NORM(h_known[d]);
-                    inv_sum += (hp > 1e-10) ? 1.0/hp : 1.0/1e-10;
+                    nv_all[d] = N0 / (hp > 1e-10 ? hp : 1e-10);
                 }
-                double env = N0 * inv_sum / nsym;
-                qam_demap_llr(eq_syms, nsym, "QPSK", env, llr_qam);
+                qam_demap_llr_re(eq_syms, nsym, "QPSK", nv_all, llr_qam);
             }
             polar_rate_dematch(llr_qam, E, N, K, llr_dm);
             polar_decode_scl(&polar, llr_dm, POLAR_SCL_L, /*use_crc=*/1, CRC24C,
@@ -190,5 +192,5 @@ void run_pbch_fading_simulation(const L1Config *cfg) {
     polar_free(&polar);
     free(payload_bits); free(with_crc); free(coded); free(rm);
     free(syms); free(rx_syms); free(eq_syms); free(h_known);
-    free(llr_qam); free(llr_dm); free(decoded);
+    free(llr_qam); free(llr_dm); free(decoded); free(nv_all);
 }

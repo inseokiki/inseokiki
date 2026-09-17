@@ -1,37 +1,64 @@
 /* ================================================================
  *  tdl.c
- *  TDL frequency-selective fading channel (approx. 6-tap NLOS profile)
+ *  TDL frequency-selective fading channel -- TS 38.901 §7.7.2/7.7.3
  *
  *  Author : Inseok Kang
  * ================================================================ */
 #include "tdl.h"
+#include "tdl_tables.h"
 #include <math.h>
 
-void tdl_channel_init(TDLChannel *ch, double delay_spread_ns,
-                      double scs_hz, double snr_db) {
-    static const double delay_ns_ref[TDL_MAX_TAPS] = {0, 30, 70, 90, 110, 190};
-    static const double power_db[TDL_MAX_TAPS]     = {0, -1.5, -1.4, -3.6, -0.6, -9.1};
+void tdl_channel_init(TDLChannel *ch, char profile_letter,
+                      double delay_spread_ns, double scs_hz, double snr_db) {
+    const TDLProfileSpec *spec = tdl_profile_lookup(profile_letter);
+    /* config_parser.c's validate_config() rejects an unrecognized
+     * TDL_PROFILE before any simulation function (and therefore this)
+     * ever runs -- see tdl.h. */
+    if (!spec) spec = tdl_profile_lookup('A');
 
     ch->snr_db = snr_db;
     ch->scs_hz = scs_hz;
-    ch->profile.num_taps = TDL_MAX_TAPS;
+    ch->profile.num_taps = spec->num_taps;
+    ch->profile.has_los   = spec->has_los;
 
-    double lin[TDL_MAX_TAPS], sum_lin = 0.0;
-    for (int l = 0; l < TDL_MAX_TAPS; l++) {
-        lin[l] = pow(10.0, power_db[l] / 10.0);
+    /* TS 38.901 §7.7.3 eq.(7.7-1): scaled_delay_ns = delay_norm *
+     * desired_delay_spread_ns (see tdl.h's provenance note on this
+     * equation). Power values are converted to linear and jointly
+     * normalized (across all Rayleigh taps + the LOS component, if any)
+     * so the total average power sums to exactly 1 -- required because
+     * the raw table dB values do not already sum to 0dB (see tdl.h). */
+    double sum_lin = 0.0;
+    double lin[TDL_MAX_TAPS];
+    for (int l = 0; l < spec->num_taps; l++) {
+        lin[l] = pow(10.0, spec->taps[l].power_db / 10.0);
         sum_lin += lin[l];
     }
-    double scale = delay_spread_ns / 30.0;
-    for (int l = 0; l < TDL_MAX_TAPS; l++) {
-        ch->profile.power_lin[l] = lin[l] / sum_lin;
-        ch->profile.delay_s[l]   = delay_ns_ref[l] * scale * 1e-9;
+    double los_lin = 0.0;
+    if (spec->has_los) {
+        los_lin = pow(10.0, spec->los_power_db / 10.0);
+        sum_lin += los_lin;
     }
+
+    for (int l = 0; l < spec->num_taps; l++) {
+        ch->profile.delay_s[l]   = spec->taps[l].delay_norm * delay_spread_ns * 1e-9;
+        ch->profile.power_lin[l] = lin[l] / sum_lin;
+    }
+    ch->profile.los_power_lin = spec->has_los ? (los_lin / sum_lin) : 0.0;
 }
 
 void tdl_draw(const TDLChannel *ch, cx_t *taps_out) {
     for (int l = 0; l < ch->profile.num_taps; l++) {
         double sigma = sqrt(ch->profile.power_lin[l] / 2.0);
         taps_out[l] = CX_MAKE(randn() * sigma, randn() * sigma);
+    }
+    if (ch->profile.has_los) {
+        /* Rician tap 0: deterministic LOS mean (magnitude sqrt(los_power),
+         * phase uniform on [0,2pi) -- see tdl.h's tdl_draw() doc comment
+         * for why the phase is redrawn every call) plus the Rayleigh
+         * component already drawn above for tap 0. */
+        double mag = sqrt(ch->profile.los_power_lin);
+        double phase = atan2(randn(), randn());
+        taps_out[0] += CX_MAKE(mag * cos(phase), mag * sin(phase));
     }
 }
 

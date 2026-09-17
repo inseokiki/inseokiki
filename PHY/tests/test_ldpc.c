@@ -249,6 +249,94 @@ static void harq_buffer_boundary_check(void) {
     ldpc_free(&ldpc);
 }
 
+/* TB/CB isolation (PHY_UNIT_VALIDATION_PLAN.md §5 3단계 "HARQ·적응 상태"
+ * group, tasks/todo.md 2026-09-11): with C=2 code blocks sharing one
+ * transport block, corrupting ONLY code block 0's received LLRs (heavy
+ * inverted-sign noise on a third of its bits -- well past this MCS's
+ * code rate's correction capability) must fail CB0's own CRC24B while
+ * leaving code block 1 -- decoded with its own independently-allocated
+ * soft_buf, encoded/rate-matched from an entirely separate info-bit
+ * segment -- completely unaffected: exact CRC24B pass and bit-exact
+ * payload recovery. This is the property that would break if CB
+ * decoding accidentally shared or aliased state (a single soft_buf
+ * reused across code blocks, or an off-by-one in nr_seg_split()'s
+ * per-block offset bleeding bits from one block into another). */
+static void tb_cb_isolation_check(void) {
+    int A = 8426, mcs_index = 10;
+    MCSEntry mcs = get_mcs_entry(mcs_index, MCS_TABLE1);
+    double cr = get_code_rate(&mcs);
+    int bps = mcs.modulationOrder;
+    int B = A + 24;
+
+    NRSegInfo seg;
+    nr_seg_compute(B, cr, &seg);
+    CHECK(seg.C == 2, "tb_cb_isolation_check: reuses the known C=2 (A=8426,MCS10/TABLE1) combination");
+    int payload = seg.Kprime - seg.L;
+
+    LDPCCodec ldpc;
+    ldpc_init_resolved(&ldpc, seg.Kprime, cr, seg.bg, seg.Zc, seg.Kb,
+                        seg.base_rows, seg.base_info_cols, seg.base_cols,
+                        seg.filler_size);
+    int acsz = ldpc.coded_size;
+    int E = (int)(A / cr);
+    if (E < 1) E = 1;
+    int nsym = (E + bps - 1) / bps;
+    E = nsym * bps;
+
+    int *Er = malloc(seg.C * sizeof(int));
+    nr_ldpc_er_alloc(E, 1, bps, seg.C, Er);
+
+    int *tb = malloc(A * sizeof(int));
+    int *tb_crc = malloc(B * sizeof(int));
+    int *cb_bits = malloc((size_t)seg.C * seg.Kprime * sizeof(int));
+    srand(777);
+    for (int i = 0; i < A; i++) tb[i] = rand() & 1;
+    attach_crc(tb, A, CRC24A, tb_crc);
+    nr_seg_split(tb_crc, &seg, cb_bits);
+
+    int *decoded_cb[2];
+    int cb_crc_ok[2];
+    for (int r = 0; r < seg.C; r++) {
+        const int *info = cb_bits + (size_t)r * seg.Kprime;
+        int *coded = malloc(acsz * sizeof(int));
+        ldpc_encode(&ldpc, info, coded);
+
+        int *rm = malloc(Er[r] * sizeof(int));
+        nr_ldpc_rate_match_select(coded, acsz, ldpc.bg, ldpc.Zc,
+                                   ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                   0, Er[r], rm);
+
+        double *llr = malloc(Er[r] * sizeof(double));
+        for (int i = 0; i < Er[r]; i++) llr[i] = rm[i] ? -20.0 : 20.0;
+        /* Corrupt only r==0: invert a third of its LLRs with strong
+         * (confidently WRONG) magnitude -- well beyond this code rate's
+         * correction capability, forcing a genuine CRC24B failure rather
+         * than a marginal one. */
+        if (r == 0) {
+            for (int i = 0; i < Er[r]; i += 3) llr[i] = -llr[i];
+        }
+
+        double *soft_buf = calloc(acsz, sizeof(double));
+        nr_ldpc_rate_match_combine(soft_buf, acsz, ldpc.bg, ldpc.Zc,
+                                    ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                    0, Er[r], llr);
+        decoded_cb[r] = malloc(ldpc.info_size * sizeof(int));
+        ldpc_decode(&ldpc, soft_buf, 25, decoded_cb[r]);
+        cb_crc_ok[r] = check_crc(decoded_cb[r], seg.Kprime, CRC24B);
+
+        free(coded); free(rm); free(llr); free(soft_buf);
+    }
+
+    CHECK(!cb_crc_ok[0], "tb_cb_isolation_check: corrupted code block 0's own CRC24B fails, as expected");
+    CHECK(cb_crc_ok[1], "tb_cb_isolation_check: code block 1's CRC24B still passes despite code block 0's corruption (independent soft_buf/decode)");
+    int cb1_bits_ok = memcmp(decoded_cb[1], cb_bits + (size_t)1 * seg.Kprime, payload * sizeof(int)) == 0;
+    CHECK(cb1_bits_ok, "tb_cb_isolation_check: code block 1's decoded payload bits are bit-exact to the original (no bleed-through from code block 0's corruption)");
+
+    free(tb); free(tb_crc); free(cb_bits); free(Er);
+    free(decoded_cb[0]); free(decoded_cb[1]);
+    ldpc_free(&ldpc);
+}
+
 /* TS 38.212 6.2.2 base graph selection: this file re-states the rule
  * from nr_select_bg()'s own doc comment (ldpc_nr.h) -- an independent
  * re-implementation of the SAME documented rule, not a call into the
@@ -440,6 +528,7 @@ int main(void) {
     segmentation_roundtrip("large TB (C=2)", 8426, 10, MCS_TABLE1, 2);
 
     harq_buffer_boundary_check();
+    tb_cb_isolation_check();
 
     test_nr_select_bg_boundary();
     test_nr_select_zc_invariants();

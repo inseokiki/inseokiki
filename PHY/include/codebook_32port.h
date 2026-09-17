@@ -120,4 +120,11 @@ void codebook_type1_sp_32port_ri_pmi_select(
     const cx_t H[4][32], double N0,
     int *sel_rank, int *sel_i1_1, int *sel_i1_2, int *sel_i1_3, int *sel_i2);
 
+/* Selected rank/PMI candidate's per-layer effective SNR [dB] for MCS
+ * selection: SNR_eff = 2^(C/rank)-1, with C from the selector's own
+ * post-detection capacity formula. Does not change RI/PMI selection. */
+double codebook_type1_sp_32port_effective_snr_db(
+    const cx_t H[4][32], double N0,
+    int rank, int i1_1, int i1_2, int i1_3, int i2);
+
 #endif

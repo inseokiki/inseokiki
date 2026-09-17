@@ -96,9 +96,14 @@ HARQ_ENABLE = 0
 HARQ_MAX_RETX = 4
 HARQ_RV_SEQUENCE = IR
 
-# TDL RMS delay spread (ns), only used when CHANNEL_MODEL=TDL.
-# Approximate 6-tap NLOS profile, NOT the exact TS 38.901 Table 7.7.2-x
-# coefficients (implementation-defined approximation, see STRUCTURE.md).
+# TDL profile, only used when CHANNEL_MODEL=TDL. TS 38.901 Table 7.7.2-1..5
+# exact tap delay/power values -- A/B/C are pure NLOS (23/23/24 taps),
+# D/E additionally carry a LOS (Rician) component (13+1/14+1 taps,
+# K1=13.3dB/22dB). See STRUCTURE.md / tdl_tables.h.
+TDL_PROFILE = A
+
+# TDL RMS delay spread (ns), only used when CHANNEL_MODEL=TDL. Scales the
+# chosen profile's normalized delays (TS 38.901 §7.7.3 eq.(7.7-1)).
 TDL_DELAY_SPREAD_NS = 300
 
 # PUSCH transform precoding (DFT-s-OFDM): 1=ON (low-PAPR UL waveform,

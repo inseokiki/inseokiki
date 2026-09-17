@@ -1,8 +1,15 @@
-# PHY LLS 분석 및 Claude Code 작업 인수인계
+# PHY LLS 분석 및 Claude Code 작업 인수인계 (과거 인수인계, 2026-08-03)
 
 > 작성일: 2026-08-03  
 > 대상: `PHY/` 5G NR Link Level Simulator  
 > 목적: 현재 LLS의 구조·제약·정합성 문제를 정리하고, Claude Code가 기존 작업을 보존하면서 후속 개선을 수행할 수 있도록 작업 범위와 검증 기준을 제공한다.
+
+> **과거 인수인계 — 현행 작업 지시로 읽지 말 것(2026-09-11 문서 정리 세션에서 상태 확인)**
+> - §1의 "미커밋 상태" 파일 목록(main.c/pdsch.c/pdsch.h/todo.md 등)은 2026-08-03 시점 스냅샷이며 전부 그 이후 커밋됐다 — 현재 미커밋 상태 확인은 `git status`로 새로 한다.
+> - §7 체크리스트의 P0 항목(TABLE3 fallback 제거, config validation, 회귀 테스트, 문서-코드 불일치 정리)은 전부 완료됐다 — `mcs_table_from_str()` 공용 함수로 TABLE3 fallback 제거 확인(2026-09-11 코드 대조), `regression_test.sh`(95-case)와 `PHY/tests/` 단위 테스트 신설, `tasks/todo.md`의 "완료" 목록 참조.
+> - P1-2(PUSCH HARQ)·P1-3(CL_4PORT TDL/HARQ/XPD)·P2-1(NR LDPC 표준화)은 이후 세션에서 전부 완료됐다 — 상세는 `docs/analysis/history.md`.
+> - **아직 미완료인 항목 3개**(P1-1 RE별 LLR, P2-2 TS 38.901 정확 TDL, P2-3 실제 waveform 경로)는 2026-09-11 세션에서 `tasks/todo.md` "진행 중"으로 이동했다 — 이 문서가 아니라 그쪽을 현재 상태 기준으로 본다.
+> - 아래 본문(§1~8)은 2026-08-03 작성 시점 그대로 보존한다.
 
 ---
 

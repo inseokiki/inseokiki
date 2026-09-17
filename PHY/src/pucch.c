@@ -196,7 +196,7 @@ void run_pucch_format1_tdl_simulation(const L1Config *cfg) {
     cx_t taps[TDL_MAX_TAPS];
     TDLChannel tdl_ch;
     for (double snr=cfg->snrStart; snr<=cfg->snrEnd+1e-6; snr+=cfg->snrStep) {
-        tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        tdl_channel_init(&tdl_ch, cfg->tdlProfile[0], cfg->tdlDelaySpreadNs, scs_hz, snr);
         int bit_err=0, total_bits=0;
         for (int trial=0; trial<cfg->numTrials; trial++) {
             int uci_val_bits[2];
@@ -291,7 +291,7 @@ void run_pucch_format1_tdl_harq_simulation(const L1Config *cfg) {
     cx_t taps[TDL_MAX_TAPS];
     TDLChannel tdl_ch;
     for (double snr=cfg->snrStart; snr<=cfg->snrEnd+1e-6; snr+=cfg->snrStep) {
-        tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        tdl_channel_init(&tdl_ch, cfg->tdlProfile[0], cfg->tdlDelaySpreadNs, scs_hz, snr);
         int total_err=0, total_bits=0, blk_err_final=0;
         int total_err_1st=0, blk_err_1st=0;
         long long total_attempts=0;
@@ -571,7 +571,7 @@ void run_pucch_format3_tdl_simulation(const L1Config *cfg) {
 
     TDLChannel tdl_ch;
     for (double snr=cfg->snrStart; snr<=cfg->snrEnd+1e-6; snr+=cfg->snrStep) {
-        tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        tdl_channel_init(&tdl_ch, cfg->tdlProfile[0], cfg->tdlDelaySpreadNs, scs_hz, snr);
         double N0 = 1.0 / pow(10.0, snr/10.0);
         int bit_err=0, total_bits=0;
         for (int trial=0; trial<cfg->numTrials; trial++) {
@@ -709,7 +709,7 @@ void run_pucch_format3_tdl_harq_simulation(const L1Config *cfg) {
 
     TDLChannel tdl_ch;
     for (double snr=cfg->snrStart; snr<=cfg->snrEnd+1e-6; snr+=cfg->snrStep) {
-        tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        tdl_channel_init(&tdl_ch, cfg->tdlProfile[0], cfg->tdlDelaySpreadNs, scs_hz, snr);
         double N0 = 1.0 / pow(10.0, snr/10.0);
         int total_err=0, total_bits=0, blk_err_final=0;
         int total_err_1st=0, blk_err_1st=0;

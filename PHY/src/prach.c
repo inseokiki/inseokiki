@@ -208,7 +208,7 @@ void run_prach_tdl_simulation(const L1Config *cfg) {
 
     TDLChannel tdl_ch;
     for (double snr=cfg->snrStart; snr<=cfg->snrEnd+1e-6; snr+=cfg->snrStep) {
-        tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, delta_f_ra, snr);
+        tdl_channel_init(&tdl_ch, cfg->tdlProfile[0], cfg->tdlDelaySpreadNs, delta_f_ra, snr);
         int preamble_err = 0;
         long long ta_abs_err_sum = 0;
         int ta_err_trials = 0;

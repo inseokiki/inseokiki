@@ -198,6 +198,51 @@ void codebook_type1_sp_8port_pmi_search(const cx_t H[][8], int num_rx,
  * Rank-2 탐색: 256 후보 (16빔 × 4(i1_3) × 4코피에이징)
  * 총 탐색 후보: 320개
  * ════════════════════════════════════════════════════════════════════════ */
+static double rank1_capacity_bps(const cx_t H[4][8], double N0, int i1, int i2) {
+    cx_t W[8];
+    codebook_type1_sp_8port_rank1(i1, i2, W);
+    double pw = 0.0;
+    for (int r = 0; r < 4; r++) {
+        cx_t he = 0.0;
+        for (int t = 0; t < P; t++) he += H[r][t] * W[t];
+        pw += CX_NORM(he);
+    }
+    return log2(1.0 + pw / N0);
+}
+
+/* Same MMSE post-detection capacity used by RI/PMI selection. A negative
+ * result marks a numerically singular candidate, as in the original loop. */
+static double rank2_capacity_bps(const cx_t H[4][8], double N0,
+                                 int i1, int i13, int i2) {
+    cx_t W2[8][2];
+    codebook_type1_sp_8port_rank2(i1, i13, i2, W2);
+    cx_t he[4][2];
+    for (int r = 0; r < 4; r++)
+        for (int l = 0; l < 2; l++) {
+            he[r][l] = 0.0;
+            for (int t = 0; t < P; t++) he[r][l] += H[r][t] * W2[t][l];
+        }
+    cx_t A00 = (cx_t)N0, A01 = 0.0, A10 = 0.0, A11 = (cx_t)N0;
+    for (int r = 0; r < 4; r++) {
+        A00 += conj(he[r][0]) * he[r][0];
+        A01 += conj(he[r][0]) * he[r][1];
+        A10 += conj(he[r][1]) * he[r][0];
+        A11 += conj(he[r][1]) * he[r][1];
+    }
+    double det_re = creal(A00 * A11 - A01 * A10);
+    if (det_re < 1e-6 * N0 * N0) return -1.0;
+    cx_t id = 1.0 / (cx_t)det_re;
+    double inv00 = creal(A11 * id);
+    double inv11 = creal(A00 * id);
+    double a0 = 1.0 - N0 * inv00;
+    double a1 = 1.0 - N0 * inv11;
+    if (a0 < 1e-6) a0 = 1e-6;
+    if (a1 < 1e-6) a1 = 1e-6;
+    if (a0 >= 1.0) a0 = 1.0 - 1e-6;
+    if (a1 >= 1.0) a1 = 1.0 - 1e-6;
+    return log2(1.0 + a0 / (1.0 - a0)) + log2(1.0 + a1 / (1.0 - a1));
+}
+
 void codebook_type1_sp_8port_ri_pmi_select(
         const cx_t H[4][8], double N0,
         int *sel_rank, int *sel_i1_1, int *sel_i1_3, int *sel_i2,
@@ -213,16 +258,7 @@ void codebook_type1_sp_8port_ri_pmi_select(
     /* ── Rank-1 탐색 (16 × 4 = 64 후보) ───────────────────────────────── */
     for (int i1 = 0; i1 < N1 * O1; i1++) {
         for (int i2 = 0; i2 < 4; i2++) {
-            cx_t W[8];
-            codebook_type1_sp_8port_rank1(i1, i2, W);
-
-            double pw = 0.0;
-            for (int r = 0; r < 4; r++) {
-                cx_t he = 0.0;
-                for (int t = 0; t < P; t++) he += H[r][t] * W[t];
-                pw += CX_NORM(he);
-            }
-            double cap = log2(1.0 + pw / N0);
+            double cap = rank1_capacity_bps(H, N0, i1, i2);
 
             if (cap > best_cap_r1) {
                 best_cap_r1 = cap;
@@ -236,42 +272,7 @@ void codebook_type1_sp_8port_ri_pmi_select(
     for (int i1_3 = 0; i1_3 < CB8_I13_COUNT; i1_3++) {
         for (int i1 = 0; i1 < N1 * O1; i1++) {
             for (int i2 = 0; i2 < 4; i2++) {
-                cx_t W2[8][2];
-                codebook_type1_sp_8port_rank2(i1, i1_3, i2, W2);
-
-                cx_t he[4][2];
-                for (int r = 0; r < 4; r++)
-                    for (int l = 0; l < 2; l++) {
-                        he[r][l] = 0.0;
-                        for (int t = 0; t < P; t++) he[r][l] += H[r][t] * W2[t][l];
-                    }
-
-                /* A = H_eff^H H_eff + N0·I (2×2 Gramian) — catastrophic
-                 * cancellation 방어는 4-port codebook.c와 동일 이유로 필요
-                 * (codebook.c의 해당 주석 참조, 2026-08-27). */
-                cx_t A00 = (cx_t)N0, A01 = 0.0, A10 = 0.0, A11 = (cx_t)N0;
-                for (int r = 0; r < 4; r++) {
-                    A00 += conj(he[r][0]) * he[r][0];
-                    A01 += conj(he[r][0]) * he[r][1];
-                    A10 += conj(he[r][1]) * he[r][0];
-                    A11 += conj(he[r][1]) * he[r][1];
-                }
-
-                double det_re = creal(A00 * A11 - A01 * A10);
-                if (det_re < 1e-6 * N0 * N0) continue;
-                cx_t det = det_re;
-                cx_t id = 1.0 / det;
-                double inv00 = creal( A11 * id);
-                double inv11 = creal( A00 * id);
-
-                double a0 = 1.0 - N0 * inv00;
-                double a1 = 1.0 - N0 * inv11;
-                if (a0 < 1e-6) a0 = 1e-6;
-                if (a1 < 1e-6) a1 = 1e-6;
-                if (a0 >= 1.0) a0 = 1.0 - 1e-6;
-                if (a1 >= 1.0) a1 = 1.0 - 1e-6;
-
-                double cap = log2(1.0 + a0 / (1.0 - a0)) + log2(1.0 + a1 / (1.0 - a1));
+                double cap = rank2_capacity_bps(H, N0, i1, i1_3, i2);
 
                 if (cap > best_cap_r2) {
                     best_cap_r2 = cap;
@@ -297,4 +298,13 @@ void codebook_type1_sp_8port_ri_pmi_select(
         *sel_i2   = *r2_i2;
     }
     (void)best_cap;
+}
+
+double codebook_type1_sp_8port_effective_snr_db(const cx_t H[4][8], double N0,
+        int rank, int i1_1, int i1_3, int i2) {
+    double cap = (rank == 1) ? rank1_capacity_bps(H, N0, i1_1, i2)
+                              : rank2_capacity_bps(H, N0, i1_1, i1_3, i2);
+    if (cap < 0.0) cap = 0.0;
+    double eff_snr_lin = pow(2.0, cap / (double)rank) - 1.0;
+    return 10.0 * log10(eff_snr_lin);
 }

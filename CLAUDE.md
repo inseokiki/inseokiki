@@ -122,54 +122,11 @@ git log --oneline develop..origin/develop   # 원격이 앞서 있으면 확인
 
 ## 🔬 주요 업무 영역
 
-### 1. PHY Signal Processing 알고리즘 개발
-- **채널 추정**: LS / MMSE / 보간 기반 추정 (DMRS, CSI-RS 활용)
-- **등화 (Equalization)**: ZF / MMSE / DFE
-- **MIMO 검출**: MRC / ZF / MMSE / SIC / Sphere Decoding
-- **복조 / 복호화**: LDPC (데이터), Polar Code (제어), Viterbi
-- **빔포밍 / 프리코딩**: Codebook 기반, SRS 기반 Reciprocity
+1. **PHY Signal Processing 알고리즘 개발**: 채널추정(LS/MMSE/보간), 등화(ZF/MMSE/DFE), MIMO 검출(MRC/ZF/MMSE/SIC), 복호(LDPC/Polar), 빔포밍/프리코딩(Codebook, SRS reciprocity).
+2. **기지국-단말 연동 시험(RF 연동)**: gNB↔UE 실제 연동, 단말 DM 로그 분석(BLER/MCS/Rank/CQI/RI/PMI/RLF/Handover), OTA 시험.
+3. **표준 기반 기능 검증**: 3GPP TS 38.xxx 스펙 검토, 구현-표준 정합성 확인, Test Case 설계.
 
-### 2. 기지국-단말 연동 시험 (RF 연동)
-- gNB ↔ UE 실제 연동 시험
-- 단말 DM (Debug Message) 로그 분석 (PDSCH/PUSCH BLER, MCS, Rank, CQI/RI/PMI, RLF 원인, Handover/RRC 절차 검증)
-- OTA (Over-the-Air) 시험 및 RF 환경 분석, 이상 동작 원인 분석
-
-### 3. 표준 기반 기능 검증
-- 3GPP TS 38.xxx 시리즈 기반 스펙 검토
-- 기능 구현과 표준 규격 정합성 확인, Test Case 설계 및 검증
-
----
-
-## 📡 자주 다루는 5G NR 기술 영역
-
-### 물리 채널
-| 채널 | 방향 | 주요 내용 |
-|------|------|-----------|
-| PDSCH | DL | 데이터, LDPC, DMRS Type1/2 |
-| PUSCH | UL | 데이터, LDPC, DFT-s-OFDM/CP-OFDM |
-| PDCCH | DL | 제어, Polar Code, CORESET |
-| PUCCH | UL | UCI (CQI/RI/HARQ-ACK) |
-| PBCH | DL | MIB, Polar Code, SSB |
-| PRACH | UL | 랜덤 접속, ZC 시퀀스 |
-
-### 핵심 알고리즘
-- **채널 추정**: DMRS 기반 LS/MMSE + 2D Wiener 보간
-- **MIMO**: SU-MIMO (최대 8 레이어), MU-MIMO, Massive MIMO (64T64R)
-- **HARQ**: Chase Combining / Incremental Redundancy
-- **링크 어댑테이션**: CQI → MCS 매핑, OLLA (Outer Loop Link Adaptation)
-- **빔관리**: SSB/CSI-RS 기반 빔 스위핑, P1/P2/P3 절차
-
-### DM 로그 분석 주요 지표
-```
-- PDSCH/PUSCH BLER (Block Error Rate)
-- MCS Index (0~28), TBS (Transport Block Size)
-- RI (Rank Indicator), PMI (Precoding Matrix Indicator)
-- CQI (Channel Quality Indicator, 0~15)
-- RSRP / RSRQ / SINR
-- HARQ 재전송 횟수, RV (Redundancy Version)
-- Timing Advance (TA)
-- RLF 원인 코드
-```
+이 프로젝트(LLS)에서 실제로 구현된 채널/모드/알고리즘의 현재 범위는 `STRUCTURE.md`가 기준 문서다 — 위 목록은 엔지니어 배경 참고용 일반 영역 나열이며 이 코드베이스의 실제 지원 여부를 나타내지 않는다.
 
 ---
 
@@ -181,15 +138,8 @@ git log --oneline develop..origin/develop   # 원격이 앞서 있으면 확인
 
 ## 🔄 업데이트 이력
 
-| 날짜 | 내용 |
-|------|------|
-| 2026-08-02 | `phy_lab/personal/`을 기준본으로 신규 작성 — 기존 `CLAUDE.md`(2026-05-24~2026-07-15 누적본)를 상시 컨텍스트/이력/작업/교훈으로 분리. 원본 백업: `docs/analysis/CLAUDE.md.original-20260802.bak`, 상세 완료 이력은 `docs/analysis/history.md`로 이관 |
-| 2026-08-02 | git 히스토리 재조정 — 분리 작업(위 항목) 커밋 전 `origin/develop`이 7커밋(4x4 MIMO/CSI-RS 코드북/RI+PMI/ULPC, 7/21~7/24) 앞서 있던 것을 발견, stash→fast-forward pull→CLAUDE.md 수동 병합으로 정리. 원격에만 있던 07-21~07-22 항목은 `docs/analysis/history.md`로 이관 |
-| 2026-08-02 | PHY LLS: CL_4PORT 공간상관(Kronecker, XPOL 2x2 블록) 추가 — 동일편파 상관만으로는 ρ→1에서도 rank-1이 거의 선택 안 됨을 확인(교차편파 다이버시티 변형이 계속 유리, 물리적으로 타당). XPD 누설 상관 확장은 `tasks/todo.md`에 후속 과제로 등록 |
-| 2026-08-02 | 방향 확인: NTN보다 기존 LLS 완성도(채널×기능 조합 공백 메우기) 우선. `tasks/todo.md` A/B/C 그룹으로 재정리 |
-| 2026-08-02 | PHY LLS: PBCH/PDCCH에 FLAT_FADING/TDL 추가(genie-aided CSI) — 완성도 작업 1단계, AWGN 전용이던 마지막 두 채널 해소. 구현 중 `qam_demap_llr_mmse()` 오용(mmse_equalize 선행 누락으로 SNR 무관 BLER floor) 발견·수정 |
-| 2026-08-27 | PHY LLS: CL_4PORT XPD 누설 상관(`SPATIAL_CORR_XPOL`) + UL CLPC 시변 PL(`UL_PC_PL_VAR_*`) 추가. 검증 중 `codebook.c` RI/PMI 선택기의 2×2 Gramian 부동소수점 결함과 rank-1/rank-2 코드북 전력 정규화 불일치(rank-2가 +3dB 전력 우위) 2건 발견 — 둘 다 사용자 확인 후 수정 완료. 재검증 결과 R1선택률이 SNR/상관도에 따라 물리적으로 타당하게 동작함(완전 rank-1 채널에서 R1선택률=100% 확인) — 상세는 `docs/analysis/history.md`, `tasks/todo.md` 참조 |
-| 2026-09-03 | `lab/HARNESS_ANALYSIS.md` L-02 반영 — "검증(회귀 테스트) 범위 원칙" 섹션 신규 추가. 국소 수정마다 `regression_test.sh` 전체(87개)를 매번 도는 대신 금일 변경 관련 case만 먼저 도는 targeted를 기본값으로, 전체 회귀는 사용자 명시 요청/merge·release 전으로 한정 |
+이 파일 자체의 변경 이력(분리/재구조화 등 메타 변경 포함)은 `docs/analysis/history.md` 하단
+"🔄 원본 CLAUDE.md 업데이트 이력" 표에 이어서 기록한다(2026-09-11 문서 정리 세션에서 이관).
 
 ---
 

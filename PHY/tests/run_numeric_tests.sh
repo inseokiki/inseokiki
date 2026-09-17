@@ -55,6 +55,15 @@ run_test test_matrix utils.o
 run_test test_mimo_correlation mimo.o utils.o
 run_test test_channel_estimation channel_estimation.o dft_precode.o
 run_test test_mimo_detection mimo.o utils.o
+run_test test_beam_mgmt beam_mgmt.o codebook_32port.o utils.o
+run_test test_codebook_ri_pmi codebook.o utils.o
+run_test test_codebook_8port_olla codebook_8port.o
+run_test test_codebook_32port_olla codebook_32port.o
+run_test test_ul_codebook_4port ul_codebook_4port.o mimo.o utils.o
+run_test test_ul_cb4_pipeline ul_codebook_4port.o mimo.o utils.o mcs_table.o crc.o nr_sch.o nr_rate_matching.o ldpc.o ldpc_nr.o ldpc_tables.o tbs.o modulation.o dmrs.o channel_estimation.o dft_precode.o tdl.o tdl_tables.o
+run_test test_link_adaptation olla.o ul_power_ctrl.o mcs_table.o utils.o config_parser.o tdl_tables.o
+run_test test_codebook_geometry codebook.o codebook_8port.o codebook_32port.o utils.o
+run_test test_tbs tbs.o
 
 echo "========================================"
 echo "Numeric test results: $PASS/$((PASS+FAIL)) passed"

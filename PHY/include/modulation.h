@@ -21,6 +21,19 @@ void qam_demodulate(const cx_t *syms, int n, const char *mod, int *bits);
 void qam_demap_llr(const cx_t *syms, int n, const char *mod,
                    double noise_var, double *llr);
 
+/* Per-RE soft LLR: identical to qam_demap_llr() except noise_var[n] gives
+ * each symbol its own post-equalization noise variance instead of one
+ * scalar shared by all n symbols (tasks/todo.md "RE별 effective noise
+ * variance 기반 LLR", P1-1) -- callers on a frequency-selective (TDL) path
+ * already compute this per-RE value at their detector (e.g. ZF's N0/|h_d|^2
+ * or mimo_*_detect's nv_re[]) and previously averaged it into one scalar
+ * before calling qam_demap_llr(), discarding the per-RE variation. Passing
+ * a noise_var[] that is actually constant across all n reproduces
+ * qam_demap_llr()'s output bit-for-bit (same 2.0/noise_var scaling per
+ * symbol). */
+void qam_demap_llr_re(const cx_t *syms, int n, const char *mod,
+                      const double *noise_var, double *llr);
+
 /* MMSE-aware soft LLR.  h_data[n] = channel estimates at each symbol. */
 void qam_demap_llr_mmse(const cx_t *rx_syms, int n, const char *mod,
                          const cx_t *h_data, double N0, double *llr);

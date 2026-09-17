@@ -215,15 +215,18 @@ void run_pdcch_simulation(const L1Config *cfg) {
    above -- those aren't associated with any real transmission, so there is
    no "channel" for them to fade through, fading or not.
 
-   Rather than doing full per-symbol MMSE-aware demapping inside the
-   candidate loop (which would need every candidate's h_data threaded
-   through, adding real complexity for a control channel), this reuses
-   the same "uniform/averaged effective noise variance" simplification
-   run_pucch_format3_tdl_simulation() already documents for its ZF path,
-   applied to both ZF (mean 1/|h|^2, exact for a single-tap flat channel,
-   Parseval-approximate for TDL) and MMSE (mean (1-alpha)/alpha) -- one
-   scalar env for the TX candidate, fed into the same qam_demap_llr()
-   every candidate already uses. */
+   The TX candidate's per-symbol noise variance (ZF: N0/|h_known[d]|^2;
+   MMSE: (1-alpha[d])/alpha[d], both already computed per symbol by
+   zf_equalize()/mmse_equalize() -- nothing new to derive) is passed to
+   qam_demap_llr_re() as an array (tasks/todo.md "RE별 effective noise
+   variance 기반 LLR", P1-1 follow-up, 2026-09-14) instead of averaging it
+   into one scalar first -- an earlier version of this function did average
+   it, reasoning the result was "Parseval-approximate for TDL"; that
+   argument conflates total-energy conservation (what Parseval's theorem
+   actually guarantees) with per-symbol LLR calibration (what the decoder
+   needs), the same flaw already found and fixed in pdsch.c/pusch.c. The
+   other blind-decoding candidates keep a single scalar `nv` (still exact:
+   they are pure AWGN draws with no channel to fade through). */
 void run_pdcch_fading_simulation(const L1Config *cfg) {
     int dci_size = cfg->dciSize;
     int crc_bits = 24;
@@ -304,12 +307,13 @@ void run_pdcch_fading_simulation(const L1Config *cfg) {
     cx_t *eq_tx     = (cx_t *)malloc(nsym_tx * sizeof(cx_t));
     cx_t *h_known   = (cx_t *)malloc(nsym_tx * sizeof(cx_t));
     double *alpha   = (double *)malloc(nsym_tx * sizeof(double));
+    double *nv_tx   = (double *)malloc(nsym_tx * sizeof(double));
     cx_t taps[TDL_MAX_TAPS];
 
     TDLChannel tdl_ch;
     FlatFadingChannel flat_ch;
     for (double snr = cfg->snrStart; snr <= cfg->snrEnd+0.001; snr += cfg->snrStep) {
-        if (is_tdl) tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        if (is_tdl) tdl_channel_init(&tdl_ch, cfg->tdlProfile[0], cfg->tdlDelaySpreadNs, scs_hz, snr);
         else        flat_fading_init(&flat_ch, snr);
         AWGNChannel ch; awgn_init(&ch, snr);
         int detections=0, misses=0, false_alarms=0;
@@ -338,20 +342,23 @@ void run_pdcch_fading_simulation(const L1Config *cfg) {
                 flat_fading_apply(&flat_ch, tx_syms, nsym_tx, rx_raw, &true_h);
                 for (int d=0; d<nsym_tx; d++) h_known[d] = true_h;
             }
-            double env_tx;
+            /* per-RE noise variance, kept as an array instead of the old
+             * averaged env_tx (tasks/todo.md "RE별 effective noise
+             * variance 기반 LLR", P1-1 follow-up: this function's own
+             * header comment previously argued averaging is "Parseval-
+             * approximate for TDL" -- that argument conflates total-energy
+             * conservation with per-symbol LLR calibration, the same
+             * flaw already found and fixed in pdsch.c/pusch.c, so this
+             * candidate's per-symbol values are used directly instead). */
             if (use_mmse) {
                 mmse_equalize(rx_raw, h_known, nsym_tx, N0, eq_tx, alpha);
-                double mvar = 0.0;
-                for (int d=0; d<nsym_tx; d++) mvar += (1.0-alpha[d])/alpha[d];
-                env_tx = mvar / nsym_tx;
+                for (int d=0; d<nsym_tx; d++) nv_tx[d] = (1.0-alpha[d])/alpha[d];
             } else {
                 zf_equalize(rx_raw, h_known, nsym_tx, eq_tx);
-                double inv_sum = 0.0;
                 for (int d=0; d<nsym_tx; d++) {
                     double hp = CX_NORM(h_known[d]);
-                    inv_sum += (hp > 1e-10) ? 1.0/hp : 1.0/1e-10;
+                    nv_tx[d] = N0 / (hp > 1e-10 ? hp : 1e-10);
                 }
-                env_tx = N0 * inv_sum / nsym_tx;
             }
 
             int detected=0, false_alarm=0;
@@ -365,19 +372,20 @@ void run_pdcch_fading_simulation(const L1Config *cfg) {
                 double *llr  = (double *)malloc(E_c * sizeof(double));
                 double *dm   = (double *)malloc(N_c * sizeof(double));
                 int    *dec  = (int *)malloc(K * sizeof(int));
-                double cand_nv = nv;
 
                 if (ci == tx_cand_idx) {
+                    /* tx_cand_idx is defined as the candidate whose al==txAL,
+                     * so E_c==E_tx and nsym==nsym_tx exactly here -- nv_tx[]
+                     * lines up 1:1 with rx_c, no partial-copy case in practice. */
                     int copy = nsym < nsym_tx ? nsym : nsym_tx;
                     for (int s=0;s<copy;s++) rx_c[s] = eq_tx[s];
-                    cand_nv = env_tx;
+                    qam_demap_llr_re(rx_c, nsym, "QPSK", nv_tx, llr);
                 } else {
                     cx_t *zero = (cx_t *)calloc(nsym, sizeof(cx_t));
                     awgn_add_noise(&ch, zero, nsym, 0, rx_c);
                     free(zero);
+                    qam_demap_llr(rx_c, nsym, "QPSK", nv, llr);
                 }
-
-                qam_demap_llr(rx_c, nsym, "QPSK", cand_nv, llr);
 
                 polar_rate_dematch(llr, E_c, N_c, K, dm);
 
@@ -414,5 +422,5 @@ void run_pdcch_fading_simulation(const L1Config *cfg) {
     printf("\nPDCCH + fading simulation complete.\n");
 
     free(dci); free(dci_crc); free(coded); free(rm_tx);
-    free(tx_syms); free(rx_raw); free(eq_tx); free(h_known); free(alpha);
+    free(tx_syms); free(rx_raw); free(eq_tx); free(h_known); free(alpha); free(nv_tx);
 }

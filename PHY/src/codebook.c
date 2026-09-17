@@ -200,6 +200,58 @@ void codebook_type1_sp_4port_print(int rank) {
  *
  * 총 탐색 후보: 96개  (수 μs 수준, 블록-평탄 채널 1회 드로우 당 1회 실행)
  * ════════════════════════════════════════════════════════════════════════ */
+/* Rank-1 capacity for one (i1_1,i2) candidate -- log2(1+SNR), SNR from
+ * post-beamforming received power. Factored out of the search loop below
+ * so codebook_type1_sp_4port_effective_snr_db() (tasks/todo.md "OLLA를
+ * CL_XPORT로 확장") can evaluate the one already-selected candidate
+ * without duplicating this formula. */
+static double rank1_capacity_bps(const cx_t H[4][4], double N0, int i1_1, int i2) {
+    cx_t W[4];
+    codebook_type1_sp_4port_rank1(i1_1, i2, W);
+    double pw = 0.0;
+    for (int r = 0; r < 4; r++) {
+        cx_t he = 0.0;
+        for (int t = 0; t < P; t++) he += H[r][t] * W[t];
+        pw += CX_NORM(he);
+    }
+    return log2(1.0 + pw / N0);
+}
+
+/* Rank-2 capacity for one (i1_1,i1_3,i2) candidate -- MMSE post-detection
+ * SINR per layer, see the search loop's own comment below for the
+ * catastrophic-cancellation guard. Returns -1.0 for a numerically
+ * singular candidate (same convention the search loop uses to skip one). */
+static double rank2_capacity_bps(const cx_t H[4][4], double N0, int i1_1, int i1_3, int i2) {
+    cx_t W2[4][2];
+    codebook_type1_sp_4port_rank2(i1_1, i1_3, i2, W2);
+    cx_t he[4][2];
+    for (int r = 0; r < 4; r++)
+        for (int l = 0; l < 2; l++) {
+            he[r][l] = 0.0;
+            for (int t = 0; t < P; t++) he[r][l] += H[r][t] * W2[t][l];
+        }
+    cx_t A00 = (cx_t)N0, A01 = 0.0, A10 = 0.0, A11 = (cx_t)N0;
+    for (int r = 0; r < 4; r++) {
+        A00 += conj(he[r][0]) * he[r][0];
+        A01 += conj(he[r][0]) * he[r][1];
+        A10 += conj(he[r][1]) * he[r][0];
+        A11 += conj(he[r][1]) * he[r][1];
+    }
+    double det_re = creal(A00 * A11 - A01 * A10);
+    if (det_re < 1e-6 * N0 * N0) return -1.0;
+    cx_t det = det_re;
+    cx_t id = 1.0 / det;
+    double inv00 = creal( A11 * id);
+    double inv11 = creal( A00 * id);
+    double a0 = 1.0 - N0 * inv00;
+    double a1 = 1.0 - N0 * inv11;
+    if (a0 < 1e-6) a0 = 1e-6;
+    if (a1 < 1e-6) a1 = 1e-6;
+    if (a0 >= 1.0) a0 = 1.0 - 1e-6;
+    if (a1 >= 1.0) a1 = 1.0 - 1e-6;
+    return log2(1.0 + a0 / (1.0 - a0)) + log2(1.0 + a1 / (1.0 - a1));
+}
+
 void codebook_type1_sp_4port_ri_pmi_select(
         const cx_t H[4][4], double N0,
         int *sel_rank, int *sel_i1_1, int *sel_i1_3, int *sel_i2,
@@ -216,17 +268,7 @@ void codebook_type1_sp_4port_ri_pmi_select(
     /* ── Rank-1 탐색 (32 후보) ─────────────────────────────────────────── */
     for (int i1 = 0; i1 < N1 * O1; i1++) {
         for (int i2 = 0; i2 < 4; i2++) {
-            cx_t W[4];
-            codebook_type1_sp_4port_rank1(i1, i2, W);
-
-            /* H_eff[r] = Σ_t H[r][t]·W[t]  (4×1) → 수신 파워 */
-            double pw = 0.0;
-            for (int r = 0; r < 4; r++) {
-                cx_t he = 0.0;
-                for (int t = 0; t < P; t++) he += H[r][t] * W[t];
-                pw += CX_NORM(he);
-            }
-            double cap = log2(1.0 + pw / N0);
+            double cap = rank1_capacity_bps(H, N0, i1, i2);
 
             if (cap > best_cap_r1) {
                 best_cap_r1 = cap;
@@ -240,60 +282,12 @@ void codebook_type1_sp_4port_ri_pmi_select(
     for (int i1_3 = 0; i1_3 <= 1; i1_3++) {
         for (int i1 = 0; i1 < N1 * O1; i1++) {
             for (int i2 = 0; i2 < 4; i2++) {
-                cx_t W2[4][2];
-                codebook_type1_sp_4port_rank2(i1, i1_3, i2, W2);
-
-                /* H_eff[r][l] = Σ_t H[r][t]·W2[t][l]  (4×2) */
-                cx_t he[4][2];
-                for (int r = 0; r < 4; r++)
-                    for (int l = 0; l < 2; l++) {
-                        he[r][l] = 0.0;
-                        for (int t = 0; t < P; t++) he[r][l] += H[r][t] * W2[t][l];
-                    }
-
-                /* A = H_eff^H H_eff + N₀·I  (2×2 Gramian) */
-                cx_t A00 = (cx_t)N0, A01 = 0.0, A10 = 0.0, A11 = (cx_t)N0;
-                for (int r = 0; r < 4; r++) {
-                    A00 += conj(he[r][0]) * he[r][0];
-                    A01 += conj(he[r][0]) * he[r][1];
-                    A10 += conj(he[r][1]) * he[r][0];
-                    A11 += conj(he[r][1]) * he[r][1];
-                }
-
-                /* A⁻¹ (2×2 직접 역산)
-                 * A = H_eff^H H_eff + N0·I, N0>0 이므로 A는 항상 엄밀히
-                 * 양의 정부호 → det = A00·A11 − |A01|² (허수부는 부동소수점
-                 * 잡음뿐이므로 실수부만 사용)는 항상 min(A의 고유값들)² ≥
-                 * N0² 이상으로 엄밀히 양수여야 한다(H_eff의 두 열이 완전히
-                 * 평행해 rank-2 유효채널이 실질적으로 rank-1로 퇴화하는
-                 * 경우에도 N0·I 항이 최소 N0² 이상을 보장). det가 이 하한
-                 * 근처거나 음수로 계산되면 그건 실제 특이 행렬이 아니라
-                 * A00·A11과 |A01|²이 거의 같은 큰 값이라 뺄셈에서 유효자릿수를
-                 * 잃은 catastrophic cancellation이다 — 이 경우 1/det의 부호가
-                 * 뒤집혀 아래 a0/a1이 허수적으로 1 근처까지 치솟고 log2 항이
-                 * 터무니없이 커지는 버그가 있었다(높은 XPD 누설 상관에서
-                 * H_eff 두 열이 거의 평행해지며 실측됨, 2026-08-27). N0²의
-                 * 작은 배수를 하한으로 두어 이런 후보는 건너뛴다 — 48개
-                 * rank-2 후보가 전부 이 하한에 걸리면 best_cap_r2가 초기값
-                 * -1.0에 머물러 최종 비교에서 자동으로 rank-1로 폴백된다. */
-                double det_re = creal(A00 * A11 - A01 * A10);
-                if (det_re < 1e-6 * N0 * N0) continue;
-                cx_t det = det_re;
-                cx_t id = 1.0 / det;
-                double inv00 = creal( A11 * id);
-                double inv11 = creal( A00 * id);
-
-                /* α_j = 1 − N₀·Re{(A⁻¹)_jj} */
-                double a0 = 1.0 - N0 * inv00;
-                double a1 = 1.0 - N0 * inv11;
-                if (a0 < 1e-6) a0 = 1e-6;
-                if (a1 < 1e-6) a1 = 1e-6;
-                if (a0 >= 1.0) a0 = 1.0 - 1e-6;
-                if (a1 >= 1.0) a1 = 1.0 - 1e-6;
-
-                /* C₂ = log₂(1+SINR₀) + log₂(1+SINR₁),  SINR_j = α_j/(1-α_j) */
-                double cap = log2(1.0 + a0 / (1.0 - a0)) + log2(1.0 + a1 / (1.0 - a1));
-
+                double cap = rank2_capacity_bps(H, N0, i1, i1_3, i2);
+                /* cap==-1.0 for a numerically singular candidate (see
+                 * rank2_capacity_bps's comment) never exceeds best_cap_r2's
+                 * own -1.0 initial value, so it's silently never selected --
+                 * bit-identical to this loop's previous `continue`-past-it
+                 * behavior before this was factored into a helper. */
                 if (cap > best_cap_r2) {
                     best_cap_r2 = cap;
                     *r2_i1_1  = i1;
@@ -319,6 +313,42 @@ void codebook_type1_sp_4port_ri_pmi_select(
         *sel_i2   = *r2_i2;
     }
     (void)best_cap;  /* 상위 호출자가 용량 값 자체는 사용 안 함 */
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * Effective per-layer SNR for an already-chosen (rank, i1_1, i1_3, i2)
+ * candidate (tasks/todo.md "OLLA를 CL_XPORT로 추가 확장")
+ *
+ * Design decision (confirmed with user, 2026-09-15): OLLA's accumulated
+ * offset never feeds back into codebook_type1_sp_4port_ri_pmi_select()
+ * itself -- RI/PMI stays a pure channel(H,N0)-only decision, unchanged
+ * from every existing (non-OLLA) caller of that function, matching this
+ * project's other OLLA extensions' existing simplification of not
+ * modeling MIMO detection loss in the link-adaptation loop. What DOES
+ * change for an OLLA caller: which rank got picked has a real precoding-
+ * gain difference (rank-1 vs rank-2 are not comparable "the same MCS
+ * fits either" cases), so the MCS decision needs a rank-aware effective
+ * SNR rather than reusing the same nominal link SNR regardless of rank
+ * (as SIMO_MRC/SM_2X2/SM_4X4's simpler fixed-rank OLLA functions do).
+ *
+ * effSNR_dB = 10*log10(2^(C/rank) - 1), i.e. the single per-layer SNR
+ * that would produce the SAME total capacity C if evenly split across
+ * `rank` layers -- C computed by the identical rank1_capacity_bps()/
+ * rank2_capacity_bps() helpers the search above already uses, evaluated
+ * once for the specific candidate already chosen (not re-searched). */
+double codebook_type1_sp_4port_effective_snr_db(const cx_t H[4][4], double N0,
+        int rank, int i1_1, int i1_3, int i2) {
+    double cap = (rank == 1) ? rank1_capacity_bps(H, N0, i1_1, i2)
+                              : rank2_capacity_bps(H, N0, i1_1, i1_3, i2);
+    /* A rank-2 candidate this function is ever called with should always
+     * be the winner codebook_type1_sp_4port_ri_pmi_select() itself just
+     * selected (best_cap_r2 > best_cap_r1 >= 0), so cap<0 (the singular-
+     * candidate sentinel) shouldn't occur here in practice -- floored
+     * defensively rather than trusted blindly. */
+    if (cap < 0.0) cap = 0.0;
+    double per_layer_cap = cap / (double)rank;
+    double eff_snr_lin = pow(2.0, per_layer_cap) - 1.0;
+    return 10.0 * log10(eff_snr_lin);
 }
 
 /* ════════════════════════════════════════════════════════════════════════

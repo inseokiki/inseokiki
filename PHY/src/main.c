@@ -170,7 +170,7 @@ int main(int argc, char *argv[]) {
     if (argc > 1) cfg_file = argv[1];
 
     ConfigParser parser;
-    config_parser_load(&parser, cfg_file);
+    if (!config_parser_load(&parser, cfg_file)) return 1;
     L1Config cfg = config_parser_get(&parser);
 
     printf("=== 5G PHY Link Level Simulator (C) ===\n");
@@ -206,6 +206,12 @@ int main(int argc, char *argv[]) {
                 run_pdsch_olla_sm2x2_simulation(&cfg);
             else if (strcmp(cfg.mimoMode,"SM_4X4")==0)
                 run_pdsch_olla_sm4x4_simulation(&cfg);
+            else if (strcmp(cfg.mimoMode,"CL_4PORT")==0)
+                run_pdsch_olla_cl_4port_simulation(&cfg);
+            else if (strcmp(cfg.mimoMode,"CL_8PORT")==0)
+                run_pdsch_olla_cl_8port_simulation(&cfg);
+            else if (strcmp(cfg.mimoMode,"CL_32PORT")==0)
+                run_pdsch_olla_cl_32port_simulation(&cfg);
             else
                 run_pdsch_olla_simulation(&cfg);   /* SISO 시계열 — MIMO_MODE 무관하게 지원 안 되는 값은 config_parser.c가 차단 */
         } else if (!cfg.useDmrs) {
@@ -284,6 +290,8 @@ int main(int argc, char *argv[]) {
                 run_pusch_sm2x2_tdl_harq_simulation(&cfg);
             else if (strcmp(cfg.mimoMode,"SM_2X2")==0)
                 run_pusch_sm2x2_harq_simulation(&cfg);
+            else if (strcmp(cfg.mimoMode,"UL_CB_4PORT")==0)
+                run_pusch_ul_cb_4port_extended_simulation(&cfg);
             else if (strcmp(cfg.mimoMode,"UL_EIGEN_BF")==0)
                 run_pusch_ul_eigen_bf_harq_simulation(&cfg);   /* flat/TDL 모두 지원 (함수 내부에서 분기) */
             else if (strcmp(cfg.mimoMode,"UL_EIGEN_BF_2TX")==0)
@@ -295,6 +303,11 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(cfg.mimoMode,"SM_2X2")==0) {
             if (strcmp(cfg.channelModel,"TDL")==0) run_pusch_sm2x2_tdl_simulation(&cfg);
             else                                    run_pusch_sm2x2_simulation(&cfg);
+        } else if (strcmp(cfg.mimoMode,"UL_CB_4PORT")==0) {
+            if (strcmp(cfg.channelModel,"TDL")==0)
+                run_pusch_ul_cb_4port_extended_simulation(&cfg);
+            else
+                run_pusch_ul_cb_4port_simulation(&cfg);
         } else if (strcmp(cfg.mimoMode,"UL_EIGEN_BF")==0) {
             if (strcmp(cfg.channelModel,"TDL")==0) run_pusch_ul_eigen_bf_tdl_simulation(&cfg);
             else                                    run_pusch_ul_eigen_bf_simulation(&cfg);

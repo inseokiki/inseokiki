@@ -121,6 +121,34 @@ void qam_demap_llr(const cx_t *syms, int n, const char *mod,
     }
 }
 
+void qam_demap_llr_re(const cx_t *syms, int n, const char *mod,
+                      const double *noise_var, double *llr) {
+    int bps  = get_bits_per_symbol(mod);
+    int bpd  = bps / 2;
+    double nm = norm_factor(bps);
+    PamEntry t[16];
+    build_pam_table(t, bpd);
+    int nl    = 1 << bpd;
+    double lv[16];  /* max 16 PAM levels (256QAM: 4bpd -> 16) */
+    for (int j = 0; j < nl; j++) lv[j] = t[j].level * nm;
+    for (int i = 0; i < n; i++) {
+        double sc = 2.0 / noise_var[i];
+        double rI = creal(syms[i]), rQ = cimag(syms[i]);
+        for (int k = 0; k < bpd; k++) {
+            double m0I=DBL_MAX, m1I=DBL_MAX, m0Q=DBL_MAX, m1Q=DBL_MAX;
+            for (int j = 0; j < nl; j++) {
+                int bv = (t[j].bits >> (bpd - 1 - k)) & 1;
+                double dI = rI - lv[j]; double dQ = rQ - lv[j];
+                double dI2 = dI*dI,     dQ2 = dQ*dQ;
+                if (bv == 0) { if (dI2 < m0I) m0I=dI2; if (dQ2 < m0Q) m0Q=dQ2; }
+                else         { if (dI2 < m1I) m1I=dI2; if (dQ2 < m1Q) m1Q=dQ2; }
+            }
+            llr[i*bps + 2*k]     = sc * (m1I - m0I);
+            llr[i*bps + 2*k + 1] = sc * (m1Q - m0Q);
+        }
+    }
+}
+
 void qam_demap_llr_mmse(const cx_t *rx, int n, const char *mod,
                          const cx_t *h_data, double N0, double *llr) {
     int bps  = get_bits_per_symbol(mod);

@@ -15,6 +15,7 @@
 #include "mimo.h"
 #include "nr_rate_matching.h"
 #include "nr_sch.h"
+#include "tbs.h"
 #include "tdl.h"
 #include "codebook.h"
 #include "codebook_8port.h"
@@ -214,8 +215,7 @@ void run_pdsch_dmrs_simulation(const L1Config *cfg) {
     dmrs_sequence(c_init, num_pilots, dmrs_sym);
 
     int max_dbits = num_data * bps;
-    int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1) tbsz = 1;
+    int tbsz = nr_determine_tbs(max_dbits, cr);
 
     int B = tbsz + crc_bits;
     NRSegInfo seg; nr_seg_compute(B, cr, &seg);
@@ -391,8 +391,7 @@ void run_pdsch_simo_mrc_simulation(const L1Config *cfg) {
     dmrs_sequence(c_init, num_pilots, dmrs_sym);
 
     int max_dbits = num_data * bps;
-    int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1) tbsz = 1;
+    int tbsz = nr_determine_tbs(max_dbits, cr);
 
     int B = tbsz + crc_bits;
     NRSegInfo seg; nr_seg_compute(B, cr, &seg);
@@ -566,8 +565,7 @@ void run_pdsch_simo_mrc_tdl_simulation(const L1Config *cfg) {
     dmrs_sequence(c_init, num_pilots, dmrs_sym);
 
     int max_dbits = num_data * bps;
-    int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1) tbsz = 1;
+    int tbsz = nr_determine_tbs(max_dbits, cr);
 
     int B = tbsz + crc_bits;
     NRSegInfo seg; nr_seg_compute(B, cr, &seg);
@@ -614,6 +612,7 @@ void run_pdsch_simo_mrc_tdl_simulation(const L1Config *cfg) {
     cx_t *h_full0    = (cx_t *)malloc(active       * sizeof(cx_t));
     cx_t *h_full1    = (cx_t *)malloc(active       * sizeof(cx_t));
     cx_t *eq_data    = (cx_t *)malloc(num_data      * sizeof(cx_t));
+    double *nv_all   = (double *)malloc(num_data     * sizeof(double));
     double *allllr   = (double *)malloc(E            * sizeof(double));
     double *soft_buf = (double *)malloc(acsz         * sizeof(double));
     int    *decoded_cb = (int *)malloc(ldpc.info_size * sizeof(int));
@@ -627,7 +626,7 @@ void run_pdsch_simo_mrc_tdl_simulation(const L1Config *cfg) {
 
     TDLChannel tdl_ch;
     for (double snr=cfg->snrStart; snr<=cfg->snrEnd+1e-6; snr+=cfg->snrStep) {
-        tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        tdl_channel_init(&tdl_ch, cfg->tdlProfile[0], cfg->tdlDelaySpreadNs, scs_hz, snr);
         double snrlin = pow(10.0, snr/10.0);
         double N0     = 1.0 / snrlin;
         double sigma  = sqrt(1.0 / (2.0 * snrlin));
@@ -673,18 +672,19 @@ void run_pdsch_simo_mrc_tdl_simulation(const L1Config *cfg) {
             interpolate_channel(h_pilots0, num_pilots, pilot_pos, active, h_full0);
             interpolate_channel(h_pilots1, num_pilots, pilot_pos, active, h_full1);
 
-            /* MRC combine at data REs */
-            double nv_sum = 0.0;
+            /* MRC combine at data REs -- per-RE noise variance kept as an
+             * array (not averaged) since it varies across REs under TDL
+             * (tasks/todo.md "RE별 effective noise variance 기반 LLR",
+             * P1-1); a constant array reproduces the old averaged result
+             * exactly for a genuinely flat channel, so this is lossless
+             * there too. */
             for (int d=0;d<num_data;d++) {
                 cx_t hd[2]  = { h_full0[data_pos[d]], h_full1[data_pos[d]] };
                 cx_t yd[2]  = { rx_grid0[data_pos[d]], rx_grid1[data_pos[d]] };
-                double nv;
-                mrc_combine(hd, yd, N0, &eq_data[d], &nv);
-                nv_sum += nv;
+                mrc_combine(hd, yd, N0, &eq_data[d], &nv_all[d]);
             }
-            double env = nv_sum / num_data;
 
-            qam_demap_llr(eq_data, num_data, mcs.modulation, env, allllr);
+            qam_demap_llr_re(eq_data, num_data, mcs.modulation, nv_all, allllr);
             int roff = 0;
             int cb_crc_ok = 1;
             for (int r = 0; r < seg.C; r++) {
@@ -719,7 +719,7 @@ void run_pdsch_simo_mrc_tdl_simulation(const L1Config *cfg) {
     free(rm); free(Er); free(selbits);
     free(data_syms); free(tx_grid); free(rx_grid0); free(rx_grid1);
     free(rx_pilots0); free(rx_pilots1); free(h_pilots0); free(h_pilots1);
-    free(h_full0); free(h_full1); free(eq_data);
+    free(h_full0); free(h_full1); free(eq_data); free(nv_all);
     free(allllr); free(soft_buf); free(decoded_cb); free(decoded_tb); free(taps0); free(taps1);
 }
 
@@ -756,8 +756,7 @@ void run_pdsch_simo_mrc_tdl_harq_simulation(const L1Config *cfg) {
 
     int E = num_data * bps;   /* bits sent per (re)transmission occasion */
     int max_dbits = E;
-    int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1) tbsz = 1;
+    int tbsz = nr_determine_tbs(max_dbits, cr);
 
     /* TS 38.212 5.2.2 multi-code-block segmentation (P0-2c HARQ follow-up,
      * 2026-09-03) -- see run_pdsch_harq_simulation() for the full design
@@ -821,6 +820,7 @@ void run_pdsch_simo_mrc_tdl_harq_simulation(const L1Config *cfg) {
     cx_t *h_full0   = (cx_t *)malloc(active     * sizeof(cx_t));
     cx_t *h_full1   = (cx_t *)malloc(active     * sizeof(cx_t));
     cx_t *eq_data   = (cx_t *)malloc(num_data   * sizeof(cx_t));
+    double *nv_all  = (double *)malloc(num_data  * sizeof(double));
     double *allllr  = (double *)malloc(E   * sizeof(double));
     double **soft_buf = (double **)malloc(seg.C * sizeof(double *));
     for (int r = 0; r < seg.C; r++) soft_buf[r] = (double *)malloc(acsz * sizeof(double));
@@ -835,7 +835,7 @@ void run_pdsch_simo_mrc_tdl_harq_simulation(const L1Config *cfg) {
 
     TDLChannel tdl_ch;
     for (double snr=cfg->snrStart; snr<=cfg->snrEnd+1e-6; snr+=cfg->snrStep) {
-        tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        tdl_channel_init(&tdl_ch, cfg->tdlProfile[0], cfg->tdlDelaySpreadNs, scs_hz, snr);
         double N0    = 1.0 / pow(10.0, snr/10.0);
         double sigma = sqrt(N0 / 2.0);
         int total_err=0, total_bits=0, blk_err_final=0;
@@ -889,17 +889,13 @@ void run_pdsch_simo_mrc_tdl_harq_simulation(const L1Config *cfg) {
                 interpolate_channel(h_pilots0, num_pilots, pilot_pos, active, h_full0);
                 interpolate_channel(h_pilots1, num_pilots, pilot_pos, active, h_full1);
 
-                double nv_sum = 0.0;
                 for (int d=0;d<num_data;d++) {
                     cx_t hd[2] = { h_full0[data_pos[d]], h_full1[data_pos[d]] };
                     cx_t yd[2] = { rx_grid0[data_pos[d]], rx_grid1[data_pos[d]] };
-                    double nv;
-                    mrc_combine(hd, yd, N0, &eq_data[d], &nv);
-                    nv_sum += nv;
+                    mrc_combine(hd, yd, N0, &eq_data[d], &nv_all[d]);
                 }
-                double env = nv_sum / num_data;
 
-                qam_demap_llr(eq_data, num_data, mcs.modulation, env, allllr);
+                qam_demap_llr_re(eq_data, num_data, mcs.modulation, nv_all, allllr);
 
                 int roff = 0;
                 int cb_crc_ok = 1;
@@ -947,7 +943,7 @@ void run_pdsch_simo_mrc_tdl_harq_simulation(const L1Config *cfg) {
     free(rm); free(Er); free(selbits);
     free(data_syms); free(tx_grid); free(rx_grid0); free(rx_grid1);
     free(rx_pilots0); free(rx_pilots1); free(h_pilots0); free(h_pilots1);
-    free(h_full0); free(h_full1); free(eq_data);
+    free(h_full0); free(h_full1); free(eq_data); free(nv_all);
     free(allllr);
     for (int r = 0; r < seg.C; r++) free(soft_buf[r]);
     free(soft_buf);
@@ -988,8 +984,7 @@ void run_pdsch_sm2x2_simulation(const L1Config *cfg) {
     dmrs_sequence(0x1abcdef2u, nppl, dmrsB);
 
     int max_dbits = num_data * bps;   /* per layer; both layers share the same REs */
-    int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1) tbsz = 1;
+    int tbsz = nr_determine_tbs(max_dbits, cr);
 
     int B = tbsz + crc_bits;
     NRSegInfo seg; nr_seg_compute(B, cr, &seg);   /* shared by both layers (same B/cr) */
@@ -1198,8 +1193,7 @@ void run_pdsch_sm2x2_tdl_simulation(const L1Config *cfg) {
     dmrs_sequence(0x1abcdef2u, nppl, dmrsB);
 
     int max_dbits = num_data * bps;   /* per layer; both layers share the same REs */
-    int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1) tbsz = 1;
+    int tbsz = nr_determine_tbs(max_dbits, cr);
 
     int B = tbsz + crc_bits;
     NRSegInfo seg; nr_seg_compute(B, cr, &seg);   /* shared by both layers (same B/cr) */
@@ -1243,6 +1237,7 @@ void run_pdsch_sm2x2_tdl_simulation(const L1Config *cfg) {
     cx_t *tx_grid0=(cx_t*)malloc(active*sizeof(cx_t)), *tx_grid1=(cx_t*)malloc(active*sizeof(cx_t));
     cx_t *rx_grid0=(cx_t*)malloc(active*sizeof(cx_t)), *rx_grid1=(cx_t*)malloc(active*sizeof(cx_t));
     cx_t *x_hatA=(cx_t*)malloc(num_data*sizeof(cx_t)), *x_hatB=(cx_t*)malloc(num_data*sizeof(cx_t));
+    double *nvA_all=(double*)malloc(num_data*sizeof(double)), *nvB_all=(double*)malloc(num_data*sizeof(double));
     double *allllrA=(double*)malloc(E*sizeof(double)), *allllrB=(double*)malloc(E*sizeof(double));
     double *soft_bufA=(double*)malloc(acsz*sizeof(double)), *soft_bufB=(double*)malloc(acsz*sizeof(double));
     int *decodedA_cb=(int*)malloc(ldpc.info_size*sizeof(int)), *decodedB_cb=(int*)malloc(ldpc.info_size*sizeof(int));
@@ -1264,7 +1259,7 @@ void run_pdsch_sm2x2_tdl_simulation(const L1Config *cfg) {
 
     TDLChannel tdl_ch;
     for (double snr=cfg->snrStart; snr<=cfg->snrEnd+1e-6; snr+=cfg->snrStep) {
-        tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        tdl_channel_init(&tdl_ch, cfg->tdlProfile[0], cfg->tdlDelaySpreadNs, scs_hz, snr);
         double snrlin = pow(10.0, snr/10.0);
         double N0    = 1.0 / snrlin;
         double sigma = sqrt(1.0 / (2.0 * snrlin));
@@ -1331,8 +1326,10 @@ void run_pdsch_sm2x2_tdl_simulation(const L1Config *cfg) {
             interpolate_channel(h_pilots01, nppl, pilotB, active, h01_full);
             interpolate_channel(h_pilots11, nppl, pilotB, active, h11_full);
 
-            /* detection + demap at data REs */
-            double nvA_sum=0.0, nvB_sum=0.0;
+            /* detection + demap at data REs -- per-RE noise variance kept
+             * as arrays (tasks/todo.md "RE별 effective noise variance
+             * 기반 LLR", P1-1) instead of the old nvA_sum/nvB_sum average,
+             * since |h|^2 varies per RE under TDL. */
             for (int d=0;d<num_data;d++) {
                 int re = data_pos[d];
                 cx_t h_hat[2][2] = {
@@ -1344,12 +1341,11 @@ void run_pdsch_sm2x2_tdl_simulation(const L1Config *cfg) {
                 if (use_mmse) mimo_mmse_detect(h_hat, y, N0, xh, nv);
                 else          mimo_zf_detect  (h_hat, y, N0, xh, nv);
                 x_hatA[d] = xh[0]; x_hatB[d] = xh[1];
-                nvA_sum += nv[0]; nvB_sum += nv[1];
+                nvA_all[d] = nv[0]; nvB_all[d] = nv[1];
             }
-            double envA = nvA_sum / num_data, envB = nvB_sum / num_data;
 
-            qam_demap_llr(x_hatA, num_data, mcs.modulation, envA, allllrA);
-            qam_demap_llr(x_hatB, num_data, mcs.modulation, envB, allllrB);
+            qam_demap_llr_re(x_hatA, num_data, mcs.modulation, nvA_all, allllrA);
+            qam_demap_llr_re(x_hatB, num_data, mcs.modulation, nvB_all, allllrB);
             int roffA = 0, roffB = 0;
             int cbA_crc_ok = 1, cbB_crc_ok = 1;
             for (int r = 0; r < seg.C; r++) {
@@ -1397,6 +1393,7 @@ void run_pdsch_sm2x2_tdl_simulation(const L1Config *cfg) {
     free(rmA); free(rmB); free(Er); free(selbitsA); free(selbitsB);
     free(symsA); free(symsB); free(tx_grid0); free(tx_grid1);
     free(rx_grid0); free(rx_grid1); free(x_hatA); free(x_hatB);
+    free(nvA_all); free(nvB_all);
     free(allllrA); free(allllrB); free(soft_bufA); free(soft_bufB);
     free(decodedA_cb); free(decodedB_cb); free(decodedA_tb); free(decodedB_tb);
     free(rx_pilotsA0); free(rx_pilotsA1); free(rx_pilotsB0); free(rx_pilotsB1);
@@ -1450,8 +1447,7 @@ void run_pdsch_sm2x2_tdl_harq_simulation(const L1Config *cfg) {
 
     int E = num_data * bps;   /* bits sent per layer per (re)transmission occasion */
     int max_dbits = E;
-    int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1) tbsz = 1;
+    int tbsz = nr_determine_tbs(max_dbits, cr);
 
     /* TS 38.212 5.2.2 multi-code-block segmentation (P0-2c HARQ follow-up,
      * 2026-09-03) -- see run_pdsch_harq_simulation() for the full design
@@ -1517,6 +1513,7 @@ void run_pdsch_sm2x2_tdl_harq_simulation(const L1Config *cfg) {
     cx_t *tx_grid0=(cx_t*)malloc(active*sizeof(cx_t)), *tx_grid1=(cx_t*)malloc(active*sizeof(cx_t));
     cx_t *rx_grid0=(cx_t*)malloc(active*sizeof(cx_t)), *rx_grid1=(cx_t*)malloc(active*sizeof(cx_t));
     cx_t *x_hatA=(cx_t*)malloc(num_data*sizeof(cx_t)), *x_hatB=(cx_t*)malloc(num_data*sizeof(cx_t));
+    double *nvA_all=(double*)malloc(num_data*sizeof(double)), *nvB_all=(double*)malloc(num_data*sizeof(double));
     double *allllrA=(double*)malloc(E*sizeof(double)), *allllrB=(double*)malloc(E*sizeof(double));
     double **soft_bufA=(double**)malloc(seg.C*sizeof(double*)), **soft_bufB=(double**)malloc(seg.C*sizeof(double*));
     for (int r=0;r<seg.C;r++) { soft_bufA[r]=(double*)malloc(acsz*sizeof(double)); soft_bufB[r]=(double*)malloc(acsz*sizeof(double)); }
@@ -1538,7 +1535,7 @@ void run_pdsch_sm2x2_tdl_harq_simulation(const L1Config *cfg) {
 
     TDLChannel tdl_ch;
     for (double snr=cfg->snrStart; snr<=cfg->snrEnd+1e-6; snr+=cfg->snrStep) {
-        tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        tdl_channel_init(&tdl_ch, cfg->tdlProfile[0], cfg->tdlDelaySpreadNs, scs_hz, snr);
         double snrlin = pow(10.0, snr/10.0);
         double N0     = 1.0 / snrlin;
         double sigma  = sqrt(1.0 / (2.0 * snrlin));
@@ -1604,10 +1601,10 @@ void run_pdsch_sm2x2_tdl_harq_simulation(const L1Config *cfg) {
                 interpolate_channel(h_pilots01, nppl, pilotB, active, h01_full);
                 interpolate_channel(h_pilots11, nppl, pilotB, active, h11_full);
 
-                /* detection + per-RE noise variance, averaged over data REs
-                   into a single representative variance for the LLR
-                   demapper (same approximation as run_pdsch_sm2x2_tdl_simulation()) */
-                double nvA_sum=0.0, nvB_sum=0.0;
+                /* detection + per-RE noise variance, kept as arrays (not
+                 * averaged) since |h|^2 varies per RE under TDL
+                 * (tasks/todo.md "RE별 effective noise variance 기반
+                 * LLR", P1-1). */
                 for (int d=0;d<num_data;d++) {
                     int re = data_pos[d];
                     cx_t h_hat[2][2] = {
@@ -1619,12 +1616,11 @@ void run_pdsch_sm2x2_tdl_harq_simulation(const L1Config *cfg) {
                     if (use_mmse) mimo_mmse_detect(h_hat, y, N0, xh, nv);
                     else          mimo_zf_detect  (h_hat, y, N0, xh, nv);
                     x_hatA[d] = xh[0]; x_hatB[d] = xh[1];
-                    nvA_sum += nv[0]; nvB_sum += nv[1];
+                    nvA_all[d] = nv[0]; nvB_all[d] = nv[1];
                 }
-                double envA = nvA_sum / num_data, envB = nvB_sum / num_data;
 
-                qam_demap_llr(x_hatA, num_data, mcs.modulation, envA, allllrA);
-                qam_demap_llr(x_hatB, num_data, mcs.modulation, envB, allllrB);
+                qam_demap_llr_re(x_hatA, num_data, mcs.modulation, nvA_all, allllrA);
+                qam_demap_llr_re(x_hatB, num_data, mcs.modulation, nvB_all, allllrB);
 
                 int roffA = 0, roffB = 0;
                 int cbA_crc_ok = 1, cbB_crc_ok = 1;
@@ -1682,6 +1678,7 @@ void run_pdsch_sm2x2_tdl_harq_simulation(const L1Config *cfg) {
     free(selbitsA); free(selbitsB);
     free(data_symsA); free(data_symsB); free(tx_grid0); free(tx_grid1);
     free(rx_grid0); free(rx_grid1); free(x_hatA); free(x_hatB);
+    free(nvA_all); free(nvB_all);
     free(allllrA); free(allllrB);
     for (int r=0;r<seg.C;r++) { free(soft_bufA[r]); free(soft_bufB[r]); }
     free(soft_bufA); free(soft_bufB);
@@ -1726,8 +1723,7 @@ void run_pdsch_harq_simulation(const L1Config *cfg) {
 
     int E = num_data * bps;   /* bits sent per (re)transmission occasion */
     int max_dbits = E;
-    int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1) tbsz = 1;
+    int tbsz = nr_determine_tbs(max_dbits, cr);
 
     /* TS 38.212 5.2.2 multi-code-block segmentation (P0-2c HARQ follow-up,
      * 2026-09-03): 8424-bit clamp removed. B/seg.C code blocks share one
@@ -1941,8 +1937,7 @@ void run_pdsch_tdl_simulation(const L1Config *cfg) {
     dmrs_sequence(c_init, num_pilots, dmrs_sym);
 
     int max_dbits = num_data * bps;
-    int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1) tbsz = 1;
+    int tbsz = nr_determine_tbs(max_dbits, cr);
 
     int B = tbsz + crc_bits;
     NRSegInfo seg; nr_seg_compute(B, cr, &seg);
@@ -1990,6 +1985,7 @@ void run_pdsch_tdl_simulation(const L1Config *cfg) {
     cx_t *rx_data    = (cx_t *)malloc(num_data      * sizeof(cx_t));
     cx_t *h_data     = (cx_t *)malloc(num_data      * sizeof(cx_t));
     cx_t *eq_data    = (cx_t *)malloc(num_data      * sizeof(cx_t));
+    double *nv_zf    = (double *)malloc(num_data     * sizeof(double));
     double *allllr   = (double *)malloc(E            * sizeof(double));
     double *soft_buf = (double *)malloc(acsz         * sizeof(double));
     int    *decoded_cb = (int *)malloc(ldpc.info_size * sizeof(int));
@@ -2002,7 +1998,7 @@ void run_pdsch_tdl_simulation(const L1Config *cfg) {
 
     TDLChannel tdl_ch;
     for (double snr=cfg->snrStart; snr<=cfg->snrEnd+1e-6; snr+=cfg->snrStep) {
-        tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        tdl_channel_init(&tdl_ch, cfg->tdlProfile[0], cfg->tdlDelaySpreadNs, scs_hz, snr);
         double snrlin = pow(10.0, snr/10.0);
         double N0     = 1.0 / snrlin;
         int total_err=0, total_bits=0, blk_err=0;
@@ -2049,11 +2045,18 @@ void run_pdsch_tdl_simulation(const L1Config *cfg) {
                 qam_demap_llr_mmse(eq_data, num_data, mcs.modulation, h_data, N0, allllr);
             } else {
                 zf_equalize(rx_data, h_data, num_data, eq_data);
-                double mhp = 0.0;
-                for (int d=0;d<num_data;d++) mhp += CX_NORM(h_data[d]);
-                mhp /= num_data;
-                double env = (mhp > 1e-10) ? N0/mhp : N0;
-                qam_demap_llr(eq_data, num_data, mcs.modulation, env, allllr);
+                /* Per-RE ZF post-equalization noise variance is exactly
+                 * N0/|h_d|^2 (y_eq[d]=x[d]+n[d]/h_data[d]) -- no averaging
+                 * needed, unlike the old single-scalar `env` this replaces
+                 * (tasks/todo.md "RE별 effective noise variance 기반 LLR",
+                 * P1-1). A deeply-faded RE (|h_d|^2 near 0) gets a very
+                 * large per-RE noise_var and is correctly down-weighted in
+                 * its own LLR instead of being blended into one average. */
+                for (int d=0;d<num_data;d++) {
+                    double hp = CX_NORM(h_data[d]);
+                    nv_zf[d] = N0 / (hp > 1e-10 ? hp : 1e-10);
+                }
+                qam_demap_llr_re(eq_data, num_data, mcs.modulation, nv_zf, allllr);
             }
             int roff = 0;
             int cb_crc_ok = 1;
@@ -2089,7 +2092,7 @@ void run_pdsch_tdl_simulation(const L1Config *cfg) {
     free(rm); free(Er); free(selbits);
     free(data_syms); free(tx_grid); free(rx_grid);
     free(rx_pilots); free(h_pilots); free(h_full);
-    free(rx_data); free(h_data); free(eq_data);
+    free(rx_data); free(h_data); free(eq_data); free(nv_zf);
     free(allllr); free(soft_buf); free(decoded_cb); free(decoded_tb); free(taps);
 }
 
@@ -2144,8 +2147,7 @@ void run_pdsch_sm4x4_simulation(const L1Config *cfg) {
 
     /* 코드워드 크기 (레이어마다 동일) */
     int max_dbits = num_data * bps;
-    int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1)    tbsz = 1;
+    int tbsz = nr_determine_tbs(max_dbits, cr);
 
     int B = tbsz + crc_bits;
     NRSegInfo seg; nr_seg_compute(B, cr, &seg);   /* shared by all NL layers (same B/cr) */
@@ -2360,8 +2362,7 @@ void run_pdsch_sm4x4_tdl_simulation(const L1Config *cfg) {
     int    crc_bits = 24;
 
     int max_dbits = num_data * bps;
-    int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1) tbsz = 1;
+    int tbsz = nr_determine_tbs(max_dbits, cr);
     int B = tbsz + crc_bits;
     NRSegInfo seg; nr_seg_compute(B, cr, &seg);   /* shared by all NL layers (same B/cr) */
     int payload = seg.Kprime - seg.L;
@@ -2395,7 +2396,7 @@ void run_pdsch_sm4x4_tdl_simulation(const L1Config *cfg) {
     int   *tb[NL], *tb_crc[NL], *cb_bits[NL], *coded[NL], **rm[NL], *selbits[NL];
     int   *decoded_cb[NL], *decoded_tb[NL];
     cx_t  *syms[NL];
-    double *allllr[NL], *soft_buf[NL];
+    double *allllr[NL], *soft_buf[NL], *nv_all[NL];
     for (int l = 0; l < NL; l++) {
         tb[l]          = (int   *)malloc(tbsz  * sizeof(int));
         tb_crc[l]      = (int   *)malloc(B     * sizeof(int));
@@ -2407,6 +2408,7 @@ void run_pdsch_sm4x4_tdl_simulation(const L1Config *cfg) {
         syms[l]        = (cx_t  *)malloc(num_data * sizeof(cx_t));
         allllr[l]      = (double *)malloc(E      * sizeof(double));
         soft_buf[l]    = (double *)malloc(acsz   * sizeof(double));
+        nv_all[l]      = (double *)malloc(num_data * sizeof(double));
         decoded_cb[l]  = (int   *)malloc(ldpc.info_size * sizeof(int));
         decoded_tb[l]  = (int   *)malloc(B * sizeof(int));
     }
@@ -2424,7 +2426,7 @@ void run_pdsch_sm4x4_tdl_simulation(const L1Config *cfg) {
     cx_t x_hat_re[NL]; double nv_re[NL];
 
     for (double snr = cfg->snrStart; snr <= cfg->snrEnd + 1e-6; snr += cfg->snrStep) {
-        tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        tdl_channel_init(&tdl_ch, cfg->tdlProfile[0], cfg->tdlDelaySpreadNs, scs_hz, snr);
         double N0    = 1.0 / pow(10.0, snr / 10.0);
         double sigma = sqrt(N0 / 2.0);
 
@@ -2454,9 +2456,9 @@ void run_pdsch_sm4x4_tdl_simulation(const L1Config *cfg) {
                 for (int t = 0; t < NL; t++)
                     tdl_draw(&tdl_ch, taps[r][t]);
 
-            /* ③ 검출 + LLR (genie-aided: 데이터 RE마다 진짜 H 사용) */
-            double nv_sum[NL]; for (int l = 0; l < NL; l++) nv_sum[l] = 0.0;
-
+            /* ③ 검출 + LLR (genie-aided: 데이터 RE마다 진짜 H 사용). RE별
+             * 잡음분산을 평균하지 않고 배열로 보존(tasks/todo.md "RE별
+             * effective noise variance 기반 LLR", P1-1). */
             for (int d = 0; d < num_data; d++) {
                 int k = data_pos[d];
 
@@ -2480,14 +2482,12 @@ void run_pdsch_sm4x4_tdl_simulation(const L1Config *cfg) {
 
                 for (int l = 0; l < NL; l++) {
                     syms[l][d] = x_hat_re[l];
-                    nv_sum[l] += nv_re[l];
+                    nv_all[l][d] = nv_re[l];
                 }
             }
 
-            for (int l = 0; l < NL; l++) {
-                double env = nv_sum[l] / num_data;
-                qam_demap_llr(syms[l], num_data, mcs.modulation, env, allllr[l]);
-            }
+            for (int l = 0; l < NL; l++)
+                qam_demap_llr_re(syms[l], num_data, mcs.modulation, nv_all[l], allllr[l]);
 
             /* ④ LDPC 디코딩 (코드블록별) */
             int trial_err = 0;
@@ -2528,7 +2528,7 @@ void run_pdsch_sm4x4_tdl_simulation(const L1Config *cfg) {
         free(tb[l]); free(tb_crc[l]); free(cb_bits[l]); free(coded[l]);
         for (int r = 0; r < seg.C; r++) free(rm[l][r]);
         free(rm[l]); free(selbits[l]);
-        free(syms[l]); free(allllr[l]); free(soft_buf[l]); free(decoded_cb[l]); free(decoded_tb[l]);
+        free(syms[l]); free(allllr[l]); free(soft_buf[l]); free(nv_all[l]); free(decoded_cb[l]); free(decoded_tb[l]);
     }
     for (int r = 0; r < NL; r++)
         for (int t = 0; t < NL; t++)
@@ -2560,8 +2560,7 @@ void run_pdsch_sm4x4_harq_simulation(const L1Config *cfg) {
     int    crc_bits = 24;
 
     int E    = num_data * bps;
-    int tbsz = (int)(E * cr);
-    if (tbsz < 1)    tbsz = 1;
+    int tbsz = nr_determine_tbs(E, cr);
 
     /* TS 38.212 5.2.2 multi-code-block segmentation (P0-2c HARQ follow-up,
      * 2026-09-03) -- see run_pdsch_harq_simulation() design note. All NL=4
@@ -2611,7 +2610,7 @@ void run_pdsch_sm4x4_harq_simulation(const L1Config *cfg) {
     int   *tb[NL], *tb_crc[NL], *cb_bits[NL], **coded_cw[NL], **rm[NL], *selbits[NL];
     int   *decoded_cb[NL], *decoded_tb[NL];
     cx_t  *data_syms[NL], *x_hat[NL];
-    double *allllr[NL], **soft_buf[NL];
+    double *allllr[NL], **soft_buf[NL], *nv_all[NL];
     for (int l = 0; l < NL; l++) {
         tb[l]         = (int *)malloc(tbsz    * sizeof(int));
         tb_crc[l]     = (int *)malloc(B       * sizeof(int));
@@ -2630,6 +2629,7 @@ void run_pdsch_sm4x4_harq_simulation(const L1Config *cfg) {
         allllr[l]     = (double *)malloc(E    * sizeof(double));
         soft_buf[l]   = (double **)malloc(seg.C * sizeof(double *));
         for (int r = 0; r < seg.C; r++) soft_buf[l][r] = (double *)malloc(acsz * sizeof(double));
+        nv_all[l]     = (double *)malloc(num_data * sizeof(double));
     }
     cx_t *taps[NL][NL];
     for (int r = 0; r < NL; r++)
@@ -2642,7 +2642,7 @@ void run_pdsch_sm4x4_harq_simulation(const L1Config *cfg) {
 
     TDLChannel tdl_ch;
     for (double snr = cfg->snrStart; snr <= cfg->snrEnd + 1e-6; snr += cfg->snrStep) {
-        if (is_tdl) tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        if (is_tdl) tdl_channel_init(&tdl_ch, cfg->tdlProfile[0], cfg->tdlDelaySpreadNs, scs_hz, snr);
         double snrlin = pow(10.0, snr / 10.0);
         double N0     = 1.0 / snrlin;
         double sigma  = sqrt(1.0 / (2.0 * snrlin));
@@ -2685,8 +2685,9 @@ void run_pdsch_sm4x4_harq_simulation(const L1Config *cfg) {
                             tdl_draw(&tdl_ch, taps[r][t]);
                 }
 
-                double nv_sum[NL]; for (int l = 0; l < NL; l++) nv_sum[l] = 0.0;
-
+                /* RE별 잡음분산을 평균하지 않고 배열로 보존(tasks/todo.md
+                 * "RE별 effective noise variance 기반 LLR", P1-1) -- flat
+                 * 모드는 h가 RE 전체에서 동일해 평균과 결과가 같음(무손실). */
                 for (int d = 0; d < num_data; d++) {
                     int k = data_pos[d];
                     cx_t h_true[NL][NL];
@@ -2714,13 +2715,12 @@ void run_pdsch_sm4x4_harq_simulation(const L1Config *cfg) {
                     else          mimo_zf_detect_4x4  (h_true, y, N0, x_hat_re, nv_re);
                     for (int l = 0; l < NL; l++) {
                         x_hat[l][d] = x_hat_re[l];
-                        nv_sum[l]  += nv_re[l];
+                        nv_all[l][d] = nv_re[l];
                     }
                 }
 
                 for (int l = 0; l < NL; l++) {
-                    double env = nv_sum[l] / num_data;
-                    qam_demap_llr(x_hat[l], num_data, mcs.modulation, env, allllr[l]);
+                    qam_demap_llr_re(x_hat[l], num_data, mcs.modulation, nv_all[l], allllr[l]);
 
                     int roff = 0;
                     int cb_crc_ok = 1;
@@ -2775,7 +2775,7 @@ void run_pdsch_sm4x4_harq_simulation(const L1Config *cfg) {
         free(coded_cw[l]); free(rm[l]); free(soft_buf[l]);
         free(selbits[l]); free(decoded_cb[l]); free(decoded_tb[l]);
         free(data_syms[l]); free(x_hat[l]);
-        free(allllr[l]);
+        free(allllr[l]); free(nv_all[l]);
     }
     for (int r = 0; r < NL; r++)
         for (int t = 0; t < NL; t++)
@@ -2814,8 +2814,7 @@ void run_pdsch_cl_4port_simulation(const L1Config *cfg) {
     int    crc_bits = 24;
 
     int max_dbits = num_data * bps;
-    int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1)    tbsz = 1;
+    int tbsz = nr_determine_tbs(max_dbits, cr);
 
     int B = tbsz + crc_bits;
     NRSegInfo seg; nr_seg_compute(B, cr, &seg);   /* shared by both CWs (same B/cr) */
@@ -3182,8 +3181,7 @@ void run_pdsch_cl_8port_simulation(const L1Config *cfg) {
     int    crc_bits = 24;
 
     int max_dbits = num_data * bps;
-    int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1)    tbsz = 1;
+    int tbsz = nr_determine_tbs(max_dbits, cr);
 
     int B = tbsz + crc_bits;
     NRSegInfo seg; nr_seg_compute(B, cr, &seg);   /* shared by both CWs (same B/cr) */
@@ -3555,8 +3553,7 @@ void run_pdsch_cl_4port_tdl_simulation(const L1Config *cfg) {
     int    crc_bits = 24;
 
     int max_dbits = num_data * bps;
-    int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1)    tbsz = 1;
+    int tbsz = nr_determine_tbs(max_dbits, cr);
     int B = tbsz + crc_bits;
 
     NRSegInfo seg; nr_seg_compute(B, cr, &seg);   /* shared by both CWs (same B/cr) */
@@ -3611,6 +3608,13 @@ void run_pdsch_cl_4port_tdl_simulation(const L1Config *cfg) {
         decoded_tb[l] = (int *)malloc(B * sizeof(int));
         rx_hat[l]  = (cx_t  *)malloc(nd     * sizeof(cx_t));
     }
+    /* per-RE noise variance, reused across this trial's sequential
+     * R1-fixed/R2-fixed/Adaptive scenarios (tasks/todo.md "RE별 effective
+     * noise variance 기반 LLR", P1-1) -- each scenario fully consumes its
+     * own values before the next starts, so one buffer set is safe. */
+    double *nv_all = (double *)malloc(nd * sizeof(double));
+    double *nv2_all[2];
+    for (int l = 0; l < 2; l++) nv2_all[l] = (double *)malloc(nd * sizeof(double));
     cx_t *nbuf = (cx_t *)malloc(nd * 4 * sizeof(cx_t));
 
     /* H 캐시: 각 data RE별 상관 적용된 채널 행렬 */
@@ -3653,7 +3657,7 @@ void run_pdsch_cl_4port_tdl_simulation(const L1Config *cfg) {
 
     TDLChannel tdl_ch;
     for (double snr = cfg->snrStart; snr <= cfg->snrEnd + 1e-6; snr += cfg->snrStep) {
-        tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        tdl_channel_init(&tdl_ch, cfg->tdlProfile[0], cfg->tdlDelaySpreadNs, scs_hz, snr);
         double N0    = 1.0 / pow(10.0, snr / 10.0);
         double sigma = sqrt(N0 / 2.0);
 
@@ -3761,7 +3765,6 @@ void run_pdsch_cl_4port_tdl_simulation(const L1Config *cfg) {
             {
                 cx_t W[4];
                 codebook_type1_sp_4port_rank1(i1_r1, i2_r1, W);
-                double nv_sum = 0.0;
                 for (int d = 0; d < nd; d++) {
                     cx_t h_eff[4];
                     for (int r = 0; r < 4; r++) {
@@ -3771,13 +3774,9 @@ void run_pdsch_cl_4port_tdl_simulation(const L1Config *cfg) {
                     cx_t y[4];
                     for (int r = 0; r < 4; r++)
                         y[r] = h_eff[r] * sym[0][d] + nbuf[d * 4 + r];
-                    cx_t xh; double nv;
-                    mrc_combine_4rx(h_eff, y, N0, &xh, &nv);
-                    rx_hat[0][d] = xh;
-                    nv_sum += nv;
+                    mrc_combine_4rx(h_eff, y, N0, &rx_hat[0][d], &nv_all[d]);
                 }
-                double env = nv_sum / nd;
-                qam_demap_llr(rx_hat[0], nd, mcs.modulation, env, allllr[0]);
+                qam_demap_llr_re(rx_hat[0], nd, mcs.modulation, nv_all, allllr[0]);
                 int roff0 = 0;
                 int cb0_crc_ok = 1;
                 for (int r = 0; r < seg.C; r++) {
@@ -3804,7 +3803,6 @@ void run_pdsch_cl_4port_tdl_simulation(const L1Config *cfg) {
             {
                 cx_t W2[4][2];
                 codebook_type1_sp_4port_rank2(i1_r2, i13_r2, i2_r2, W2);
-                double nv2_sum[2] = {0.0, 0.0};
                 for (int d = 0; d < nd; d++) {
                     cx_t h_eff2[4][2];
                     for (int r = 0; r < 4; r++)
@@ -3820,13 +3818,12 @@ void run_pdsch_cl_4port_tdl_simulation(const L1Config *cfg) {
                     mimo_mmse_detect_4rx2(h_eff2, y, N0, xh2, nv2);
                     rx_hat[0][d] = xh2[0];
                     rx_hat[1][d] = xh2[1];
-                    nv2_sum[0] += nv2[0];
-                    nv2_sum[1] += nv2[1];
+                    nv2_all[0][d] = nv2[0];
+                    nv2_all[1][d] = nv2[1];
                 }
                 int blk_r2 = 0;
                 for (int l = 0; l < 2; l++) {
-                    double env = nv2_sum[l] / nd;
-                    qam_demap_llr(rx_hat[l], nd, mcs.modulation, env, allllr[l]);
+                    qam_demap_llr_re(rx_hat[l], nd, mcs.modulation, nv2_all[l], allllr[l]);
                     int roff = 0;
                     int cb_crc_ok = 1;
                     for (int r = 0; r < seg.C; r++) {
@@ -3855,7 +3852,6 @@ void run_pdsch_cl_4port_tdl_simulation(const L1Config *cfg) {
             if (rank_ad == 1) {
                 cx_t W[4];
                 codebook_type1_sp_4port_rank1(i1_ad, i2_ad, W);
-                double nv_sum = 0.0;
                 for (int d = 0; d < nd; d++) {
                     cx_t h_eff[4];
                     for (int r = 0; r < 4; r++) {
@@ -3865,13 +3861,9 @@ void run_pdsch_cl_4port_tdl_simulation(const L1Config *cfg) {
                     cx_t y[4];
                     for (int r = 0; r < 4; r++)
                         y[r] = h_eff[r] * sym[0][d] + nbuf[d * 4 + r];
-                    cx_t xh; double nv;
-                    mrc_combine_4rx(h_eff, y, N0, &xh, &nv);
-                    rx_hat[0][d] = xh;
-                    nv_sum += nv;
+                    mrc_combine_4rx(h_eff, y, N0, &rx_hat[0][d], &nv_all[d]);
                 }
-                double env = nv_sum / nd;
-                qam_demap_llr(rx_hat[0], nd, mcs.modulation, env, allllr[0]);
+                qam_demap_llr_re(rx_hat[0], nd, mcs.modulation, nv_all, allllr[0]);
                 int roff0 = 0;
                 int cb0_crc_ok = 1;
                 for (int r = 0; r < seg.C; r++) {
@@ -3895,7 +3887,6 @@ void run_pdsch_cl_4port_tdl_simulation(const L1Config *cfg) {
             } else {
                 cx_t W2[4][2];
                 codebook_type1_sp_4port_rank2(i1_ad, i13_ad, i2_ad, W2);
-                double nv2_sum[2] = {0.0, 0.0};
                 for (int d = 0; d < nd; d++) {
                     cx_t h_eff2[4][2];
                     for (int r = 0; r < 4; r++)
@@ -3911,13 +3902,12 @@ void run_pdsch_cl_4port_tdl_simulation(const L1Config *cfg) {
                     mimo_mmse_detect_4rx2(h_eff2, y, N0, xh2, nv2);
                     rx_hat[0][d] = xh2[0];
                     rx_hat[1][d] = xh2[1];
-                    nv2_sum[0] += nv2[0];
-                    nv2_sum[1] += nv2[1];
+                    nv2_all[0][d] = nv2[0];
+                    nv2_all[1][d] = nv2[1];
                 }
                 int blk_ad = 0;
                 for (int l = 0; l < 2; l++) {
-                    double env = nv2_sum[l] / nd;
-                    qam_demap_llr(rx_hat[l], nd, mcs.modulation, env, allllr[l]);
+                    qam_demap_llr_re(rx_hat[l], nd, mcs.modulation, nv2_all[l], allllr[l]);
                     int roff = 0;
                     int cb_crc_ok = 1;
                     for (int r = 0; r < seg.C; r++) {
@@ -3968,7 +3958,8 @@ void run_pdsch_cl_4port_tdl_simulation(const L1Config *cfg) {
     ldpc_free(&ldpc);
     free(data_pos); free(pilot_pos);
     free(H_cache);
-    free(nbuf); free(Er);
+    free(nbuf); free(Er); free(nv_all);
+    for (int l = 0; l < 2; l++) free(nv2_all[l]);
     if (Hp_full) free(Hp_full);
     if (h_ls_pilot) free(h_ls_pilot);
     if (w_dft) free(w_dft);
@@ -4010,8 +4001,7 @@ void run_pdsch_cl_4port_harq_simulation(const L1Config *cfg) {
     int    crc_bits = 24;
 
     int E    = num_data * bps;
-    int tbsz = (int)(E * cr);
-    if (tbsz < 1)    tbsz = 1;
+    int tbsz = nr_determine_tbs(E, cr);
 
     /* TS 38.212 5.2.2 multi-code-block segmentation (P0-2c HARQ follow-up,
      * 2026-09-03) -- see run_pdsch_harq_simulation() design note. Both CWs
@@ -4060,7 +4050,7 @@ void run_pdsch_cl_4port_harq_simulation(const L1Config *cfg) {
     int   *tb[2], *tb_crc[2], *cb_bits[2], **coded_cw[2], **rm[2], *selbits[2];
     int   *decoded_cb[2], *decoded_tb[2];
     cx_t  *sym[2], *rx_hat[2];
-    double *allllr[2], **soft_buf[2];
+    double *allllr[2], **soft_buf[2], *nv_all[2];
     for (int l = 0; l < 2; l++) {
         tb[l]         = (int   *)malloc(tbsz    * sizeof(int));
         tb_crc[l]     = (int   *)malloc(B       * sizeof(int));
@@ -4076,6 +4066,7 @@ void run_pdsch_cl_4port_harq_simulation(const L1Config *cfg) {
         decoded_tb[l] = (int   *)malloc(B       * sizeof(int));
         sym[l]        = (cx_t  *)malloc(num_data * sizeof(cx_t));
         rx_hat[l]     = (cx_t  *)malloc(num_data * sizeof(cx_t));
+        nv_all[l]     = (double *)malloc(num_data * sizeof(double));
         allllr[l]     = (double *)malloc(E      * sizeof(double));
         soft_buf[l]   = (double **)malloc(seg.C * sizeof(double *));
         for (int r = 0; r < seg.C; r++) soft_buf[l][r] = (double *)malloc(acsz * sizeof(double));
@@ -4093,7 +4084,7 @@ void run_pdsch_cl_4port_harq_simulation(const L1Config *cfg) {
 
     TDLChannel tdl_ch;
     for (double snr = cfg->snrStart; snr <= cfg->snrEnd + 1e-6; snr += cfg->snrStep) {
-        if (is_tdl) tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        if (is_tdl) tdl_channel_init(&tdl_ch, cfg->tdlProfile[0], cfg->tdlDelaySpreadNs, scs_hz, snr);
         double N0    = 1.0 / pow(10.0, snr / 10.0);
         double sigma = sqrt(N0 / 2.0);
 
@@ -4195,8 +4186,6 @@ void run_pdsch_cl_4port_harq_simulation(const L1Config *cfg) {
                 }
                 attempt0_done = 0;   /* 다음 재진입 시 재추첨 트리거 */
 
-                double nv_sum[2] = {0.0, 0.0};
-
                 for (int d = 0; d < num_data; d++) {
                     cx_t tx[2];
                     for (int l = 0; l < nCW; l++) tx[l] = sym[l][d];
@@ -4217,10 +4206,7 @@ void run_pdsch_cl_4port_harq_simulation(const L1Config *cfg) {
                         cx_t y[4];
                         for (int r = 0; r < 4; r++)
                             y[r] = h_eff[r] * tx[0] + CX_MAKE(randn()*sigma, randn()*sigma);
-                        cx_t xh; double nv;
-                        mrc_combine_4rx(h_eff, y, N0, &xh, &nv);
-                        rx_hat[0][d] = xh;
-                        nv_sum[0] += nv;
+                        mrc_combine_4rx(h_eff, y, N0, &rx_hat[0][d], &nv_all[0][d]);
                     } else {
                         cx_t h_eff2[4][2];
                         if (!is_tdl) {
@@ -4243,13 +4229,12 @@ void run_pdsch_cl_4port_harq_simulation(const L1Config *cfg) {
                         cx_t xh2[2]; double nv2[2];
                         mimo_mmse_detect_4rx2(h_eff2, y, N0, xh2, nv2);
                         rx_hat[0][d] = xh2[0]; rx_hat[1][d] = xh2[1];
-                        nv_sum[0] += nv2[0];   nv_sum[1] += nv2[1];
+                        nv_all[0][d] = nv2[0]; nv_all[1][d] = nv2[1];
                     }
                 }
 
                 for (int l = 0; l < nCW; l++) {
-                    double env = nv_sum[l] / num_data;
-                    qam_demap_llr(rx_hat[l], num_data, mcs.modulation, env, allllr[l]);
+                    qam_demap_llr_re(rx_hat[l], num_data, mcs.modulation, nv_all[l], allllr[l]);
                     int roff = 0;
                     int cb_crc_ok = 1;
                     for (int r = 0; r < seg.C; r++) {
@@ -4305,7 +4290,7 @@ void run_pdsch_cl_4port_harq_simulation(const L1Config *cfg) {
         for (int r = 0; r < seg.C; r++) { free(coded_cw[l][r]); free(rm[l][r]); free(soft_buf[l][r]); }
         free(coded_cw[l]); free(rm[l]); free(soft_buf[l]);
         free(selbits[l]); free(decoded_cb[l]); free(decoded_tb[l]);
-        free(sym[l]); free(rx_hat[l]);
+        free(sym[l]); free(rx_hat[l]); free(nv_all[l]);
         free(allllr[l]);
     }
     for (int r = 0; r < 4; r++)
@@ -4356,8 +4341,7 @@ void run_pdsch_cl_8port_tdl_simulation(const L1Config *cfg) {
     int    crc_bits = 24;
 
     int max_dbits = num_data * bps;
-    int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1)    tbsz = 1;
+    int tbsz = nr_determine_tbs(max_dbits, cr);
     int B = tbsz + crc_bits;
 
     NRSegInfo seg; nr_seg_compute(B, cr, &seg);   /* shared by both CWs (same B/cr) */
@@ -4411,6 +4395,13 @@ void run_pdsch_cl_8port_tdl_simulation(const L1Config *cfg) {
         decoded_tb[l] = (int *)malloc(B * sizeof(int));
         rx_hat[l]  = (cx_t  *)malloc(nd     * sizeof(cx_t));
     }
+    /* per-RE noise variance, reused across this trial's sequential
+     * R1-fixed/R2-fixed/Adaptive scenarios (tasks/todo.md "RE별 effective
+     * noise variance 기반 LLR", P1-1) -- each scenario fully consumes its
+     * own values before the next starts, so one buffer set is safe. */
+    double *nv_all = (double *)malloc(nd * sizeof(double));
+    double *nv2_all[2];
+    for (int l = 0; l < 2; l++) nv2_all[l] = (double *)malloc(nd * sizeof(double));
     cx_t *nbuf = (cx_t *)malloc(nd * 4 * sizeof(cx_t));
 
     /* H 캐시: 각 data RE별 채널 행렬 (4Rx x 8Tx) */
@@ -4451,7 +4442,7 @@ void run_pdsch_cl_8port_tdl_simulation(const L1Config *cfg) {
 
     TDLChannel tdl_ch;
     for (double snr = cfg->snrStart; snr <= cfg->snrEnd + 1e-6; snr += cfg->snrStep) {
-        tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        tdl_channel_init(&tdl_ch, cfg->tdlProfile[0], cfg->tdlDelaySpreadNs, scs_hz, snr);
         double N0    = 1.0 / pow(10.0, snr / 10.0);
         double sigma = sqrt(N0 / 2.0);
 
@@ -4558,7 +4549,6 @@ void run_pdsch_cl_8port_tdl_simulation(const L1Config *cfg) {
             {
                 cx_t W[8];
                 codebook_type1_sp_8port_rank1(i1_r1, i2_r1, W);
-                double nv_sum = 0.0;
                 for (int d = 0; d < nd; d++) {
                     cx_t h_eff[4];
                     for (int r = 0; r < 4; r++) {
@@ -4568,13 +4558,9 @@ void run_pdsch_cl_8port_tdl_simulation(const L1Config *cfg) {
                     cx_t y[4];
                     for (int r = 0; r < 4; r++)
                         y[r] = h_eff[r] * sym[0][d] + nbuf[d * 4 + r];
-                    cx_t xh; double nv;
-                    mrc_combine_4rx(h_eff, y, N0, &xh, &nv);
-                    rx_hat[0][d] = xh;
-                    nv_sum += nv;
+                    mrc_combine_4rx(h_eff, y, N0, &rx_hat[0][d], &nv_all[d]);
                 }
-                double env = nv_sum / nd;
-                qam_demap_llr(rx_hat[0], nd, mcs.modulation, env, allllr[0]);
+                qam_demap_llr_re(rx_hat[0], nd, mcs.modulation, nv_all, allllr[0]);
                 int roff0 = 0;
                 int cb0_crc_ok = 1;
                 for (int r = 0; r < seg.C; r++) {
@@ -4601,7 +4587,6 @@ void run_pdsch_cl_8port_tdl_simulation(const L1Config *cfg) {
             {
                 cx_t W2[8][2];
                 codebook_type1_sp_8port_rank2(i1_r2, i13_r2, i2_r2, W2);
-                double nv2_sum[2] = {0.0, 0.0};
                 for (int d = 0; d < nd; d++) {
                     cx_t h_eff2[4][2];
                     for (int r = 0; r < 4; r++)
@@ -4617,13 +4602,12 @@ void run_pdsch_cl_8port_tdl_simulation(const L1Config *cfg) {
                     mimo_mmse_detect_4rx2(h_eff2, y, N0, xh2, nv2);
                     rx_hat[0][d] = xh2[0];
                     rx_hat[1][d] = xh2[1];
-                    nv2_sum[0] += nv2[0];
-                    nv2_sum[1] += nv2[1];
+                    nv2_all[0][d] = nv2[0];
+                    nv2_all[1][d] = nv2[1];
                 }
                 int blk_r2 = 0;
                 for (int l = 0; l < 2; l++) {
-                    double env = nv2_sum[l] / nd;
-                    qam_demap_llr(rx_hat[l], nd, mcs.modulation, env, allllr[l]);
+                    qam_demap_llr_re(rx_hat[l], nd, mcs.modulation, nv2_all[l], allllr[l]);
                     int roff = 0;
                     int cb_crc_ok = 1;
                     for (int r = 0; r < seg.C; r++) {
@@ -4652,7 +4636,6 @@ void run_pdsch_cl_8port_tdl_simulation(const L1Config *cfg) {
             if (rank_ad == 1) {
                 cx_t W[8];
                 codebook_type1_sp_8port_rank1(i1_ad, i2_ad, W);
-                double nv_sum = 0.0;
                 for (int d = 0; d < nd; d++) {
                     cx_t h_eff[4];
                     for (int r = 0; r < 4; r++) {
@@ -4662,13 +4645,9 @@ void run_pdsch_cl_8port_tdl_simulation(const L1Config *cfg) {
                     cx_t y[4];
                     for (int r = 0; r < 4; r++)
                         y[r] = h_eff[r] * sym[0][d] + nbuf[d * 4 + r];
-                    cx_t xh; double nv;
-                    mrc_combine_4rx(h_eff, y, N0, &xh, &nv);
-                    rx_hat[0][d] = xh;
-                    nv_sum += nv;
+                    mrc_combine_4rx(h_eff, y, N0, &rx_hat[0][d], &nv_all[d]);
                 }
-                double env = nv_sum / nd;
-                qam_demap_llr(rx_hat[0], nd, mcs.modulation, env, allllr[0]);
+                qam_demap_llr_re(rx_hat[0], nd, mcs.modulation, nv_all, allllr[0]);
                 int roff0 = 0;
                 int cb0_crc_ok = 1;
                 for (int r = 0; r < seg.C; r++) {
@@ -4692,7 +4671,6 @@ void run_pdsch_cl_8port_tdl_simulation(const L1Config *cfg) {
             } else {
                 cx_t W2[8][2];
                 codebook_type1_sp_8port_rank2(i1_ad, i13_ad, i2_ad, W2);
-                double nv2_sum[2] = {0.0, 0.0};
                 for (int d = 0; d < nd; d++) {
                     cx_t h_eff2[4][2];
                     for (int r = 0; r < 4; r++)
@@ -4708,13 +4686,12 @@ void run_pdsch_cl_8port_tdl_simulation(const L1Config *cfg) {
                     mimo_mmse_detect_4rx2(h_eff2, y, N0, xh2, nv2);
                     rx_hat[0][d] = xh2[0];
                     rx_hat[1][d] = xh2[1];
-                    nv2_sum[0] += nv2[0];
-                    nv2_sum[1] += nv2[1];
+                    nv2_all[0][d] = nv2[0];
+                    nv2_all[1][d] = nv2[1];
                 }
                 int blk_ad = 0;
                 for (int l = 0; l < 2; l++) {
-                    double env = nv2_sum[l] / nd;
-                    qam_demap_llr(rx_hat[l], nd, mcs.modulation, env, allllr[l]);
+                    qam_demap_llr_re(rx_hat[l], nd, mcs.modulation, nv2_all[l], allllr[l]);
                     int roff = 0;
                     int cb_crc_ok = 1;
                     for (int r = 0; r < seg.C; r++) {
@@ -4765,7 +4742,8 @@ void run_pdsch_cl_8port_tdl_simulation(const L1Config *cfg) {
     ldpc_free(&ldpc);
     free(data_pos); free(pilot_pos);
     free(H_cache);
-    free(nbuf); free(Er);
+    free(nbuf); free(Er); free(nv_all);
+    for (int l = 0; l < 2; l++) free(nv2_all[l]);
     if (Hp_full) free(Hp_full);
     if (h_ls_pilot) free(h_ls_pilot);
     if (w_dft) free(w_dft);
@@ -4809,8 +4787,7 @@ void run_pdsch_cl_8port_harq_simulation(const L1Config *cfg) {
     int    crc_bits = 24;
 
     int E    = num_data * bps;
-    int tbsz = (int)(E * cr);
-    if (tbsz < 1)    tbsz = 1;
+    int tbsz = nr_determine_tbs(E, cr);
 
     /* TS 38.212 5.2.2 multi-code-block segmentation (P0-2c HARQ follow-up,
      * 2026-09-03) -- see run_pdsch_harq_simulation() design note. Both CWs
@@ -4861,7 +4838,7 @@ void run_pdsch_cl_8port_harq_simulation(const L1Config *cfg) {
     int   *tb[2], *tb_crc[2], *cb_bits[2], **coded_cw[2], **rm[2], *selbits[2];
     int   *decoded_cb[2], *decoded_tb[2];
     cx_t  *sym[2], *rx_hat[2];
-    double *allllr[2], **soft_buf[2];
+    double *allllr[2], **soft_buf[2], *nv_all[2];
     for (int l = 0; l < 2; l++) {
         tb[l]         = (int   *)malloc(tbsz    * sizeof(int));
         tb_crc[l]     = (int   *)malloc(B       * sizeof(int));
@@ -4877,6 +4854,7 @@ void run_pdsch_cl_8port_harq_simulation(const L1Config *cfg) {
         decoded_tb[l] = (int   *)malloc(B       * sizeof(int));
         sym[l]        = (cx_t  *)malloc(num_data * sizeof(cx_t));
         rx_hat[l]     = (cx_t  *)malloc(num_data * sizeof(cx_t));
+        nv_all[l]     = (double *)malloc(num_data * sizeof(double));
         allllr[l]     = (double *)malloc(E      * sizeof(double));
         soft_buf[l]   = (double **)malloc(seg.C * sizeof(double *));
         for (int r = 0; r < seg.C; r++) soft_buf[l][r] = (double *)malloc(acsz * sizeof(double));
@@ -4894,7 +4872,7 @@ void run_pdsch_cl_8port_harq_simulation(const L1Config *cfg) {
 
     TDLChannel tdl_ch;
     for (double snr = cfg->snrStart; snr <= cfg->snrEnd + 1e-6; snr += cfg->snrStep) {
-        if (is_tdl) tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        if (is_tdl) tdl_channel_init(&tdl_ch, cfg->tdlProfile[0], cfg->tdlDelaySpreadNs, scs_hz, snr);
         double N0    = 1.0 / pow(10.0, snr / 10.0);
         double sigma = sqrt(N0 / 2.0);
 
@@ -4996,8 +4974,6 @@ void run_pdsch_cl_8port_harq_simulation(const L1Config *cfg) {
                 }
                 attempt0_done = 0;   /* 다음 재진입 시 재추첨 트리거 */
 
-                double nv_sum[2] = {0.0, 0.0};
-
                 for (int d = 0; d < num_data; d++) {
                     cx_t tx[2];
                     for (int l = 0; l < nCW; l++) tx[l] = sym[l][d];
@@ -5018,10 +4994,7 @@ void run_pdsch_cl_8port_harq_simulation(const L1Config *cfg) {
                         cx_t y[4];
                         for (int r = 0; r < 4; r++)
                             y[r] = h_eff[r] * tx[0] + CX_MAKE(randn()*sigma, randn()*sigma);
-                        cx_t xh; double nv;
-                        mrc_combine_4rx(h_eff, y, N0, &xh, &nv);
-                        rx_hat[0][d] = xh;
-                        nv_sum[0] += nv;
+                        mrc_combine_4rx(h_eff, y, N0, &rx_hat[0][d], &nv_all[0][d]);
                     } else {
                         cx_t h_eff2[4][2];
                         if (!is_tdl) {
@@ -5044,13 +5017,12 @@ void run_pdsch_cl_8port_harq_simulation(const L1Config *cfg) {
                         cx_t xh2[2]; double nv2[2];
                         mimo_mmse_detect_4rx2(h_eff2, y, N0, xh2, nv2);
                         rx_hat[0][d] = xh2[0]; rx_hat[1][d] = xh2[1];
-                        nv_sum[0] += nv2[0];   nv_sum[1] += nv2[1];
+                        nv_all[0][d] = nv2[0]; nv_all[1][d] = nv2[1];
                     }
                 }
 
                 for (int l = 0; l < nCW; l++) {
-                    double env = nv_sum[l] / num_data;
-                    qam_demap_llr(rx_hat[l], num_data, mcs.modulation, env, allllr[l]);
+                    qam_demap_llr_re(rx_hat[l], num_data, mcs.modulation, nv_all[l], allllr[l]);
                     int roff = 0;
                     int cb_crc_ok = 1;
                     for (int r = 0; r < seg.C; r++) {
@@ -5106,7 +5078,7 @@ void run_pdsch_cl_8port_harq_simulation(const L1Config *cfg) {
         for (int r = 0; r < seg.C; r++) { free(coded_cw[l][r]); free(rm[l][r]); free(soft_buf[l][r]); }
         free(coded_cw[l]); free(rm[l]); free(soft_buf[l]);
         free(selbits[l]); free(decoded_cb[l]); free(decoded_tb[l]);
-        free(sym[l]); free(rx_hat[l]);
+        free(sym[l]); free(rx_hat[l]); free(nv_all[l]);
         free(allllr[l]);
     }
     for (int r = 0; r < 4; r++)
@@ -5146,8 +5118,7 @@ void run_pdsch_cl_32port_simulation(const L1Config *cfg) {
     int    crc_bits = 24;
 
     int max_dbits = num_data * bps;
-    int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1)    tbsz = 1;
+    int tbsz = nr_determine_tbs(max_dbits, cr);
 
     int B = tbsz + crc_bits;
     NRSegInfo seg; nr_seg_compute(B, cr, &seg);   /* shared by all up-to-4 CWs (same B/cr) */
@@ -5407,8 +5378,7 @@ void run_pdsch_eigen_16port_simulation(const L1Config *cfg) {
     int    crc_bits = 24;
 
     int max_dbits = num_data * bps;
-    int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1)    tbsz = 1;
+    int tbsz = nr_determine_tbs(max_dbits, cr);
 
     int B = tbsz + crc_bits;
     NRSegInfo seg; nr_seg_compute(B, cr, &seg);   /* shared by all up-to-4 CWs (same B/cr) */
@@ -5687,8 +5657,7 @@ void run_pdsch_eigen_16port_tdl_simulation(const L1Config *cfg) {
     int    crc_bits = 24;
 
     int max_dbits = num_data * bps;
-    int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1)    tbsz = 1;
+    int tbsz = nr_determine_tbs(max_dbits, cr);
 
     int B = tbsz + crc_bits;
     NRSegInfo seg; nr_seg_compute(B, cr, &seg);   /* shared by all up-to-4 CWs (same B/cr) */
@@ -5725,6 +5694,7 @@ void run_pdsch_eigen_16port_tdl_simulation(const L1Config *cfg) {
     cx_t  *sym[4];
     double *allllr[4], *soft_buf[4];
     cx_t  *rx_hat[4];
+    double *nv_all[4];
     for (int l = 0; l < 4; l++) {
         tb[l]      = (int    *)malloc(tbsz  * sizeof(int));
         tb_crc[l]  = (int    *)malloc(B     * sizeof(int));
@@ -5739,6 +5709,7 @@ void run_pdsch_eigen_16port_tdl_simulation(const L1Config *cfg) {
         decoded_cb[l] = (int *)malloc(ldpc.info_size * sizeof(int));
         decoded_tb[l] = (int *)malloc(B * sizeof(int));
         rx_hat[l]  = (cx_t  *)malloc(nd     * sizeof(cx_t));
+        nv_all[l]  = (double *)malloc(nd    * sizeof(double));
     }
     cx_t *nbuf = (cx_t *)malloc(nd * 4 * sizeof(cx_t));
 
@@ -5790,7 +5761,7 @@ void run_pdsch_eigen_16port_tdl_simulation(const L1Config *cfg) {
 
     TDLChannel tdl_ch;
     for (double snr = cfg->snrStart; snr <= cfg->snrEnd + 1e-6; snr += cfg->snrStep) {
-        tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        tdl_channel_init(&tdl_ch, cfg->tdlProfile[0], cfg->tdlDelaySpreadNs, scs_hz, snr);
         double N0    = 1.0 / pow(10.0, snr / 10.0);
         double sigma = sqrt(N0 / 2.0);
 
@@ -5895,8 +5866,6 @@ void run_pdsch_eigen_16port_tdl_simulation(const L1Config *cfg) {
                     nbuf[d * 4 + r] = CX_MAKE(randn() * sigma, randn() * sigma);
 
             /* ⑥ 프리코딩(진짜 H_cache × 추정 채널 기반 W, 불일치 반영) + 검출 */
-            double nv_sum[4] = {0.0, 0.0, 0.0, 0.0};
-
             if (rank == 1) {
                 for (int d = 0; d < nd; d++) {
                     cx_t h_eff[4];
@@ -5907,10 +5876,7 @@ void run_pdsch_eigen_16port_tdl_simulation(const L1Config *cfg) {
                     cx_t y[4];
                     for (int r = 0; r < 4; r++)
                         y[r] = h_eff[r] * sym[0][d] + nbuf[d * 4 + r];
-                    cx_t xh; double nv;
-                    mrc_combine_4rx(h_eff, y, N0, &xh, &nv);
-                    rx_hat[0][d] = xh;
-                    nv_sum[0] += nv;
+                    mrc_combine_4rx(h_eff, y, N0, &rx_hat[0][d], &nv_all[0][d]);
                 }
             } else if (rank == 2) {
                 for (int d = 0; d < nd; d++) {
@@ -5926,7 +5892,7 @@ void run_pdsch_eigen_16port_tdl_simulation(const L1Config *cfg) {
                     cx_t xh[2]; double nv[2];
                     mimo_mmse_detect_4rx2(h_eff, y, N0, xh, nv);
                     rx_hat[0][d] = xh[0]; rx_hat[1][d] = xh[1];
-                    nv_sum[0] += nv[0]; nv_sum[1] += nv[1];
+                    nv_all[0][d] = nv[0]; nv_all[1][d] = nv[1];
                 }
             } else if (rank == 3) {
                 for (int d = 0; d < nd; d++) {
@@ -5943,7 +5909,7 @@ void run_pdsch_eigen_16port_tdl_simulation(const L1Config *cfg) {
                     cx_t xh[3]; double nv[3];
                     mimo_mmse_detect_4rx3(h_eff, y, N0, xh, nv);
                     rx_hat[0][d] = xh[0]; rx_hat[1][d] = xh[1]; rx_hat[2][d] = xh[2];
-                    nv_sum[0] += nv[0]; nv_sum[1] += nv[1]; nv_sum[2] += nv[2];
+                    nv_all[0][d] = nv[0]; nv_all[1][d] = nv[1]; nv_all[2][d] = nv[2];
                 }
             } else {   /* rank == 4 */
                 for (int d = 0; d < nd; d++) {
@@ -5960,15 +5926,16 @@ void run_pdsch_eigen_16port_tdl_simulation(const L1Config *cfg) {
                                + nbuf[d * 4 + r];
                     cx_t xh[4]; double nv[4];
                     mimo_mmse_detect_4x4(h_eff, y, N0, xh, nv);
-                    for (int c = 0; c < 4; c++) { rx_hat[c][d] = xh[c]; nv_sum[c] += nv[c]; }
+                    for (int c = 0; c < 4; c++) { rx_hat[c][d] = xh[c]; nv_all[c][d] = nv[c]; }
                 }
             }
 
-            /* ⑦ 복조/복호 */
+            /* ⑦ 복조/복호 -- RE별 잡음분산을 평균하지 않고 배열로 보존
+             * (tasks/todo.md "RE별 effective noise variance 기반 LLR",
+             * P1-1). */
             int blk_err = 0;
             for (int c = 0; c < nCW; c++) {
-                double env = nv_sum[c] / nd;
-                qam_demap_llr(rx_hat[c], nd, mcs.modulation, env, allllr[c]);
+                qam_demap_llr_re(rx_hat[c], nd, mcs.modulation, nv_all[c], allllr[c]);
                 int roff = 0;
                 int cb_crc_ok = 1;
                 for (int r = 0; r < seg.C; r++) {
@@ -6022,6 +5989,7 @@ void run_pdsch_eigen_16port_tdl_simulation(const L1Config *cfg) {
         free(sym[l]); free(allllr[l]); free(soft_buf[l]);
         free(decoded_cb[l]); free(decoded_tb[l]);
         free(rx_hat[l]);
+        free(nv_all[l]);
     }
     for (int r = 0; r < 4; r++)
         for (int t = 0; t < 16; t++)
@@ -6111,8 +6079,7 @@ void run_pdsch_eigen_16port_subband_simulation(const L1Config *cfg) {
     int    crc_bits = 24;
 
     int max_dbits = num_data * bps;
-    int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1)    tbsz = 1;
+    int tbsz = nr_determine_tbs(max_dbits, cr);
 
     int B = tbsz + crc_bits;
     NRSegInfo seg; nr_seg_compute(B, cr, &seg);   /* shared by all up-to-4 CWs (same B/cr) */
@@ -6150,6 +6117,7 @@ void run_pdsch_eigen_16port_subband_simulation(const L1Config *cfg) {
     cx_t  *sym[4];
     double *allllr[4], *soft_buf[4];
     cx_t  *rx_hat[4];
+    double *nv_all[4];
     for (int l = 0; l < 4; l++) {
         tb[l]      = (int    *)malloc(tbsz  * sizeof(int));
         tb_crc[l]  = (int    *)malloc(B     * sizeof(int));
@@ -6164,6 +6132,7 @@ void run_pdsch_eigen_16port_subband_simulation(const L1Config *cfg) {
         decoded_cb[l] = (int *)malloc(ldpc.info_size * sizeof(int));
         decoded_tb[l] = (int *)malloc(B * sizeof(int));
         rx_hat[l]  = (cx_t  *)malloc(nd     * sizeof(cx_t));
+        nv_all[l]  = (double *)malloc(nd    * sizeof(double));
     }
     cx_t *nbuf = (cx_t *)malloc(nd * 4 * sizeof(cx_t));
 
@@ -6222,7 +6191,7 @@ void run_pdsch_eigen_16port_subband_simulation(const L1Config *cfg) {
 
     TDLChannel tdl_ch;
     for (double snr = cfg->snrStart; snr <= cfg->snrEnd + 1e-6; snr += cfg->snrStep) {
-        tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        tdl_channel_init(&tdl_ch, cfg->tdlProfile[0], cfg->tdlDelaySpreadNs, scs_hz, snr);
         double N0    = 1.0 / pow(10.0, snr / 10.0);
         double sigma = sqrt(N0 / 2.0);
 
@@ -6391,8 +6360,6 @@ void run_pdsch_eigen_16port_subband_simulation(const L1Config *cfg) {
                     nbuf[d * 4 + r] = CX_MAKE(randn() * sigma, randn() * sigma);
 
             /* ⑥ 프리코딩(RE가 속한 PRG의 W 사용) + 검출 */
-            double nv_sum[4] = {0.0, 0.0, 0.0, 0.0};
-
             if (rank == 1) {
                 for (int d = 0; d < nd; d++) {
                     int g = (d / 6) / EIGEN16_PRG_SIZE_RB;
@@ -6404,10 +6371,7 @@ void run_pdsch_eigen_16port_subband_simulation(const L1Config *cfg) {
                     cx_t y[4];
                     for (int r = 0; r < 4; r++)
                         y[r] = h_eff[r] * sym[0][d] + nbuf[d * 4 + r];
-                    cx_t xh; double nv;
-                    mrc_combine_4rx(h_eff, y, N0, &xh, &nv);
-                    rx_hat[0][d] = xh;
-                    nv_sum[0] += nv;
+                    mrc_combine_4rx(h_eff, y, N0, &rx_hat[0][d], &nv_all[0][d]);
                 }
             } else if (rank == 2) {
                 for (int d = 0; d < nd; d++) {
@@ -6424,7 +6388,7 @@ void run_pdsch_eigen_16port_subband_simulation(const L1Config *cfg) {
                     cx_t xh[2]; double nv[2];
                     mimo_mmse_detect_4rx2(h_eff, y, N0, xh, nv);
                     rx_hat[0][d] = xh[0]; rx_hat[1][d] = xh[1];
-                    nv_sum[0] += nv[0]; nv_sum[1] += nv[1];
+                    nv_all[0][d] = nv[0]; nv_all[1][d] = nv[1];
                 }
             } else if (rank == 3) {
                 for (int d = 0; d < nd; d++) {
@@ -6442,7 +6406,7 @@ void run_pdsch_eigen_16port_subband_simulation(const L1Config *cfg) {
                     cx_t xh[3]; double nv[3];
                     mimo_mmse_detect_4rx3(h_eff, y, N0, xh, nv);
                     rx_hat[0][d] = xh[0]; rx_hat[1][d] = xh[1]; rx_hat[2][d] = xh[2];
-                    nv_sum[0] += nv[0]; nv_sum[1] += nv[1]; nv_sum[2] += nv[2];
+                    nv_all[0][d] = nv[0]; nv_all[1][d] = nv[1]; nv_all[2][d] = nv[2];
                 }
             } else {   /* rank == 4 */
                 for (int d = 0; d < nd; d++) {
@@ -6460,15 +6424,16 @@ void run_pdsch_eigen_16port_subband_simulation(const L1Config *cfg) {
                                + nbuf[d * 4 + r];
                     cx_t xh[4]; double nv[4];
                     mimo_mmse_detect_4x4(h_eff, y, N0, xh, nv);
-                    for (int c = 0; c < 4; c++) { rx_hat[c][d] = xh[c]; nv_sum[c] += nv[c]; }
+                    for (int c = 0; c < 4; c++) { rx_hat[c][d] = xh[c]; nv_all[c][d] = nv[c]; }
                 }
             }
 
-            /* ⑦ 복조/복호 */
+            /* ⑦ 복조/복호 -- RE별 잡음분산을 평균하지 않고 배열로 보존
+             * (tasks/todo.md "RE별 effective noise variance 기반 LLR",
+             * P1-1). */
             int blk_err = 0;
             for (int c = 0; c < nCW; c++) {
-                double env = nv_sum[c] / nd;
-                qam_demap_llr(rx_hat[c], nd, mcs.modulation, env, allllr[c]);
+                qam_demap_llr_re(rx_hat[c], nd, mcs.modulation, nv_all[c], allllr[c]);
                 int roff = 0;
                 int cb_crc_ok = 1;
                 for (int r = 0; r < seg.C; r++) {
@@ -6532,6 +6497,7 @@ void run_pdsch_eigen_16port_subband_simulation(const L1Config *cfg) {
         free(sym[l]); free(allllr[l]); free(soft_buf[l]);
         free(decoded_cb[l]); free(decoded_tb[l]);
         free(rx_hat[l]);
+        free(nv_all[l]);
     }
     for (int r = 0; r < 4; r++)
         for (int t = 0; t < 16; t++)
@@ -6582,8 +6548,7 @@ void run_pdsch_cl_32port_tdl_simulation(const L1Config *cfg) {
     int    crc_bits = 24;
 
     int max_dbits = num_data * bps;
-    int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1)    tbsz = 1;
+    int tbsz = nr_determine_tbs(max_dbits, cr);
 
     int B = tbsz + crc_bits;
     NRSegInfo seg; nr_seg_compute(B, cr, &seg);   /* shared by all up-to-4 CWs (same B/cr) */
@@ -6623,6 +6588,7 @@ void run_pdsch_cl_32port_tdl_simulation(const L1Config *cfg) {
     cx_t  *sym[4];
     double *allllr[4], *soft_buf[4];
     cx_t  *rx_hat[4];
+    double *nv_all[4];
     for (int l = 0; l < 4; l++) {
         tb[l]      = (int    *)malloc(tbsz  * sizeof(int));
         tb_crc[l]  = (int    *)malloc(B     * sizeof(int));
@@ -6637,6 +6603,7 @@ void run_pdsch_cl_32port_tdl_simulation(const L1Config *cfg) {
         decoded_cb[l] = (int *)malloc(ldpc.info_size * sizeof(int));
         decoded_tb[l] = (int *)malloc(B * sizeof(int));
         rx_hat[l]  = (cx_t  *)malloc(nd     * sizeof(cx_t));
+        nv_all[l]  = (double *)malloc(nd    * sizeof(double));
     }
     cx_t *nbuf = (cx_t *)malloc(nd * 4 * sizeof(cx_t));
 
@@ -6675,7 +6642,7 @@ void run_pdsch_cl_32port_tdl_simulation(const L1Config *cfg) {
 
     TDLChannel tdl_ch;
     for (double snr = cfg->snrStart; snr <= cfg->snrEnd + 1e-6; snr += cfg->snrStep) {
-        tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        tdl_channel_init(&tdl_ch, cfg->tdlProfile[0], cfg->tdlDelaySpreadNs, scs_hz, snr);
         double N0    = 1.0 / pow(10.0, snr / 10.0);
         double sigma = sqrt(N0 / 2.0);
 
@@ -6777,8 +6744,6 @@ void run_pdsch_cl_32port_tdl_simulation(const L1Config *cfg) {
 
             /* ⑤ 프리코딩(진짜 H_cache 사용, wideband PMI 대 주파수선택적 채널
              *    불일치 반영) + 검출 (rank별 분기) */
-            double nv_sum[4] = {0.0, 0.0, 0.0, 0.0};
-
             if (rank == 1) {
                 cx_t W[32];
                 codebook_type1_sp_32port_rank1(l1, l2, i2, W);
@@ -6791,10 +6756,7 @@ void run_pdsch_cl_32port_tdl_simulation(const L1Config *cfg) {
                     cx_t y[4];
                     for (int r = 0; r < 4; r++)
                         y[r] = h_eff[r] * sym[0][d] + nbuf[d * 4 + r];
-                    cx_t xh; double nv;
-                    mrc_combine_4rx(h_eff, y, N0, &xh, &nv);
-                    rx_hat[0][d] = xh;
-                    nv_sum[0] += nv;
+                    mrc_combine_4rx(h_eff, y, N0, &rx_hat[0][d], &nv_all[0][d]);
                 }
             } else if (rank == 2) {
                 cx_t W[32][2];
@@ -6812,7 +6774,7 @@ void run_pdsch_cl_32port_tdl_simulation(const L1Config *cfg) {
                     cx_t xh[2]; double nv[2];
                     mimo_mmse_detect_4rx2(h_eff, y, N0, xh, nv);
                     rx_hat[0][d] = xh[0]; rx_hat[1][d] = xh[1];
-                    nv_sum[0] += nv[0]; nv_sum[1] += nv[1];
+                    nv_all[0][d] = nv[0]; nv_all[1][d] = nv[1];
                 }
             } else if (rank == 3) {
                 cx_t W[32][3];
@@ -6831,7 +6793,7 @@ void run_pdsch_cl_32port_tdl_simulation(const L1Config *cfg) {
                     cx_t xh[3]; double nv[3];
                     mimo_mmse_detect_4rx3(h_eff, y, N0, xh, nv);
                     rx_hat[0][d] = xh[0]; rx_hat[1][d] = xh[1]; rx_hat[2][d] = xh[2];
-                    nv_sum[0] += nv[0]; nv_sum[1] += nv[1]; nv_sum[2] += nv[2];
+                    nv_all[0][d] = nv[0]; nv_all[1][d] = nv[1]; nv_all[2][d] = nv[2];
                 }
             } else {   /* rank == 4 */
                 cx_t W[32][4];
@@ -6850,15 +6812,16 @@ void run_pdsch_cl_32port_tdl_simulation(const L1Config *cfg) {
                                + nbuf[d * 4 + r];
                     cx_t xh[4]; double nv[4];
                     mimo_mmse_detect_4x4(h_eff, y, N0, xh, nv);
-                    for (int c = 0; c < 4; c++) { rx_hat[c][d] = xh[c]; nv_sum[c] += nv[c]; }
+                    for (int c = 0; c < 4; c++) { rx_hat[c][d] = xh[c]; nv_all[c][d] = nv[c]; }
                 }
             }
 
-            /* ⑥ 복조/복호 */
+            /* ⑥ 복조/복호 -- RE별 잡음분산을 평균하지 않고 배열로 보존
+             * (tasks/todo.md "RE별 effective noise variance 기반 LLR",
+             * P1-1). */
             int blk_err = 0;
             for (int c = 0; c < nCW; c++) {
-                double env = nv_sum[c] / nd;
-                qam_demap_llr(rx_hat[c], nd, mcs.modulation, env, allllr[c]);
+                qam_demap_llr_re(rx_hat[c], nd, mcs.modulation, nv_all[c], allllr[c]);
                 int roff = 0;
                 int cb_crc_ok = 1;
                 for (int r = 0; r < seg.C; r++) {
@@ -6913,6 +6876,7 @@ void run_pdsch_cl_32port_tdl_simulation(const L1Config *cfg) {
         free(sym[l]); free(allllr[l]); free(soft_buf[l]);
         free(decoded_cb[l]); free(decoded_tb[l]);
         free(rx_hat[l]);
+        free(nv_all[l]);
     }
     for (int r = 0; r < 4; r++)
         for (int t = 0; t < 32; t++)
@@ -6944,8 +6908,7 @@ void run_pdsch_cl_32port_harq_simulation(const L1Config *cfg) {
     int    crc_bits = 24;
 
     int E    = num_data * bps;
-    int tbsz = (int)(E * cr);
-    if (tbsz < 1)    tbsz = 1;
+    int tbsz = nr_determine_tbs(E, cr);
 
     /* TS 38.212 5.2.2 multi-code-block segmentation (P0-2c HARQ follow-up,
      * 2026-09-03) -- see run_pdsch_harq_simulation() design note. All 4
@@ -6998,7 +6961,7 @@ void run_pdsch_cl_32port_harq_simulation(const L1Config *cfg) {
     int   *tb[4], *tb_crc[4], *cb_bits[4], **coded_cw[4], **rm[4], *selbits[4];
     int   *decoded_cb[4], *decoded_tb[4];
     cx_t  *sym[4], *rx_hat[4];
-    double *allllr[4], **soft_buf[4];
+    double *allllr[4], **soft_buf[4], *nv_all[4];
     for (int l = 0; l < 4; l++) {
         tb[l]         = (int   *)malloc(tbsz    * sizeof(int));
         tb_crc[l]     = (int   *)malloc(B       * sizeof(int));
@@ -7014,6 +6977,7 @@ void run_pdsch_cl_32port_harq_simulation(const L1Config *cfg) {
         decoded_tb[l] = (int   *)malloc(B       * sizeof(int));
         sym[l]        = (cx_t  *)malloc(num_data * sizeof(cx_t));
         rx_hat[l]     = (cx_t  *)malloc(num_data * sizeof(cx_t));
+        nv_all[l]     = (double *)malloc(num_data * sizeof(double));
         allllr[l]     = (double *)malloc(E      * sizeof(double));
         soft_buf[l]   = (double **)malloc(seg.C * sizeof(double *));
         for (int r = 0; r < seg.C; r++) soft_buf[l][r] = (double *)malloc(acsz * sizeof(double));
@@ -7031,7 +6995,7 @@ void run_pdsch_cl_32port_harq_simulation(const L1Config *cfg) {
 
     TDLChannel tdl_ch;
     for (double snr = cfg->snrStart; snr <= cfg->snrEnd + 1e-6; snr += cfg->snrStep) {
-        if (is_tdl) tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        if (is_tdl) tdl_channel_init(&tdl_ch, cfg->tdlProfile[0], cfg->tdlDelaySpreadNs, scs_hz, snr);
         double N0    = 1.0 / pow(10.0, snr / 10.0);
         double sigma = sqrt(N0 / 2.0);
 
@@ -7131,8 +7095,6 @@ void run_pdsch_cl_32port_harq_simulation(const L1Config *cfg) {
                 }
                 attempt0_done = 0;
 
-                double nv_sum[4] = {0.0, 0.0, 0.0, 0.0};
-
                 for (int d = 0; d < num_data; d++) {
                     cx_t tx[4];
                     for (int l = 0; l < nCW; l++) tx[l] = sym[l][d];
@@ -7148,10 +7110,7 @@ void run_pdsch_cl_32port_harq_simulation(const L1Config *cfg) {
                         }
                         cx_t y[4];
                         for (int r = 0; r < 4; r++) y[r] = h_eff[r] * tx[0] + noise[r];
-                        cx_t xh; double nv;
-                        mrc_combine_4rx(h_eff, y, N0, &xh, &nv);
-                        rx_hat[0][d] = xh;
-                        nv_sum[0] += nv;
+                        mrc_combine_4rx(h_eff, y, N0, &rx_hat[0][d], &nv_all[0][d]);
                     } else if (rank_fix == 2) {
                         cx_t h_eff[4][2];
                         for (int r = 0; r < 4; r++) {
@@ -7167,7 +7126,7 @@ void run_pdsch_cl_32port_harq_simulation(const L1Config *cfg) {
                         cx_t xh[2]; double nv[2];
                         mimo_mmse_detect_4rx2(h_eff, y, N0, xh, nv);
                         rx_hat[0][d] = xh[0]; rx_hat[1][d] = xh[1];
-                        nv_sum[0] += nv[0]; nv_sum[1] += nv[1];
+                        nv_all[0][d] = nv[0]; nv_all[1][d] = nv[1];
                     } else if (rank_fix == 3) {
                         cx_t h_eff[4][3];
                         for (int r = 0; r < 4; r++) {
@@ -7183,7 +7142,7 @@ void run_pdsch_cl_32port_harq_simulation(const L1Config *cfg) {
                         cx_t xh[3]; double nv[3];
                         mimo_mmse_detect_4rx3(h_eff, y, N0, xh, nv);
                         rx_hat[0][d] = xh[0]; rx_hat[1][d] = xh[1]; rx_hat[2][d] = xh[2];
-                        nv_sum[0] += nv[0]; nv_sum[1] += nv[1]; nv_sum[2] += nv[2];
+                        nv_all[0][d] = nv[0]; nv_all[1][d] = nv[1]; nv_all[2][d] = nv[2];
                     } else {   /* rank_fix == 4 */
                         cx_t h_eff[4][4];
                         for (int r = 0; r < 4; r++) {
@@ -7199,13 +7158,12 @@ void run_pdsch_cl_32port_harq_simulation(const L1Config *cfg) {
                                    + h_eff[r][2]*tx[2] + h_eff[r][3]*tx[3] + noise[r];
                         cx_t xh[4]; double nv[4];
                         mimo_mmse_detect_4x4(h_eff, y, N0, xh, nv);
-                        for (int c = 0; c < 4; c++) { rx_hat[c][d] = xh[c]; nv_sum[c] += nv[c]; }
+                        for (int c = 0; c < 4; c++) { rx_hat[c][d] = xh[c]; nv_all[c][d] = nv[c]; }
                     }
                 }
 
                 for (int l = 0; l < nCW; l++) {
-                    double env = nv_sum[l] / num_data;
-                    qam_demap_llr(rx_hat[l], num_data, mcs.modulation, env, allllr[l]);
+                    qam_demap_llr_re(rx_hat[l], num_data, mcs.modulation, nv_all[l], allllr[l]);
                     int roff = 0;
                     int cb_crc_ok = 1;
                     for (int r = 0; r < seg.C; r++) {
@@ -7261,7 +7219,7 @@ void run_pdsch_cl_32port_harq_simulation(const L1Config *cfg) {
         for (int r = 0; r < seg.C; r++) { free(coded_cw[l][r]); free(rm[l][r]); free(soft_buf[l][r]); }
         free(coded_cw[l]); free(rm[l]); free(soft_buf[l]);
         free(selbits[l]); free(decoded_cb[l]); free(decoded_tb[l]);
-        free(sym[l]); free(rx_hat[l]);
+        free(sym[l]); free(rx_hat[l]); free(nv_all[l]);
         free(allllr[l]);
     }
     for (int r = 0; r < 4; r++)
@@ -7337,8 +7295,7 @@ void run_pdsch_olla_simulation(const L1Config *cfg) {
             mcs_sum += mcs_idx;
 
             int max_dbits = num_data * bps;
-            int tbsz = (int)(max_dbits * cr);
-            if (tbsz < 1)    tbsz = 1;
+            int tbsz = nr_determine_tbs(max_dbits, cr);
             int B = tbsz + crc_bits;
 
             NRSegInfo seg; nr_seg_compute(B, cr, &seg);
@@ -7503,8 +7460,7 @@ void run_pdsch_olla_simo_mrc_simulation(const L1Config *cfg) {
             mcs_sum += mcs_idx;
 
             int max_dbits = num_data * bps;
-            int tbsz = (int)(max_dbits * cr);
-            if (tbsz < 1)    tbsz = 1;
+            int tbsz = nr_determine_tbs(max_dbits, cr);
             int B = tbsz + crc_bits;
 
             NRSegInfo seg; nr_seg_compute(B, cr, &seg);
@@ -7680,8 +7636,7 @@ void run_pdsch_olla_sm2x2_simulation(const L1Config *cfg) {
             mcs_sum += mcs_idx;
 
             int max_dbits = num_data * bps;
-            int tbsz = (int)(max_dbits * cr);
-            if (tbsz < 1)    tbsz = 1;
+            int tbsz = nr_determine_tbs(max_dbits, cr);
             int B = tbsz + crc_bits;
 
             NRSegInfo seg; nr_seg_compute(B, cr, &seg);
@@ -7877,8 +7832,7 @@ void run_pdsch_olla_sm4x4_simulation(const L1Config *cfg) {
             mcs_sum += mcs_idx;
 
             int max_dbits = num_data * bps;
-            int tbsz = (int)(max_dbits * cr);
-            if (tbsz < 1) tbsz = 1;
+            int tbsz = nr_determine_tbs(max_dbits, cr);
             int B = tbsz + crc_bits;
 
             NRSegInfo seg; nr_seg_compute(B, cr, &seg);
@@ -8012,6 +7966,752 @@ void run_pdsch_olla_sm4x4_simulation(const L1Config *cfg) {
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
+ * OLLA + CL_4PORT(4-port Type I SP 코드북, RI+PMI 적응), 고정 SNR 시계열
+ *
+ * tasks/todo.md "OLLA를 CL_XPORT로 확장" — SIMO_MRC/SM_2X2/SM_4X4처럼
+ * 레이어 수가 고정이 아니라 매 트라이얼 RI+PMI가 채널 기준으로 바뀌므로
+ * (rank 1 또는 2), 다른 OLLA 함수들의 "SNR 하나 → MCS 하나" 패턴을
+ * 그대로 재사용할 수 없었다 — 사용자와 두 가지 설계 결정을 확인(2026-09-15):
+ *
+ *   (1) OLLA 오프셋은 RI+PMI 선택 자체에 영향을 주지 않는다 —
+ *       codebook_type1_sp_4port_ri_pmi_select()는 이 함수에서도 다른
+ *       모든 비-OLLA 호출부와 완전히 동일하게 순수 채널(H,N0) 기준으로만
+ *       rank/PMI를 고른다. 다른 OLLA 함수들이 "MIMO 검출손실은 예측식에
+ *       미반영"이라고 이미 명시한 단순화와 같은 철학.
+ *   (2) 대신 선택된 rank의 프리코딩 이득은 MCS 선택에 반영한다 —
+ *       codebook_type1_sp_4port_effective_snr_db()(신규, codebook.c)가
+ *       RI/PMI 선택기 내부와 동일한 capacity 공식을 선택된 후보 하나에
+ *       대해서만 재계산해 "이 rank로 균등분배했다면"에 해당하는 유효
+ *       SNR 하나를 돌려준다 — 이 값 + OLLA 오프셋을 olla_select_mcs()에
+ *       넣는다. rank-1/rank-2가 서로 다른 MCS를 받을 수 있음(의도된
+ *       동작 — 프리코딩 이득이 다르므로).
+ *
+ * 채널/검출: run_pdsch_cl_4port_simulation()의 "Adaptive" 시나리오와
+ * 동일(i.i.d. Rayleigh + SPATIAL_CORR_TX/XPOL, genie-aided CSI, rank-1은
+ * mrc_combine_4rx, rank-2는 mimo_mmse_detect_4rx2 — EQUALIZER 설정과
+ * 무관, 그 함수의 기존 관례 그대로). 결합 ACK = 선택된 rank의 레이어
+ * 전부 성공(SM_4X4 OLLA와 동일 관례, rank가 매 트라이얼 달라지는 점만
+ * 다름). TDL/Tx 공간상관 이외 확장은 미지원(다른 OLLA 함수들과 동일
+ * 스코프 — 고정 SNR 시계열, TDL 없음).
+ * ─────────────────────────────────────────────────────────────────────────── */
+void run_pdsch_olla_cl_4port_simulation(const L1Config *cfg) {
+    int num_rb   = cfg->numRB;
+    int num_data = 6 * num_rb;
+    int crc_bits = 24;
+
+    MCSTableType tbl = mcs_table_from_str(cfg->mcsTableType);
+    double snr   = cfg->snrStart;
+    double N0    = 1.0 / pow(10.0, snr / 10.0);
+    double sigma = sqrt(N0 / 2.0);
+
+    printf("=== PDSCH OLLA + CL_4PORT (RI+PMI 적응), 고정 SNR 시계열 ===\n");
+    printf("MCS Table    : %s\n", cfg->mcsTableType);
+    printf("Fixed SNR    : %.1f dB (SNR sweep 무시, 시계열 시뮬레이션)\n", snr);
+    printf("Codebook     : TS 38.214 Type I SP (N1=2, O1=4, Ng=2), rank 1~2 적응\n");
+    printf("Tx Corr      : rho=%.2f, rho_xpol=%.2f (%s)\n",
+           cfg->spatialCorrTx, cfg->spatialCorrXpol,
+           (cfg->spatialCorrTx > 0.0 || cfg->spatialCorrXpol > 0.0) ? "공간상관" : "i.i.d.");
+    printf("Rx Antennas  : 4 (genie-aided 채널, DMRS 미모델링)\n");
+    printf("Num RB       : %d  (Data RE/layer: %d)\n", num_rb, num_data);
+    printf("BLER Target  : %.2f (결합 ACK — 선택된 rank의 레이어 전부 성공해야 ACK)\n", cfg->ollaBlerTarget);
+    printf("Step Down    : %.2f dB (Step Up = %.4f dB, 목표 BLER 수렴 조건)\n",
+           cfg->ollaStepDownDb, cfg->ollaStepDownDb * cfg->ollaBlerTarget / (1.0 - cfg->ollaBlerTarget));
+    printf("SNR Gap      : %.1f dB (Shannon 대비 구현 마진, MIMO 검출손실은 예측식에 미반영)\n", cfg->ollaSnrGapDb);
+    printf("Trials       : %d (per pass)\n\n", cfg->numTrials);
+
+    int print_interval = cfg->numTrials / 20;
+    if (print_interval < 1) print_interval = 1;
+
+    for (int pass = 0; pass < 2; pass++) {
+        int is_olla = (pass == 1);
+        OLLAState olla;
+        olla_init(&olla, cfg->ollaBlerTarget, cfg->ollaStepDownDb);
+
+        printf("--- Pass %d: %s ---\n", pass + 1, is_olla ? "OLLA (폐루프 오프셋 적응)" : "Open-Loop (오프셋 고정 0)");
+        printf("%-8s  %-5s  %-6s  %-9s  %-11s  %-10s\n", "Trial", "Rank", "MCS", "Offset(dB)", "WindowBLER", "CumBLER");
+        for (int i = 0; i < 58; i++) printf("-");
+        printf("\n");
+
+        long total_bits = 0, total_err = 0;
+        int  blk_err_cum = 0, blk_err_win = 0;
+        long mcs_sum = 0, rank_sum = 0;
+
+        for (int trial = 0; trial < cfg->numTrials; trial++) {
+            /* ① 채널 드로우 + RI/PMI 선택 — OLLA 상태와 완전 무관(설계
+             * 결정 (1), 위 함수 헤더 주석 참조) */
+            cx_t H[4][4];
+            mimo_channel_draw_4x4(H);
+            mimo_apply_tx_correlation_4x4(H, cfg->spatialCorrTx, cfg->spatialCorrXpol);
+
+            int rank_ad, i1_ad, i13_ad, i2_ad;
+            int r1_i1, r1_i2, r2_i1, r2_i13, r2_i2;   /* R1/R2-fixed 후보는 이 함수에서 미사용 */
+            codebook_type1_sp_4port_ri_pmi_select(
+                H, N0, &rank_ad, &i1_ad, &i13_ad, &i2_ad,
+                &r1_i1, &r1_i2, &r2_i1, &r2_i13, &r2_i2);
+            int NL = rank_ad;
+            rank_sum += NL;
+
+            /* ② 선택된 rank의 프리코딩 이득을 반영한 유효 SNR → MCS
+             * (설계 결정 (2)) */
+            double cap_snr_db = codebook_type1_sp_4port_effective_snr_db(
+                H, N0, rank_ad, i1_ad, i13_ad, i2_ad);
+            double eff_snr = cap_snr_db + (is_olla ? olla.offset_db : 0.0);
+            int mcs_idx = olla_select_mcs(eff_snr, cfg->ollaSnrGapDb, tbl);
+            MCSEntry mcs = get_mcs_entry(mcs_idx, tbl);
+            double cr  = get_code_rate(&mcs);
+            int    bps = mcs.modulationOrder;
+            mcs_sum += mcs_idx;
+
+            int max_dbits = num_data * bps;
+            int tbsz = nr_determine_tbs(max_dbits, cr);
+            int B = tbsz + crc_bits;
+
+            NRSegInfo seg; nr_seg_compute(B, cr, &seg);
+            int payload = seg.Kprime - seg.L;
+            LDPCCodec ldpc;
+            ldpc_init_resolved(&ldpc, seg.Kprime, cr, seg.bg, seg.Zc, seg.Kb,
+                                seg.base_rows, seg.base_info_cols, seg.base_cols,
+                                seg.filler_size);
+            int acsz = ldpc.coded_size;
+            int E    = num_data * bps;
+            int *Er = (int *)malloc(seg.C * sizeof(int));
+            nr_ldpc_er_alloc(E, /*Nl=*/1, bps, seg.C, Er);
+
+            int   *tb[2], *tb_crc[2], *cb_bits[2], *coded[2], **rm[2], *selbits[2];
+            int   *decoded_cb[2], *decoded_tb[2];
+            cx_t  *sym[2], *rx_hat[2];
+            double *allllr[2], *soft_buf[2];
+            for (int l = 0; l < NL; l++) {
+                tb[l]         = (int   *)malloc(tbsz * sizeof(int));
+                tb_crc[l]     = (int   *)malloc(B    * sizeof(int));
+                cb_bits[l]    = (int   *)malloc((size_t)seg.C * seg.Kprime * sizeof(int));
+                coded[l]      = (int   *)malloc(acsz * sizeof(int));
+                rm[l]         = (int  **)malloc(seg.C * sizeof(int *));
+                for (int r = 0; r < seg.C; r++) rm[l][r] = (int *)malloc(Er[r] * sizeof(int));
+                selbits[l]    = (int   *)malloc(E    * sizeof(int));
+                sym[l]        = (cx_t *)malloc(num_data * sizeof(cx_t));
+                allllr[l]     = (double *)malloc(E     * sizeof(double));
+                soft_buf[l]   = (double *)malloc(acsz  * sizeof(double));
+                decoded_cb[l] = (int   *)malloc(ldpc.info_size * sizeof(int));
+                decoded_tb[l] = (int   *)malloc(B * sizeof(int));
+                rx_hat[l]     = (cx_t *)malloc(num_data * sizeof(cx_t));
+            }
+
+            for (int l = 0; l < NL; l++) {
+                gen_random_bits(tb[l], tbsz);
+                attach_crc(tb[l], tbsz, CRC24A, tb_crc[l]);
+                nr_seg_split(tb_crc[l], &seg, cb_bits[l]);
+                for (int r = 0; r < seg.C; r++) {
+                    const int *info = cb_bits[l] + (size_t)r * seg.Kprime;
+                    ldpc_encode(&ldpc, info, coded[l]);
+                    nr_ldpc_rate_match_select(coded[l], acsz, ldpc.bg, ldpc.Zc,
+                                               ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                               /*rv=*/0, Er[r], rm[l][r]);
+                }
+                nr_seg_concat(&seg, (const int *const *)rm[l], Er, selbits[l]);
+                qam_modulate(selbits[l], E, mcs.modulation, sym[l]);
+            }
+
+            /* ③ 프리코딩 + 검출 -- run_pdsch_cl_4port_simulation()의
+             * Adaptive 시나리오와 동일 */
+            int trial_err = 0;
+            int beL[2] = {0, 0};
+            if (rank_ad == 1) {
+                cx_t W[4];
+                codebook_type1_sp_4port_rank1(i1_ad, i2_ad, W);
+                cx_t h_eff[4];
+                for (int r = 0; r < 4; r++) {
+                    h_eff[r] = 0.0;
+                    for (int t = 0; t < 4; t++) h_eff[r] += H[r][t] * W[t];
+                }
+                double nv_sum = 0.0;
+                for (int d = 0; d < num_data; d++) {
+                    cx_t y[4];
+                    for (int r = 0; r < 4; r++)
+                        y[r] = h_eff[r] * sym[0][d] + CX_MAKE(randn()*sigma, randn()*sigma);
+                    cx_t xh; double nv;
+                    mrc_combine_4rx(h_eff, y, N0, &xh, &nv);
+                    rx_hat[0][d] = xh;
+                    nv_sum += nv;
+                }
+                double env = nv_sum / num_data;
+                qam_demap_llr(rx_hat[0], num_data, mcs.modulation, env, allllr[0]);
+            } else {   /* rank_ad == 2 */
+                cx_t W2[4][2];
+                codebook_type1_sp_4port_rank2(i1_ad, i13_ad, i2_ad, W2);
+                cx_t h_eff2[4][2];
+                for (int r = 0; r < 4; r++)
+                    for (int l = 0; l < 2; l++) {
+                        h_eff2[r][l] = 0.0;
+                        for (int t = 0; t < 4; t++) h_eff2[r][l] += H[r][t] * W2[t][l];
+                    }
+                double nv2_sum[2] = {0.0, 0.0};
+                for (int d = 0; d < num_data; d++) {
+                    cx_t y[4];
+                    for (int r = 0; r < 4; r++)
+                        y[r] = h_eff2[r][0] * sym[0][d] + h_eff2[r][1] * sym[1][d]
+                               + CX_MAKE(randn()*sigma, randn()*sigma);
+                    cx_t xh2[2]; double nv2[2];
+                    mimo_mmse_detect_4rx2(h_eff2, y, N0, xh2, nv2);
+                    rx_hat[0][d] = xh2[0];
+                    rx_hat[1][d] = xh2[1];
+                    nv2_sum[0] += nv2[0];
+                    nv2_sum[1] += nv2[1];
+                }
+                for (int l = 0; l < 2; l++) {
+                    double env = nv2_sum[l] / num_data;
+                    qam_demap_llr(rx_hat[l], num_data, mcs.modulation, env, allllr[l]);
+                }
+            }
+
+            /* ④ 복호 + 결합 ACK (선택된 rank의 레이어 전부 성공해야 ACK) */
+            for (int l = 0; l < NL; l++) {
+                int roff = 0;
+                int cb_crc_ok = 1;
+                for (int r = 0; r < seg.C; r++) {
+                    memset(soft_buf[l], 0, acsz*sizeof(double));
+                    nr_ldpc_rate_match_combine(soft_buf[l], acsz, ldpc.bg, ldpc.Zc,
+                                                ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                                /*rv=*/0, Er[r], allllr[l] + roff);
+                    roff += Er[r];
+                    ldpc_decode(&ldpc, soft_buf[l], 25, decoded_cb[l]);
+                    if (seg.C > 1 && !check_crc(decoded_cb[l], seg.Kprime, CRC24B)) cb_crc_ok = 0;
+                    memcpy(decoded_tb[l] + (size_t)r * payload, decoded_cb[l], payload * sizeof(int));
+                }
+                int crc_ok = cb_crc_ok && check_crc(decoded_tb[l], B, CRC24A);
+                beL[l] = 0;
+                for (int i = 0; i < tbsz; i++) if (tb[l][i] != decoded_tb[l][i]) beL[l]++;
+                if (!crc_ok || beL[l] > 0) trial_err++;
+            }
+            int ack = (trial_err == 0);
+
+            for (int l = 0; l < NL; l++) { total_bits += tbsz; total_err += beL[l]; }
+            if (!ack) { blk_err_cum++; blk_err_win++; }
+
+            if (is_olla) olla_update(&olla, ack);
+
+            if ((trial + 1) % print_interval == 0 || trial == cfg->numTrials - 1) {
+                double win_bler = (double)blk_err_win / print_interval;
+                double cum_bler = (double)blk_err_cum / (trial + 1);
+                printf("%-8d  %-5d  %-6d  %-9.2f  %-11.4f  %-10.4f\n",
+                       trial + 1, rank_ad, mcs_idx, is_olla ? olla.offset_db : 0.0, win_bler, cum_bler);
+                blk_err_win = 0;
+            }
+
+            ldpc_free(&ldpc);
+            for (int l = 0; l < NL; l++) {
+                free(tb[l]); free(tb_crc[l]); free(cb_bits[l]); free(coded[l]);
+                for (int r = 0; r < seg.C; r++) free(rm[l][r]);
+                free(rm[l]); free(selbits[l]);
+                free(sym[l]); free(allllr[l]); free(soft_buf[l]);
+                free(decoded_cb[l]); free(decoded_tb[l]); free(rx_hat[l]);
+            }
+            free(Er);
+        }   /* end trial loop */
+
+        double final_ber  = total_bits > 0 ? (double)total_err / total_bits : 0.0;
+        double final_bler = (double)blk_err_cum / cfg->numTrials;
+        double avg_mcs    = (double)mcs_sum / cfg->numTrials;
+        double avg_rank   = (double)rank_sum / cfg->numTrials;
+        printf("\n%s 최종: BER=%.4e  BLER=%.4f (목표 %.2f)  평균 MCS=%.2f  평균 Rank=%.2f\n\n",
+               is_olla ? "OLLA" : "Open-Loop", final_ber, final_bler, cfg->ollaBlerTarget, avg_mcs, avg_rank);
+    }   /* end pass loop */
+
+    printf("PDSCH OLLA + CL_4PORT simulation complete.\n");
+}
+
+/* 8-port OLLA uses the same fixed-SNR, rank-aware MCS design as
+ * CL_4PORT. RI/PMI uses only H and N0; OLLA adjusts MCS after selection. */
+void run_pdsch_olla_cl_8port_simulation(const L1Config *cfg) {
+    int num_rb   = cfg->numRB;
+    int num_data = 6 * num_rb;
+    int crc_bits = 24;
+
+    MCSTableType tbl = mcs_table_from_str(cfg->mcsTableType);
+    double snr   = cfg->snrStart;
+    double N0    = 1.0 / pow(10.0, snr / 10.0);
+    double sigma = sqrt(N0 / 2.0);
+
+    printf("=== PDSCH OLLA + CL_8PORT (RI+PMI 적응), 고정 SNR 시계열 ===\n");
+    printf("MCS Table    : %s\n", cfg->mcsTableType);
+    printf("Fixed SNR    : %.1f dB (SNR sweep 무시, 시계열 시뮬레이션)\n", snr);
+    printf("Codebook     : TS 38.214 Type I SP (N1=4, O1=4, Ng=2), rank 1~2 적응\n");
+    printf("Tx Corr      : rho=%.2f, rho_xpol=%.2f (%s)\n",
+           cfg->spatialCorrTx, cfg->spatialCorrXpol,
+           (cfg->spatialCorrTx > 0.0 || cfg->spatialCorrXpol > 0.0) ? "공간상관" : "i.i.d.");
+    printf("Rx Antennas  : 4 (genie-aided 채널, DMRS 미모델링)\n");
+    printf("Num RB       : %d  (Data RE/layer: %d)\n", num_rb, num_data);
+    printf("BLER Target  : %.2f (결합 ACK — 선택된 rank의 레이어 전부 성공해야 ACK)\n", cfg->ollaBlerTarget);
+    printf("Step Down    : %.2f dB (Step Up = %.4f dB, 목표 BLER 수렴 조건)\n",
+           cfg->ollaStepDownDb, cfg->ollaStepDownDb * cfg->ollaBlerTarget / (1.0 - cfg->ollaBlerTarget));
+    printf("SNR Gap      : %.1f dB (Shannon 대비 구현 마진, MIMO 검출손실은 예측식에 미반영)\n", cfg->ollaSnrGapDb);
+    printf("Trials       : %d (per pass)\n\n", cfg->numTrials);
+
+    int print_interval = cfg->numTrials / 20;
+    if (print_interval < 1) print_interval = 1;
+
+    for (int pass = 0; pass < 2; pass++) {
+        int is_olla = (pass == 1);
+        OLLAState olla;
+        olla_init(&olla, cfg->ollaBlerTarget, cfg->ollaStepDownDb);
+
+        printf("--- Pass %d: %s ---\n", pass + 1, is_olla ? "OLLA (폐루프 오프셋 적응)" : "Open-Loop (오프셋 고정 0)");
+        printf("%-8s  %-5s  %-6s  %-9s  %-11s  %-10s\n", "Trial", "Rank", "MCS", "Offset(dB)", "WindowBLER", "CumBLER");
+        for (int i = 0; i < 58; i++) printf("-");
+        printf("\n");
+
+        long total_bits = 0, total_err = 0;
+        int  blk_err_cum = 0, blk_err_win = 0;
+        long mcs_sum = 0, rank_sum = 0;
+
+        for (int trial = 0; trial < cfg->numTrials; trial++) {
+            /* ① 채널 드로우 + RI/PMI 선택 — OLLA 상태와 완전 무관(설계
+             * 결정 (1), 위 함수 헤더 주석 참조) */
+            cx_t H[4][8];
+            mimo_channel_draw_4x8(H);
+            mimo_apply_tx_correlation_4x8(H, cfg->spatialCorrTx, cfg->spatialCorrXpol);
+
+            int rank_ad, i1_ad, i13_ad, i2_ad;
+            int r1_i1, r1_i2, r2_i1, r2_i13, r2_i2;   /* R1/R2-fixed 후보는 이 함수에서 미사용 */
+            codebook_type1_sp_8port_ri_pmi_select(
+                H, N0, &rank_ad, &i1_ad, &i13_ad, &i2_ad,
+                &r1_i1, &r1_i2, &r2_i1, &r2_i13, &r2_i2);
+            int NL = rank_ad;
+            rank_sum += NL;
+
+            /* ② 선택된 rank의 프리코딩 이득을 반영한 유효 SNR → MCS
+             * (설계 결정 (2)) */
+            double cap_snr_db = codebook_type1_sp_8port_effective_snr_db(
+                H, N0, rank_ad, i1_ad, i13_ad, i2_ad);
+            double eff_snr = cap_snr_db + (is_olla ? olla.offset_db : 0.0);
+            int mcs_idx = olla_select_mcs(eff_snr, cfg->ollaSnrGapDb, tbl);
+            MCSEntry mcs = get_mcs_entry(mcs_idx, tbl);
+            double cr  = get_code_rate(&mcs);
+            int    bps = mcs.modulationOrder;
+            mcs_sum += mcs_idx;
+
+            int max_dbits = num_data * bps;
+            int tbsz = nr_determine_tbs(max_dbits, cr);
+            int B = tbsz + crc_bits;
+
+            NRSegInfo seg; nr_seg_compute(B, cr, &seg);
+            int payload = seg.Kprime - seg.L;
+            LDPCCodec ldpc;
+            ldpc_init_resolved(&ldpc, seg.Kprime, cr, seg.bg, seg.Zc, seg.Kb,
+                                seg.base_rows, seg.base_info_cols, seg.base_cols,
+                                seg.filler_size);
+            int acsz = ldpc.coded_size;
+            int E    = num_data * bps;
+            int *Er = (int *)malloc(seg.C * sizeof(int));
+            nr_ldpc_er_alloc(E, /*Nl=*/1, bps, seg.C, Er);
+
+            int   *tb[2], *tb_crc[2], *cb_bits[2], *coded[2], **rm[2], *selbits[2];
+            int   *decoded_cb[2], *decoded_tb[2];
+            cx_t  *sym[2], *rx_hat[2];
+            double *allllr[2], *soft_buf[2];
+            for (int l = 0; l < NL; l++) {
+                tb[l]         = (int   *)malloc(tbsz * sizeof(int));
+                tb_crc[l]     = (int   *)malloc(B    * sizeof(int));
+                cb_bits[l]    = (int   *)malloc((size_t)seg.C * seg.Kprime * sizeof(int));
+                coded[l]      = (int   *)malloc(acsz * sizeof(int));
+                rm[l]         = (int  **)malloc(seg.C * sizeof(int *));
+                for (int r = 0; r < seg.C; r++) rm[l][r] = (int *)malloc(Er[r] * sizeof(int));
+                selbits[l]    = (int   *)malloc(E    * sizeof(int));
+                sym[l]        = (cx_t *)malloc(num_data * sizeof(cx_t));
+                allllr[l]     = (double *)malloc(E     * sizeof(double));
+                soft_buf[l]   = (double *)malloc(acsz  * sizeof(double));
+                decoded_cb[l] = (int   *)malloc(ldpc.info_size * sizeof(int));
+                decoded_tb[l] = (int   *)malloc(B * sizeof(int));
+                rx_hat[l]     = (cx_t *)malloc(num_data * sizeof(cx_t));
+            }
+
+            for (int l = 0; l < NL; l++) {
+                gen_random_bits(tb[l], tbsz);
+                attach_crc(tb[l], tbsz, CRC24A, tb_crc[l]);
+                nr_seg_split(tb_crc[l], &seg, cb_bits[l]);
+                for (int r = 0; r < seg.C; r++) {
+                    const int *info = cb_bits[l] + (size_t)r * seg.Kprime;
+                    ldpc_encode(&ldpc, info, coded[l]);
+                    nr_ldpc_rate_match_select(coded[l], acsz, ldpc.bg, ldpc.Zc,
+                                               ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                               /*rv=*/0, Er[r], rm[l][r]);
+                }
+                nr_seg_concat(&seg, (const int *const *)rm[l], Er, selbits[l]);
+                qam_modulate(selbits[l], E, mcs.modulation, sym[l]);
+            }
+
+            /* ③ 프리코딩 + 검출 -- run_pdsch_cl_8port_simulation()의
+             * Adaptive 시나리오와 동일 */
+            int trial_err = 0;
+            int beL[2] = {0, 0};
+            if (rank_ad == 1) {
+                cx_t W[8];
+                codebook_type1_sp_8port_rank1(i1_ad, i2_ad, W);
+                cx_t h_eff[4];
+                for (int r = 0; r < 4; r++) {
+                    h_eff[r] = 0.0;
+                    for (int t = 0; t < 8; t++) h_eff[r] += H[r][t] * W[t];
+                }
+                double nv_sum = 0.0;
+                for (int d = 0; d < num_data; d++) {
+                    cx_t y[4];
+                    for (int r = 0; r < 4; r++)
+                        y[r] = h_eff[r] * sym[0][d] + CX_MAKE(randn()*sigma, randn()*sigma);
+                    cx_t xh; double nv;
+                    mrc_combine_4rx(h_eff, y, N0, &xh, &nv);
+                    rx_hat[0][d] = xh;
+                    nv_sum += nv;
+                }
+                double env = nv_sum / num_data;
+                qam_demap_llr(rx_hat[0], num_data, mcs.modulation, env, allllr[0]);
+            } else {   /* rank_ad == 2 */
+                cx_t W2[8][2];
+                codebook_type1_sp_8port_rank2(i1_ad, i13_ad, i2_ad, W2);
+                cx_t h_eff2[4][2];
+                for (int r = 0; r < 4; r++)
+                    for (int l = 0; l < 2; l++) {
+                        h_eff2[r][l] = 0.0;
+                        for (int t = 0; t < 8; t++) h_eff2[r][l] += H[r][t] * W2[t][l];
+                    }
+                double nv2_sum[2] = {0.0, 0.0};
+                for (int d = 0; d < num_data; d++) {
+                    cx_t y[4];
+                    for (int r = 0; r < 4; r++)
+                        y[r] = h_eff2[r][0] * sym[0][d] + h_eff2[r][1] * sym[1][d]
+                               + CX_MAKE(randn()*sigma, randn()*sigma);
+                    cx_t xh2[2]; double nv2[2];
+                    mimo_mmse_detect_4rx2(h_eff2, y, N0, xh2, nv2);
+                    rx_hat[0][d] = xh2[0];
+                    rx_hat[1][d] = xh2[1];
+                    nv2_sum[0] += nv2[0];
+                    nv2_sum[1] += nv2[1];
+                }
+                for (int l = 0; l < 2; l++) {
+                    double env = nv2_sum[l] / num_data;
+                    qam_demap_llr(rx_hat[l], num_data, mcs.modulation, env, allllr[l]);
+                }
+            }
+
+            /* ④ 복호 + 결합 ACK (선택된 rank의 레이어 전부 성공해야 ACK) */
+            for (int l = 0; l < NL; l++) {
+                int roff = 0;
+                int cb_crc_ok = 1;
+                for (int r = 0; r < seg.C; r++) {
+                    memset(soft_buf[l], 0, acsz*sizeof(double));
+                    nr_ldpc_rate_match_combine(soft_buf[l], acsz, ldpc.bg, ldpc.Zc,
+                                                ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                                /*rv=*/0, Er[r], allllr[l] + roff);
+                    roff += Er[r];
+                    ldpc_decode(&ldpc, soft_buf[l], 25, decoded_cb[l]);
+                    if (seg.C > 1 && !check_crc(decoded_cb[l], seg.Kprime, CRC24B)) cb_crc_ok = 0;
+                    memcpy(decoded_tb[l] + (size_t)r * payload, decoded_cb[l], payload * sizeof(int));
+                }
+                int crc_ok = cb_crc_ok && check_crc(decoded_tb[l], B, CRC24A);
+                beL[l] = 0;
+                for (int i = 0; i < tbsz; i++) if (tb[l][i] != decoded_tb[l][i]) beL[l]++;
+                if (!crc_ok || beL[l] > 0) trial_err++;
+            }
+            int ack = (trial_err == 0);
+
+            for (int l = 0; l < NL; l++) { total_bits += tbsz; total_err += beL[l]; }
+            if (!ack) { blk_err_cum++; blk_err_win++; }
+
+            if (is_olla) olla_update(&olla, ack);
+
+            if ((trial + 1) % print_interval == 0 || trial == cfg->numTrials - 1) {
+                double win_bler = (double)blk_err_win / print_interval;
+                double cum_bler = (double)blk_err_cum / (trial + 1);
+                printf("%-8d  %-5d  %-6d  %-9.2f  %-11.4f  %-10.4f\n",
+                       trial + 1, rank_ad, mcs_idx, is_olla ? olla.offset_db : 0.0, win_bler, cum_bler);
+                blk_err_win = 0;
+            }
+
+            ldpc_free(&ldpc);
+            for (int l = 0; l < NL; l++) {
+                free(tb[l]); free(tb_crc[l]); free(cb_bits[l]); free(coded[l]);
+                for (int r = 0; r < seg.C; r++) free(rm[l][r]);
+                free(rm[l]); free(selbits[l]);
+                free(sym[l]); free(allllr[l]); free(soft_buf[l]);
+                free(decoded_cb[l]); free(decoded_tb[l]); free(rx_hat[l]);
+            }
+            free(Er);
+        }   /* end trial loop */
+
+        double final_ber  = total_bits > 0 ? (double)total_err / total_bits : 0.0;
+        double final_bler = (double)blk_err_cum / cfg->numTrials;
+        double avg_mcs    = (double)mcs_sum / cfg->numTrials;
+        double avg_rank   = (double)rank_sum / cfg->numTrials;
+        printf("\n%s 최종: BER=%.4e  BLER=%.4f (목표 %.2f)  평균 MCS=%.2f  평균 Rank=%.2f\n\n",
+               is_olla ? "OLLA" : "Open-Loop", final_ber, final_bler, cfg->ollaBlerTarget, avg_mcs, avg_rank);
+    }   /* end pass loop */
+
+    printf("PDSCH OLLA + CL_8PORT simulation complete.\n");
+}
+
+/* 32-port OLLA uses the same fixed-SNR, rank-aware MCS design as
+ * CL_4PORT. RI/PMI uses only H and N0; OLLA adjusts MCS after selection. */
+void run_pdsch_olla_cl_32port_simulation(const L1Config *cfg) {
+    int num_rb   = cfg->numRB;
+    int num_data = 6 * num_rb;
+    int crc_bits = 24;
+
+    MCSTableType tbl = mcs_table_from_str(cfg->mcsTableType);
+    double snr   = cfg->snrStart;
+    double N0    = 1.0 / pow(10.0, snr / 10.0);
+    double sigma = sqrt(N0 / 2.0);
+
+    printf("=== PDSCH OLLA + CL_32PORT (RI+PMI 적응), 고정 SNR 시계열 ===\n");
+    printf("MCS Table    : %s\n", cfg->mcsTableType);
+    printf("Fixed SNR    : %.1f dB (SNR sweep 무시, 시계열 시뮬레이션)\n", snr);
+    printf("Codebook     : TS 38.214 Type I SP (N1=N2=4, O1=O2=4), rank 1~4 적응\n");
+    printf("Tx Corr      : rho_h=%.2f, rho_v=%.2f, rho_xpol=%.2f (%s)\n",
+           cfg->spatialCorrTx, cfg->spatialCorrTxVert, cfg->spatialCorrXpol,
+           (cfg->spatialCorrTx > 0.0 || cfg->spatialCorrTxVert > 0.0 || cfg->spatialCorrXpol > 0.0) ? "공간상관" : "i.i.d.");
+    printf("Rx Antennas  : 4 (genie-aided 채널, DMRS 미모델링)\n");
+    printf("Num RB       : %d  (Data RE/layer: %d)\n", num_rb, num_data);
+    printf("BLER Target  : %.2f (결합 ACK — 선택된 rank의 레이어 전부 성공해야 ACK)\n", cfg->ollaBlerTarget);
+    printf("Step Down    : %.2f dB (Step Up = %.4f dB, 목표 BLER 수렴 조건)\n",
+           cfg->ollaStepDownDb, cfg->ollaStepDownDb * cfg->ollaBlerTarget / (1.0 - cfg->ollaBlerTarget));
+    printf("SNR Gap      : %.1f dB (후 MMSE 용량 대비 구현 마진)\n", cfg->ollaSnrGapDb);
+    printf("Trials       : %d (per pass)\n\n", cfg->numTrials);
+
+    int print_interval = cfg->numTrials / 20;
+    if (print_interval < 1) print_interval = 1;
+
+    for (int pass = 0; pass < 2; pass++) {
+        int is_olla = (pass == 1);
+        OLLAState olla;
+        olla_init(&olla, cfg->ollaBlerTarget, cfg->ollaStepDownDb);
+
+        printf("--- Pass %d: %s ---\n", pass + 1, is_olla ? "OLLA (폐루프 오프셋 적응)" : "Open-Loop (오프셋 고정 0)");
+        printf("%-8s  %-5s  %-6s  %-9s  %-11s  %-10s\n", "Trial", "Rank", "MCS", "Offset(dB)", "WindowBLER", "CumBLER");
+        for (int i = 0; i < 58; i++) printf("-");
+        printf("\n");
+
+        long total_bits = 0, total_err = 0;
+        int  blk_err_cum = 0, blk_err_win = 0;
+        long mcs_sum = 0, rank_sum = 0;
+
+        for (int trial = 0; trial < cfg->numTrials; trial++) {
+            /* ① 채널 드로우 + RI/PMI 선택 — OLLA 상태와 완전 무관(설계
+             * 결정 (1), 위 함수 헤더 주석 참조) */
+            cx_t H[4][32];
+            mimo_channel_draw_4x32(H);
+            mimo_apply_tx_correlation_4x32(H, cfg->spatialCorrTx, cfg->spatialCorrTxVert, cfg->spatialCorrXpol);
+
+            int rank_ad, l1_ad, l2_ad, i13_ad, i2_ad;
+            codebook_type1_sp_32port_ri_pmi_select(H, N0, &rank_ad, &l1_ad, &l2_ad, &i13_ad, &i2_ad);
+            int NL = rank_ad;
+            rank_sum += NL;
+
+            /* ② 선택된 rank의 프리코딩 이득을 반영한 유효 SNR → MCS
+             * (설계 결정 (2)) */
+            double cap_snr_db = codebook_type1_sp_32port_effective_snr_db(
+                H, N0, rank_ad, l1_ad, l2_ad, i13_ad, i2_ad);
+            double eff_snr = cap_snr_db + (is_olla ? olla.offset_db : 0.0);
+            int mcs_idx = olla_select_mcs(eff_snr, cfg->ollaSnrGapDb, tbl);
+            MCSEntry mcs = get_mcs_entry(mcs_idx, tbl);
+            double cr  = get_code_rate(&mcs);
+            int    bps = mcs.modulationOrder;
+            mcs_sum += mcs_idx;
+
+            int max_dbits = num_data * bps;
+            int tbsz = nr_determine_tbs(max_dbits, cr);
+            int B = tbsz + crc_bits;
+
+            NRSegInfo seg; nr_seg_compute(B, cr, &seg);
+            int payload = seg.Kprime - seg.L;
+            LDPCCodec ldpc;
+            ldpc_init_resolved(&ldpc, seg.Kprime, cr, seg.bg, seg.Zc, seg.Kb,
+                                seg.base_rows, seg.base_info_cols, seg.base_cols,
+                                seg.filler_size);
+            int acsz = ldpc.coded_size;
+            int E    = num_data * bps;
+            int *Er = (int *)malloc(seg.C * sizeof(int));
+            nr_ldpc_er_alloc(E, /*Nl=*/1, bps, seg.C, Er);
+
+            int   *tb[4], *tb_crc[4], *cb_bits[4], *coded[4], **rm[4], *selbits[4];
+            int   *decoded_cb[4], *decoded_tb[4];
+            cx_t  *sym[4], *rx_hat[4];
+            double *allllr[4], *soft_buf[4];
+            for (int l = 0; l < NL; l++) {
+                tb[l]         = (int   *)malloc(tbsz * sizeof(int));
+                tb_crc[l]     = (int   *)malloc(B    * sizeof(int));
+                cb_bits[l]    = (int   *)malloc((size_t)seg.C * seg.Kprime * sizeof(int));
+                coded[l]      = (int   *)malloc(acsz * sizeof(int));
+                rm[l]         = (int  **)malloc(seg.C * sizeof(int *));
+                for (int r = 0; r < seg.C; r++) rm[l][r] = (int *)malloc(Er[r] * sizeof(int));
+                selbits[l]    = (int   *)malloc(E    * sizeof(int));
+                sym[l]        = (cx_t *)malloc(num_data * sizeof(cx_t));
+                allllr[l]     = (double *)malloc(E     * sizeof(double));
+                soft_buf[l]   = (double *)malloc(acsz  * sizeof(double));
+                decoded_cb[l] = (int   *)malloc(ldpc.info_size * sizeof(int));
+                decoded_tb[l] = (int   *)malloc(B * sizeof(int));
+                rx_hat[l]     = (cx_t *)malloc(num_data * sizeof(cx_t));
+            }
+
+            for (int l = 0; l < NL; l++) {
+                gen_random_bits(tb[l], tbsz);
+                attach_crc(tb[l], tbsz, CRC24A, tb_crc[l]);
+                nr_seg_split(tb_crc[l], &seg, cb_bits[l]);
+                for (int r = 0; r < seg.C; r++) {
+                    const int *info = cb_bits[l] + (size_t)r * seg.Kprime;
+                    ldpc_encode(&ldpc, info, coded[l]);
+                    nr_ldpc_rate_match_select(coded[l], acsz, ldpc.bg, ldpc.Zc,
+                                               ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                               /*rv=*/0, Er[r], rm[l][r]);
+                }
+                nr_seg_concat(&seg, (const int *const *)rm[l], Er, selbits[l]);
+                qam_modulate(selbits[l], E, mcs.modulation, sym[l]);
+            }
+
+            int trial_err = 0;
+            int beL[4] = {0};
+            cx_t *nbuf = (cx_t *)malloc((size_t)num_data * 4 * sizeof(cx_t));
+            for (int d = 0; d < num_data; d++)
+                for (int r = 0; r < 4; r++)
+                    nbuf[d * 4 + r] = CX_MAKE(randn() * sigma, randn() * sigma);
+
+            /* 프리코딩 + 검출 (rank별 분기) */
+            double nv_sum[4] = {0.0, 0.0, 0.0, 0.0};
+
+            if (rank_ad == 1) {
+                cx_t W[32];
+                codebook_type1_sp_32port_rank1(l1_ad, l2_ad, i2_ad, W);
+                cx_t h_eff[4];
+                for (int r = 0; r < 4; r++) {
+                    h_eff[r] = 0.0;
+                    for (int t = 0; t < 32; t++) h_eff[r] += H[r][t] * W[t];
+                }
+                for (int d = 0; d < num_data; d++) {
+                    cx_t y[4];
+                    for (int r = 0; r < 4; r++)
+                        y[r] = h_eff[r] * sym[0][d] + nbuf[d * 4 + r];
+                    cx_t xh; double nv;
+                    mrc_combine_4rx(h_eff, y, N0, &xh, &nv);
+                    rx_hat[0][d] = xh;
+                    nv_sum[0] += nv;
+                }
+            } else if (rank_ad == 2) {
+                cx_t W[32][2];
+                codebook_type1_sp_32port_rank2(l1_ad, l2_ad, i13_ad, i2_ad, W);
+                cx_t h_eff[4][2];
+                for (int r = 0; r < 4; r++)
+                    for (int c = 0; c < 2; c++) {
+                        h_eff[r][c] = 0.0;
+                        for (int t = 0; t < 32; t++) h_eff[r][c] += H[r][t] * W[t][c];
+                    }
+                for (int d = 0; d < num_data; d++) {
+                    cx_t y[4];
+                    for (int r = 0; r < 4; r++)
+                        y[r] = h_eff[r][0] * sym[0][d] + h_eff[r][1] * sym[1][d] + nbuf[d * 4 + r];
+                    cx_t xh[2]; double nv[2];
+                    mimo_mmse_detect_4rx2(h_eff, y, N0, xh, nv);
+                    rx_hat[0][d] = xh[0]; rx_hat[1][d] = xh[1];
+                    nv_sum[0] += nv[0]; nv_sum[1] += nv[1];
+                }
+            } else if (rank_ad == 3) {
+                cx_t W[32][3];
+                codebook_type1_sp_32port_rank3(l1_ad, l2_ad, i13_ad, i2_ad, W);
+                cx_t h_eff[4][3];
+                for (int r = 0; r < 4; r++)
+                    for (int c = 0; c < 3; c++) {
+                        h_eff[r][c] = 0.0;
+                        for (int t = 0; t < 32; t++) h_eff[r][c] += H[r][t] * W[t][c];
+                    }
+                for (int d = 0; d < num_data; d++) {
+                    cx_t y[4];
+                    for (int r = 0; r < 4; r++)
+                        y[r] = h_eff[r][0] * sym[0][d] + h_eff[r][1] * sym[1][d]
+                               + h_eff[r][2] * sym[2][d] + nbuf[d * 4 + r];
+                    cx_t xh[3]; double nv[3];
+                    mimo_mmse_detect_4rx3(h_eff, y, N0, xh, nv);
+                    rx_hat[0][d] = xh[0]; rx_hat[1][d] = xh[1]; rx_hat[2][d] = xh[2];
+                    nv_sum[0] += nv[0]; nv_sum[1] += nv[1]; nv_sum[2] += nv[2];
+                }
+            } else {   /* rank_ad == 4 */
+                cx_t W[32][4];
+                codebook_type1_sp_32port_rank4(l1_ad, l2_ad, i13_ad, i2_ad, W);
+                cx_t h_eff[4][4];
+                for (int r = 0; r < 4; r++)
+                    for (int c = 0; c < 4; c++) {
+                        h_eff[r][c] = 0.0;
+                        for (int t = 0; t < 32; t++) h_eff[r][c] += H[r][t] * W[t][c];
+                    }
+                for (int d = 0; d < num_data; d++) {
+                    cx_t y[4];
+                    for (int r = 0; r < 4; r++)
+                        y[r] = h_eff[r][0] * sym[0][d] + h_eff[r][1] * sym[1][d]
+                               + h_eff[r][2] * sym[2][d] + h_eff[r][3] * sym[3][d]
+                               + nbuf[d * 4 + r];
+                    cx_t xh[4]; double nv[4];
+                    mimo_mmse_detect_4x4(h_eff, y, N0, xh, nv);
+                    for (int c = 0; c < 4; c++) { rx_hat[c][d] = xh[c]; nv_sum[c] += nv[c]; }
+                }
+            }
+
+            free(nbuf);
+            for (int l = 0; l < NL; l++)
+                qam_demap_llr(rx_hat[l], num_data, mcs.modulation, nv_sum[l] / num_data, allllr[l]);
+
+            for (int l = 0; l < NL; l++) {
+                int roff = 0;
+                int cb_crc_ok = 1;
+                for (int r = 0; r < seg.C; r++) {
+                    memset(soft_buf[l], 0, acsz*sizeof(double));
+                    nr_ldpc_rate_match_combine(soft_buf[l], acsz, ldpc.bg, ldpc.Zc,
+                                                ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                                /*rv=*/0, Er[r], allllr[l] + roff);
+                    roff += Er[r];
+                    ldpc_decode(&ldpc, soft_buf[l], 25, decoded_cb[l]);
+                    if (seg.C > 1 && !check_crc(decoded_cb[l], seg.Kprime, CRC24B)) cb_crc_ok = 0;
+                    memcpy(decoded_tb[l] + (size_t)r * payload, decoded_cb[l], payload * sizeof(int));
+                }
+                int crc_ok = cb_crc_ok && check_crc(decoded_tb[l], B, CRC24A);
+                beL[l] = 0;
+                for (int i = 0; i < tbsz; i++) if (tb[l][i] != decoded_tb[l][i]) beL[l]++;
+                if (!crc_ok || beL[l] > 0) trial_err++;
+            }
+            int ack = (trial_err == 0);
+
+            for (int l = 0; l < NL; l++) { total_bits += tbsz; total_err += beL[l]; }
+            if (!ack) { blk_err_cum++; blk_err_win++; }
+
+            if (is_olla) olla_update(&olla, ack);
+
+            if ((trial + 1) % print_interval == 0 || trial == cfg->numTrials - 1) {
+                int win_trials = (trial + 1) % print_interval;
+                if (win_trials == 0) win_trials = print_interval;
+                double win_bler = (double)blk_err_win / win_trials;
+                double cum_bler = (double)blk_err_cum / (trial + 1);
+                printf("%-8d  %-5d  %-6d  %-9.2f  %-11.4f  %-10.4f\n",
+                       trial + 1, rank_ad, mcs_idx, is_olla ? olla.offset_db : 0.0, win_bler, cum_bler);
+                blk_err_win = 0;
+            }
+
+            ldpc_free(&ldpc);
+            for (int l = 0; l < NL; l++) {
+                free(tb[l]); free(tb_crc[l]); free(cb_bits[l]); free(coded[l]);
+                for (int r = 0; r < seg.C; r++) free(rm[l][r]);
+                free(rm[l]); free(selbits[l]);
+                free(sym[l]); free(allllr[l]); free(soft_buf[l]);
+                free(decoded_cb[l]); free(decoded_tb[l]); free(rx_hat[l]);
+            }
+            free(Er);
+        }   /* end trial loop */
+
+        double final_ber  = total_bits > 0 ? (double)total_err / total_bits : 0.0;
+        double final_bler = (double)blk_err_cum / cfg->numTrials;
+        double avg_mcs    = (double)mcs_sum / cfg->numTrials;
+        double avg_rank   = (double)rank_sum / cfg->numTrials;
+        printf("\n%s 최종: BER=%.4e  BLER=%.4f (목표 %.2f)  평균 MCS=%.2f  평균 Rank=%.2f\n\n",
+               is_olla ? "OLLA" : "Open-Loop", final_ber, final_bler, cfg->ollaBlerTarget, avg_mcs, avg_rank);
+    }   /* end pass loop */
+
+    printf("PDSCH OLLA + CL_32PORT simulation complete.\n");
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
  * MU-MIMO 하향링크 — Zero-Forcing Beamforming, 평탄 페이딩 (i.i.d.)
  *
  * mumimo.h 문서 참조. Nt=4(gNB), K=MUMIMO_K 사용자(현재 4, 각 1 Rx
@@ -8037,8 +8737,7 @@ void run_pdsch_mumimo_simulation(const L1Config *cfg) {
     int    crc_bits = 24;
 
     int max_dbits = num_data * bps;
-    int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1)    tbsz = 1;
+    int tbsz = nr_determine_tbs(max_dbits, cr);
 
     int B = tbsz + crc_bits;
     NRSegInfo seg; nr_seg_compute(B, cr, &seg);   /* shared by all MUMIMO_K users (same B/cr) */
@@ -8234,8 +8933,7 @@ void run_pdsch_mumimo_tdl_simulation(const L1Config *cfg) {
     int    crc_bits = 24;
 
     int max_dbits = num_data * bps;
-    int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1)    tbsz = 1;
+    int tbsz = nr_determine_tbs(max_dbits, cr);
 
     int B = tbsz + crc_bits;
     NRSegInfo seg; nr_seg_compute(B, cr, &seg);   /* shared by all MUMIMO_K users (same B/cr) */
@@ -8303,7 +9001,7 @@ void run_pdsch_mumimo_tdl_simulation(const L1Config *cfg) {
 
     TDLChannel tdl_ch;
     for (double snr = cfg->snrStart; snr <= cfg->snrEnd + 1e-6; snr += cfg->snrStep) {
-        tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        tdl_channel_init(&tdl_ch, cfg->tdlProfile[0], cfg->tdlDelaySpreadNs, scs_hz, snr);
         double N0    = 1.0 / pow(10.0, snr / 10.0);
         double sigma = sqrt(N0 / 2.0);
 
@@ -8438,8 +9136,7 @@ void run_pdsch_mumimo_harq_simulation(const L1Config *cfg) {
     int    crc_bits = 24;
 
     int E    = num_data * bps;
-    int tbsz = (int)(E * cr);
-    if (tbsz < 1)    tbsz = 1;
+    int tbsz = nr_determine_tbs(E, cr);
 
     /* TS 38.212 5.2.2 multi-code-block segmentation (P0-2c HARQ follow-up,
      * 2026-09-03) -- see run_pdsch_harq_simulation() design note. All
@@ -8521,7 +9218,7 @@ void run_pdsch_mumimo_harq_simulation(const L1Config *cfg) {
 
     TDLChannel tdl_ch;
     for (double snr = cfg->snrStart; snr <= cfg->snrEnd + 1e-6; snr += cfg->snrStep) {
-        if (is_tdl) tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        if (is_tdl) tdl_channel_init(&tdl_ch, cfg->tdlProfile[0], cfg->tdlDelaySpreadNs, scs_hz, snr);
         double N0    = 1.0 / pow(10.0, snr / 10.0);
         double sigma = sqrt(N0 / 2.0);
 
@@ -8676,8 +9373,7 @@ void run_pdsch_beam_mgmt_simulation(const L1Config *cfg) {
     int    crc_bits = 24;
 
     int max_dbits = num_data * bps;
-    int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1)    tbsz = 1;
+    int tbsz = nr_determine_tbs(max_dbits, cr);
 
     int B = tbsz + crc_bits;
     NRSegInfo seg; nr_seg_compute(B, cr, &seg);   /* shared by both scenarios (same B/cr) */
@@ -8872,8 +9568,7 @@ void run_pdsch_beam_mgmt_p123_simulation(const L1Config *cfg) {
     int    crc_bits = 24;
 
     int max_dbits = num_data * bps;
-    int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1)    tbsz = 1;
+    int tbsz = nr_determine_tbs(max_dbits, cr);
 
     int B = tbsz + crc_bits;
     NRSegInfo seg; nr_seg_compute(B, cr, &seg);
@@ -9105,8 +9800,7 @@ void run_pdsch_beam_mgmt_tdl_simulation(const L1Config *cfg) {
     int    crc_bits = 24;
 
     int max_dbits = num_data * bps;
-    int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1)    tbsz = 1;
+    int tbsz = nr_determine_tbs(max_dbits, cr);
 
     int B = tbsz + crc_bits;
     NRSegInfo seg; nr_seg_compute(B, cr, &seg);   /* shared by both scenarios (same B/cr) */
@@ -9143,6 +9837,7 @@ void run_pdsch_beam_mgmt_tdl_simulation(const L1Config *cfg) {
     cx_t   *sym[2];
     double *allllr[2], *soft_buf[2];
     cx_t   *rx_hat[2];
+    double *nv_all[2];
     for (int s = 0; s < 2; s++) {
         tb[s]       = (int    *)malloc(tbsz  * sizeof(int));
         tb_crc[s]   = (int    *)malloc(B     * sizeof(int));
@@ -9157,6 +9852,7 @@ void run_pdsch_beam_mgmt_tdl_simulation(const L1Config *cfg) {
         decoded_cb[s] = (int  *)malloc(ldpc.info_size * sizeof(int));
         decoded_tb[s] = (int  *)malloc(B * sizeof(int));
         rx_hat[s]   = (cx_t  *)malloc(nd     * sizeof(cx_t));
+        nv_all[s]   = (double *)malloc(nd    * sizeof(double));
     }
     cx_t *cluster_taps = (cx_t *)malloc(TDL_MAX_TAPS * sizeof(cx_t));
 
@@ -9167,7 +9863,7 @@ void run_pdsch_beam_mgmt_tdl_simulation(const L1Config *cfg) {
 
     TDLChannel tdl_ch;
     for (double snr = cfg->snrStart; snr <= cfg->snrEnd + 1e-6; snr += cfg->snrStep) {
-        tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        tdl_channel_init(&tdl_ch, cfg->tdlProfile[0], cfg->tdlDelaySpreadNs, scs_hz, snr);
         double N0    = 1.0 / pow(10.0, snr / 10.0);
         double sigma = sqrt(N0 / 2.0);
 
@@ -9216,19 +9912,16 @@ void run_pdsch_beam_mgmt_tdl_simulation(const L1Config *cfg) {
                 nr_seg_concat(&seg, (const int *const *)rm[s], Er, selbits[s]);
                 qam_modulate(selbits[s], E, mcs.modulation, sym[s]);
 
-                double nv_sum = 0.0;
                 for (int d = 0; d < nd; d++) {
                     cx_t g_d = tdl_freq_response(&tdl_ch, cluster_taps, d);
                     cx_t he  = g_d * hbeam[s];
                     double he_abs2 = CX_NORM(he);
-                    double nv = (he_abs2 > 1e-12) ? N0 / he_abs2 : N0 * 1e6;
-                    nv_sum += nv;
+                    nv_all[s][d] = (he_abs2 > 1e-12) ? N0 / he_abs2 : N0 * 1e6;
                     cx_t noise = CX_MAKE(randn() * sigma, randn() * sigma);
                     cx_t y = he * sym[s][d] + noise;
                     rx_hat[s][d] = (he_abs2 > 1e-12) ? y / he : CX_ZERO;
                 }
-                double env = nv_sum / nd;
-                qam_demap_llr(rx_hat[s], nd, mcs.modulation, env, allllr[s]);
+                qam_demap_llr_re(rx_hat[s], nd, mcs.modulation, nv_all[s], allllr[s]);
 
                 int roff = 0;
                 int cb_crc_ok = 1;
@@ -9274,6 +9967,7 @@ void run_pdsch_beam_mgmt_tdl_simulation(const L1Config *cfg) {
         free(sym[s]); free(allllr[s]); free(soft_buf[s]);
         free(decoded_cb[s]); free(decoded_tb[s]);
         free(rx_hat[s]);
+        free(nv_all[s]);
     }
 }
 
@@ -9309,8 +10003,7 @@ void run_pdsch_beam_mgmt_harq_simulation(const L1Config *cfg) {
     int    crc_bits = 24;
 
     int E    = num_data * bps;
-    int tbsz = (int)(E * cr);
-    if (tbsz < 1)    tbsz = 1;
+    int tbsz = nr_determine_tbs(E, cr);
 
     /* TS 38.212 5.2.2 multi-code-block segmentation (P0-2c HARQ follow-up,
      * 2026-09-03) -- see run_pdsch_harq_simulation() design note. Both
@@ -9359,7 +10052,7 @@ void run_pdsch_beam_mgmt_harq_simulation(const L1Config *cfg) {
     int   *tb[2], *tb_crc[2], *cb_bits[2], **coded_cw[2], **rm[2], *selbits[2];
     int   *decoded_cb[2], *decoded_tb[2];
     cx_t  *sym[2], *rx_hat[2];
-    double *allllr[2], **soft_buf[2];
+    double *allllr[2], **soft_buf[2], *nv_all[2];
     for (int s = 0; s < 2; s++) {
         tb[s]         = (int    *)malloc(tbsz     * sizeof(int));
         tb_crc[s]     = (int    *)malloc(B        * sizeof(int));
@@ -9375,6 +10068,7 @@ void run_pdsch_beam_mgmt_harq_simulation(const L1Config *cfg) {
         decoded_tb[s] = (int    *)malloc(B        * sizeof(int));
         sym[s]        = (cx_t  *)malloc(num_data  * sizeof(cx_t));
         rx_hat[s]     = (cx_t  *)malloc(num_data  * sizeof(cx_t));
+        nv_all[s]     = (double *)malloc(num_data  * sizeof(double));
         allllr[s]     = (double *)malloc(E        * sizeof(double));
         soft_buf[s]   = (double **)malloc(seg.C   * sizeof(double *));
         for (int r = 0; r < seg.C; r++) soft_buf[s][r] = (double *)malloc(acsz * sizeof(double));
@@ -9388,7 +10082,7 @@ void run_pdsch_beam_mgmt_harq_simulation(const L1Config *cfg) {
 
     TDLChannel tdl_ch;
     for (double snr = cfg->snrStart; snr <= cfg->snrEnd + 1e-6; snr += cfg->snrStep) {
-        if (is_tdl) tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        if (is_tdl) tdl_channel_init(&tdl_ch, cfg->tdlProfile[0], cfg->tdlDelaySpreadNs, scs_hz, snr);
         double N0    = 1.0 / pow(10.0, snr / 10.0);
         double sigma = sqrt(N0 / 2.0);
 
@@ -9448,15 +10142,13 @@ void run_pdsch_beam_mgmt_harq_simulation(const L1Config *cfg) {
                  * 다이버시티) — flat이면 빔·채널 모두 고정, 잡음만 재드로우 */
                 if (is_tdl) tdl_draw(&tdl_ch, cluster_taps);
 
-                double nv_sum[2] = {0.0, 0.0};
                 for (int d = 0; d < num_data; d++) {
                     cx_t g_d = is_tdl ? tdl_freq_response(&tdl_ch, cluster_taps, d)
                                        : CX_MAKE(1.0, 0.0);
                     for (int s = 0; s < 2; s++) {
                         cx_t he = g_d * hbeam[s];
                         double he_abs2 = CX_NORM(he);
-                        double nv = (he_abs2 > 1e-12) ? N0 / he_abs2 : N0 * 1e6;
-                        nv_sum[s] += nv;
+                        nv_all[s][d] = (he_abs2 > 1e-12) ? N0 / he_abs2 : N0 * 1e6;
                         cx_t noise = CX_MAKE(randn() * sigma, randn() * sigma);
                         cx_t y = he * sym[s][d] + noise;
                         rx_hat[s][d] = (he_abs2 > 1e-12) ? y / he : CX_ZERO;
@@ -9464,8 +10156,7 @@ void run_pdsch_beam_mgmt_harq_simulation(const L1Config *cfg) {
                 }
 
                 for (int s = 0; s < 2; s++) {
-                    double env = nv_sum[s] / num_data;
-                    qam_demap_llr(rx_hat[s], num_data, mcs.modulation, env, allllr[s]);
+                    qam_demap_llr_re(rx_hat[s], num_data, mcs.modulation, nv_all[s], allllr[s]);
                     int roff = 0;
                     int cb_crc_ok = 1;
                     for (int r = 0; r < seg.C; r++) {
@@ -9517,7 +10208,7 @@ void run_pdsch_beam_mgmt_harq_simulation(const L1Config *cfg) {
         for (int r = 0; r < seg.C; r++) { free(coded_cw[s][r]); free(rm[s][r]); free(soft_buf[s][r]); }
         free(coded_cw[s]); free(rm[s]); free(soft_buf[s]);
         free(selbits[s]); free(decoded_cb[s]); free(decoded_tb[s]);
-        free(sym[s]); free(rx_hat[s]);
+        free(sym[s]); free(rx_hat[s]); free(nv_all[s]);
         free(allllr[s]);
     }
 }
@@ -9555,8 +10246,7 @@ void run_pdsch_beam_mgmt_p123_tdl_simulation(const L1Config *cfg) {
     int    crc_bits = 24;
 
     int max_dbits = num_data * bps;
-    int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1)    tbsz = 1;
+    int tbsz = nr_determine_tbs(max_dbits, cr);
 
     int B = tbsz + crc_bits;
     NRSegInfo seg; nr_seg_compute(B, cr, &seg);
@@ -9592,6 +10282,7 @@ void run_pdsch_beam_mgmt_p123_tdl_simulation(const L1Config *cfg) {
     cx_t   *sym[2];
     double *allllr[2], *soft_buf[2];
     cx_t   *rx_hat[2];
+    double *nv_all[2];
     for (int s = 0; s < 2; s++) {
         tb[s]       = (int    *)malloc(tbsz  * sizeof(int));
         tb_crc[s]   = (int    *)malloc(B     * sizeof(int));
@@ -9606,6 +10297,7 @@ void run_pdsch_beam_mgmt_p123_tdl_simulation(const L1Config *cfg) {
         decoded_cb[s] = (int  *)malloc(ldpc.info_size * sizeof(int));
         decoded_tb[s] = (int  *)malloc(B * sizeof(int));
         rx_hat[s]   = (cx_t  *)malloc(nd     * sizeof(cx_t));
+        nv_all[s]   = (double *)malloc(nd    * sizeof(double));
     }
     cx_t *cluster_taps = (cx_t *)malloc(TDL_MAX_TAPS * sizeof(cx_t));
 
@@ -9616,7 +10308,7 @@ void run_pdsch_beam_mgmt_p123_tdl_simulation(const L1Config *cfg) {
 
     TDLChannel tdl_ch;
     for (double snr = cfg->snrStart; snr <= cfg->snrEnd + 1e-6; snr += cfg->snrStep) {
-        tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        tdl_channel_init(&tdl_ch, cfg->tdlProfile[0], cfg->tdlDelaySpreadNs, scs_hz, snr);
         double N0    = 1.0 / pow(10.0, snr / 10.0);
         double sigma = sqrt(N0 / 2.0);
 
@@ -9705,19 +10397,16 @@ void run_pdsch_beam_mgmt_p123_tdl_simulation(const L1Config *cfg) {
                 nr_seg_concat(&seg, (const int *const *)rm[s], Er, selbits[s]);
                 qam_modulate(selbits[s], E, mcs.modulation, sym[s]);
 
-                double nv_sum = 0.0;
                 for (int d = 0; d < nd; d++) {
                     cx_t g_d = tdl_freq_response(&tdl_ch, cluster_taps, d);
                     cx_t he  = g_d * heff[s];
                     double he_abs2 = CX_NORM(he);
-                    double nv = (he_abs2 > 1e-12) ? N0 / he_abs2 : N0 * 1e6;
-                    nv_sum += nv;
+                    nv_all[s][d] = (he_abs2 > 1e-12) ? N0 / he_abs2 : N0 * 1e6;
                     cx_t noise = CX_MAKE(randn() * sigma, randn() * sigma);
                     cx_t y = he * sym[s][d] + noise;
                     rx_hat[s][d] = (he_abs2 > 1e-12) ? y / he : CX_ZERO;
                 }
-                double env = nv_sum / nd;
-                qam_demap_llr(rx_hat[s], nd, mcs.modulation, env, allllr[s]);
+                qam_demap_llr_re(rx_hat[s], nd, mcs.modulation, nv_all[s], allllr[s]);
 
                 int roff = 0;
                 int cb_crc_ok = 1;
@@ -9764,7 +10453,7 @@ void run_pdsch_beam_mgmt_p123_tdl_simulation(const L1Config *cfg) {
         for (int r = 0; r < seg.C; r++) free(rm[s][r]);
         free(rm[s]); free(selbits[s]);
         free(sym[s]); free(allllr[s]); free(soft_buf[s]);
-        free(decoded_cb[s]); free(decoded_tb[s]); free(rx_hat[s]);
+        free(decoded_cb[s]); free(decoded_tb[s]); free(rx_hat[s]); free(nv_all[s]);
     }
 }
 
@@ -9796,8 +10485,7 @@ void run_pdsch_beam_mgmt_p123_harq_simulation(const L1Config *cfg) {
     int    crc_bits = 24;
 
     int E    = num_data * bps;
-    int tbsz = (int)(E * cr);
-    if (tbsz < 1)    tbsz = 1;
+    int tbsz = nr_determine_tbs(E, cr);
 
     int B = tbsz + crc_bits;
     NRSegInfo seg; nr_seg_compute(B, cr, &seg);
@@ -9843,7 +10531,7 @@ void run_pdsch_beam_mgmt_p123_harq_simulation(const L1Config *cfg) {
     int   *tb[2], *tb_crc[2], *cb_bits[2], **coded_cw[2], **rm[2], *selbits[2];
     int   *decoded_cb[2], *decoded_tb[2];
     cx_t  *sym[2], *rx_hat[2];
-    double *allllr[2], **soft_buf[2];
+    double *allllr[2], **soft_buf[2], *nv_all[2];
     for (int s = 0; s < 2; s++) {
         tb[s]         = (int    *)malloc(tbsz     * sizeof(int));
         tb_crc[s]     = (int    *)malloc(B        * sizeof(int));
@@ -9859,6 +10547,7 @@ void run_pdsch_beam_mgmt_p123_harq_simulation(const L1Config *cfg) {
         decoded_tb[s] = (int    *)malloc(B        * sizeof(int));
         sym[s]        = (cx_t  *)malloc(num_data  * sizeof(cx_t));
         rx_hat[s]     = (cx_t  *)malloc(num_data  * sizeof(cx_t));
+        nv_all[s]     = (double *)malloc(num_data  * sizeof(double));
         allllr[s]     = (double *)malloc(E        * sizeof(double));
         soft_buf[s]   = (double **)malloc(seg.C   * sizeof(double *));
         for (int r = 0; r < seg.C; r++) soft_buf[s][r] = (double *)malloc(acsz * sizeof(double));
@@ -9872,7 +10561,7 @@ void run_pdsch_beam_mgmt_p123_harq_simulation(const L1Config *cfg) {
 
     TDLChannel tdl_ch;
     for (double snr = cfg->snrStart; snr <= cfg->snrEnd + 1e-6; snr += cfg->snrStep) {
-        if (is_tdl) tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        if (is_tdl) tdl_channel_init(&tdl_ch, cfg->tdlProfile[0], cfg->tdlDelaySpreadNs, scs_hz, snr);
         double N0    = 1.0 / pow(10.0, snr / 10.0);
         double sigma = sqrt(N0 / 2.0);
 
@@ -9953,15 +10642,13 @@ void run_pdsch_beam_mgmt_p123_harq_simulation(const L1Config *cfg) {
                  * 다이버시티) — flat이면 빔·채널 모두 고정, 잡음만 재드로우 */
                 if (is_tdl) tdl_draw(&tdl_ch, cluster_taps);
 
-                double nv_sum[2] = {0.0, 0.0};
                 for (int d = 0; d < num_data; d++) {
                     cx_t g_d = is_tdl ? tdl_freq_response(&tdl_ch, cluster_taps, d)
                                        : CX_MAKE(1.0, 0.0);
                     for (int s = 0; s < 2; s++) {
                         cx_t he = g_d * heff[s];
                         double he_abs2 = CX_NORM(he);
-                        double nv = (he_abs2 > 1e-12) ? N0 / he_abs2 : N0 * 1e6;
-                        nv_sum[s] += nv;
+                        nv_all[s][d] = (he_abs2 > 1e-12) ? N0 / he_abs2 : N0 * 1e6;
                         cx_t noise = CX_MAKE(randn() * sigma, randn() * sigma);
                         cx_t y = he * sym[s][d] + noise;
                         rx_hat[s][d] = (he_abs2 > 1e-12) ? y / he : CX_ZERO;
@@ -9969,8 +10656,7 @@ void run_pdsch_beam_mgmt_p123_harq_simulation(const L1Config *cfg) {
                 }
 
                 for (int s = 0; s < 2; s++) {
-                    double env = nv_sum[s] / num_data;
-                    qam_demap_llr(rx_hat[s], num_data, mcs.modulation, env, allllr[s]);
+                    qam_demap_llr_re(rx_hat[s], num_data, mcs.modulation, nv_all[s], allllr[s]);
                     int roff = 0;
                     int cb_crc_ok = 1;
                     for (int r = 0; r < seg.C; r++) {
@@ -10022,7 +10708,7 @@ void run_pdsch_beam_mgmt_p123_harq_simulation(const L1Config *cfg) {
         for (int r = 0; r < seg.C; r++) { free(coded_cw[s][r]); free(rm[s][r]); free(soft_buf[s][r]); }
         free(coded_cw[s]); free(rm[s]); free(soft_buf[s]);
         free(selbits[s]); free(decoded_cb[s]); free(decoded_tb[s]);
-        free(sym[s]); free(rx_hat[s]);
+        free(sym[s]); free(rx_hat[s]); free(nv_all[s]);
         free(allllr[s]);
     }
 }

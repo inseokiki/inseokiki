@@ -125,6 +125,118 @@ system.
   4rx3()`'s N0→0 limit for the 4Rx-overdetermined 2/3-layer case. (EVD
   itself is covered by `test_matrix.c`; codebook geometry is deferred —
   see `tasks/todo.md`.)
+- `test_ldpc.c` (§5 3단계 "HARQ·적응 상태" group, 2026-09-11 addition):
+  `tb_cb_isolation_check()` — with a C=2 transport block, heavily
+  corrupting only code block 0's received LLRs fails CB0's own CRC24B
+  while code block 1 (independently allocated `soft_buf`, decoded
+  separately) still passes CRC24B with bit-exact payload recovery —
+  confirms no cross-code-block state bleed. (Buffer reset/RV-change/
+  Chase-combining coverage for the same group was already in place from
+  `harq_buffer_boundary_check()`, 2026-09-10.)
+- `test_beam_mgmt.c` — `beam_mgmt.c`'s P1/P2/P3 beam management sweep
+  (§5 3단계 "빔관리 결정론적 상태 천이"): at N0=0 (noiseless),
+  `beam_mgmt_p1_sweep()` selects exactly `beam_mgmt_genie_best()`'s grid
+  point/gain for on- and off-grid true channels; `beam_mgmt_true_channel()`
+  at integer (l,m,n) reproduces `codebook_type1_sp_32port_rank1()`'s own
+  steering vector up to a global phase; `beam_mgmt_p3_sweep()`'s
+  true-AoA→selected-UE-beam mapping is the exact fixed mirror bijection
+  `(BM_UE_CAND-true_idx) mod BM_UE_CAND` (empirically confirmed against
+  the actual conjugate-combining convention before being encoded as the
+  expected value, not assumed) with full coherent array gain recovered
+  every time; the full P1→P3→P2→P1 chain is self-consistent (re-sweeping
+  P2's effective channel reselects the identical original gNB Tx beam).
+- `test_codebook_ri_pmi.c` — `codebook.c`'s
+  `codebook_type1_sp_4port_ri_pmi_select()` (§5 3단계 "RI/PMI 결정론적
+  상태 천이"; codebook geometry itself remains a separate open item, see
+  `tasks/todo.md`): identical-input determinism; a row-rank-1 channel
+  selects rank=1 and a near-identity well-conditioned channel selects
+  rank=2 at high SNR, both matching their own rank-restricted search's
+  optimum PMI; selected rank is monotonically non-decreasing over a
+  descending-N0 (ascending-SNR) sweep on a fixed channel.
+- `test_codebook_8port_olla.c` — 8-port RI/PMI and rank-aware effective
+  SNR: a rank-1 single-coefficient channel has the hand-derived 1/(8N0)
+  SNR; a full-rank channel selects rank 2 and its effective SNR matches
+  an independent post-MMSE capacity calculation for the selected precoder.
+- `test_codebook_32port_olla.c` — ranks 1–4 use precoders with orthogonal
+  columns; matched channels have a closed-form per-layer SNR of
+  `gain²/(rank²·N0)`, independently checking the MCS input in every rank.
+- `test_ul_codebook_4port.c` — checks all 62 UL four-port TPMI matrices have
+  orthogonal columns and unit total power after normalization, anchors
+  selected entries to TS 38.211 Tables 6.3.1.5-3/-5/-6/-7, and checks
+  low/high SNR rank selection.
+- `test_ul_cb4_pipeline.c` — executes the production extended UL driver for
+  all 24 combinations of rank 1–4, flat/TDL, and non-HARQ/IR/Chase.
+  Test-only observers require positive finite per-RE variances, frequency
+  variation in TDL and constant variance in flat channels, RV order, zero
+  initial soft buffers and retained values on retries, and exact attempt
+  counts. Eight additional high-SNR flat cases check real decoded payloads
+  and CRC acceptance after one or two attempts, with single/multiple CBs
+  and IR/Chase. Each CB's buffer must retain exactly its saved contents
+  until its next combine call, and different CBs must use distinct buffers.
+  Rank is fixed; CRC rejection is controlled, while acceptance requires the
+  real CRC check. Channel generation, estimation, detection and coding stay
+  real. This is a wiring/state test, not an independent PHY reference or
+  BLER performance test. Each case runs one TB; reset between TBs within a
+  single driver invocation is not covered.
+  The driver source is included with local observer macros (do not also
+  link `pusch_ul_cb_4port.o`).
+- `test_link_adaptation.c` — `olla.c` (§5 3단계 "OLLA 결정론적 상태
+  천이") and `ul_power_ctrl.c`'s TPC decision ("ULPC 결정론적 상태
+  천이"): `olla_init()`'s `step_up_db` formula exactly; `olla_update()`'s
+  offset after a fixed ACK/NACK sequence matches exact hand-accumulation,
+  and returns to exactly 0 after every full cycle at the target ACK
+  ratio; `olla_select_mcs()`'s boundary never selects an MCS exceeding
+  its own independently-recomputed required-SNR, is monotone in achieved
+  spectral efficiency over a fine SNR sweep, and floors to MCS 0 far
+  below every requirement. `ul_power_ctrl.c`'s previously-`static`
+  `tpc_decide()` was renamed `ulpc_tpc_decide()` and exposed via
+  `ul_power_ctrl.h` specifically so this file could call the real
+  decision function instead of re-deriving it (2026-09-11, the one
+  production-code change this session made — mechanical rename only, two
+  call sites updated, behavior unchanged and re-verified via
+  `run_ulpc_simulation()` CLI smoke run): exact `{-1,0,+1,+3}` dB bucket
+  at every threshold including both closed boundaries of the `[-0.5,0.5]`
+  deadband; the f(i) accumulator (restated as the same two lines
+  `run_ulpc_simulation()` itself uses, since that loop lives inside a
+  printf-driven Monte-Carlo driver, not a separately callable unit)
+  reaches the ±30dB clamp in exactly the hand-computed number of steps
+  and stays pinned there.
+
+- `test_codebook_geometry.c` (`tasks/todo.md`'s "SU-MIMO codebook 기하
+  검증" item, 2026-09-11 addition): exhaustive per-codeword unit-norm
+  and inter-layer-orthogonality check across every candidate this
+  project's three Type I SP codebooks generate — 4-port rank-1/2 (32+64
+  codewords), 8-port rank-1/2 (64+256), 32-port rank-1/2/3/4
+  (1024+2048+1024+1024) — 4544 codewords total, every one checked to
+  `<1e-9` on both `||W[:,c]||^2==1/rank` and every pairwise cross-column
+  product `==0`. `codebook_32port.c`'s own
+  `codebook_type1_sp_32port_print()` already runs the identical
+  exhaustive loops/formulas for rank 1-4 (as a human-read max-error
+  printf, not a pass/fail assertion) — this file reuses that same
+  candidate enumeration and adds equivalent exhaustive coverage for the
+  4-port/8-port codebooks, which had no aggregated-max-error check at
+  all before this.
+
+- `test_tbs.c` (`tasks/todo.md`'s "TBS를 TS 38.214 §5.1.3.2 표준 절차로
+  교체" item, 2026-09-14 addition): `tbs.c`'s `nr_determine_tbs()` — three
+  hand-derived examples (Step 3 small-N_info, Step 4 both code-rate
+  branches) computed independently in the test file's own comments; a
+  2492-case sweep confirming every Step-3 (N_info≤3824) output is an
+  exact Table 5.1.3.2-1 entry (independently re-transcribed, not
+  `#include`-shared with `tbs.c`'s own copy); the `TBS≥24` floor;
+  monotonicity in `n_re_qm` swept across the Step3/Step4 boundary; and
+  the exact N_info==3824.0 boundary (closed on the Step-3 side, Step-4
+  side clears the 3840 floor).
+
+**Not unit-tested (structural, not skipped)**: §5 3단계's "재전송 상한"
+(HARQ max-retransmission) row is embedded inline inside `pdsch.c`/
+`pusch.c`/`pucch.c`'s Monte-Carlo `run_*` drivers, interleaved with
+per-attempt RNG channel draws and LDPC/Polar encode-decode state — unlike
+this group's other rows, there is no separable pure function to call
+without refactoring those production simulation drivers (out of scope
+for a test-only session). It remains covered only at the integration
+level, by `regression_test.sh`'s existing HARQ-enabled cases (which do
+exercise `HARQ_MAX_RETX` end-to-end).
 
 ## Adding a new test
 

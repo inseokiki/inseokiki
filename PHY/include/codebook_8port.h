@@ -95,4 +95,11 @@ void codebook_type1_sp_8port_ri_pmi_select(
     int *r1_i1_1, int *r1_i2,
     int *r2_i1_1, int *r2_i1_3, int *r2_i2);
 
+/* Per-layer effective SNR [dB] of an already selected RI/PMI candidate.
+ * C is computed with the selector's own capacity formula, then converted
+ * using SNR_eff = 2^(C/rank)-1. The caller may add an OLLA offset for MCS
+ * selection; RI/PMI selection itself remains based only on H and N0. */
+double codebook_type1_sp_8port_effective_snr_db(const cx_t H[4][8], double N0,
+    int rank, int i1_1, int i1_3, int i2);
+
 #endif

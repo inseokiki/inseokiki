@@ -6,26 +6,51 @@
  * ================================================================ */
 #include "config_parser.h"
 #include "mcs_table.h"
+#include "tdl_tables.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <errno.h>
+#include <limits.h>
+#include <math.h>
 
 /* ---- helper: find value for key in KV table ---- */
-static const char *kv_get(const ConfigParser *p, const char *key) {
+static const char *kv_get(ConfigParser *p, const char *key) {
     for (int i = 0; i < p->nkv; i++)
-        if (strcmp(p->kv[i].key, key) == 0) return p->kv[i].val;
+        if (strcmp(p->kv[i].key, key) == 0) {
+            p->kv[i].used = 1;
+            return p->kv[i].val;
+        }
     return NULL;
 }
-static int kv_int(const ConfigParser *p, const char *k, int def) {
+static int kv_int(ConfigParser *p, const char *k, int def) {
     const char *v = kv_get(p, k);
-    return v ? atoi(v) : def;
+    if (!v) return def;
+    char *end;
+    errno = 0;
+    long value = strtol(v, &end, 10);
+    if (v == end || *end || errno == ERANGE || value < INT_MIN || value > INT_MAX) {
+        fprintf(stderr, "[config error] %s='%s' must be an integer\n", k, v);
+        p->parseErrors++;
+        return def;
+    }
+    return (int)value;
 }
-static double kv_dbl(const ConfigParser *p, const char *k, double def) {
+static double kv_dbl(ConfigParser *p, const char *k, double def) {
     const char *v = kv_get(p, k);
-    return v ? atof(v) : def;
+    if (!v) return def;
+    char *end;
+    errno = 0;
+    double value = strtod(v, &end);
+    if (v == end || *end || errno == ERANGE || !isfinite(value)) {
+        fprintf(stderr, "[config error] %s='%s' must be a finite number\n", k, v);
+        p->parseErrors++;
+        return def;
+    }
+    return value;
 }
-static void kv_str(const ConfigParser *p, const char *k,
+static void kv_str(ConfigParser *p, const char *k,
                    const char *def, char *out, int out_sz) {
     const char *v = kv_get(p, k);
     strncpy(out, v ? v : def, out_sz - 1);
@@ -38,29 +63,29 @@ static int nrb_from_bw_scs(int bw, int scs) {
         switch (bw) {
             case 5: return 25; case 10: return 52; case 15: return 79;
             case 20: return 106; case 25: return 133; case 30: return 160;
-            case 40: return 216; case 50: return 270; default: return 52;
+            case 40: return 216; case 50: return 270; default: return 0;
         }
     } else if (scs == 30) {
         switch (bw) {
             case 5: return 11; case 10: return 24; case 15: return 38;
             case 20: return 51; case 25: return 65; case 30: return 78;
             case 40: return 106; case 50: return 133; case 60: return 162;
-            case 80: return 217; case 100: return 273; default: return 51;
+            case 80: return 217; case 100: return 273; default: return 0;
         }
     } else if (scs == 60) {
         switch (bw) {
             case 10: return 11; case 15: return 18; case 20: return 24;
             case 25: return 31; case 30: return 38; case 40: return 51;
             case 50: return 65; case 60: return 79; case 80: return 107;
-            case 100: return 135; default: return 24;
+            case 100: return 135; default: return 0;
         }
     } else if (scs == 120) {
         switch (bw) {
             case 50: return 66; case 100: return 132; case 200: return 264;
-            default: return 66;
+            default: return 0;
         }
     }
-    return 51;
+    return 0;
 }
 
 static int fft_size(int nrb) {
@@ -102,6 +127,7 @@ void config_parser_init(ConfigParser *p) {
     c->seed = 12345;
     c->harqEnable = 0; c->harqMaxRetx = 4;
     c->tdlDelaySpreadNs = 300.0;
+    strncpy(c->tdlProfile, "A", CFG_STR_MAX-1);
     c->transformPrecoding = 1;
     c->puschDfeEnable = 0;
     c->puschTurboEnable = 0; c->puschTurboIters = 3;
@@ -133,22 +159,54 @@ static void strip(char *s) {
     s[w] = '\0';
 }
 
-static void parse_file(ConfigParser *p, const char *filename) {
+static int parse_file(ConfigParser *p, const char *filename) {
     FILE *f = fopen(filename, "r");
-    if (!f) return;
+    if (!f) {
+        fprintf(stderr, "[config error] Cannot open %s\n", filename);
+        return 0;
+    }
     char line[256];
     while (fgets(line, sizeof(line), f)) {
         strip(line);
         if (!line[0]) continue;
         char *eq = strchr(line, '=');
-        if (!eq) continue;
+        if (!eq) {
+            fprintf(stderr, "[config error] expected KEY=VALUE: '%s'\n", line);
+            p->parseErrors++;
+            continue;
+        }
         *eq = '\0';
-        if (p->nkv >= CFG_KV_MAX) continue;
+        if (!line[0] || !eq[1]) {
+            fprintf(stderr, "[config error] empty key or value in config\n");
+            p->parseErrors++;
+            continue;
+        }
+        if (strlen(line) >= CFG_STR_MAX || strlen(eq + 1) >= CFG_STR_MAX) {
+            fprintf(stderr, "[config error] key or value exceeds %d characters\n", CFG_STR_MAX-1);
+            p->parseErrors++;
+            continue;
+        }
+        int duplicate = 0;
+        for (int i = 0; i < p->nkv; i++) {
+            if (!strcmp(p->kv[i].key, line)) {
+                fprintf(stderr, "[config error] duplicate key '%s'\n", line);
+                p->parseErrors++;
+                duplicate = 1;
+                break;
+            }
+        }
+        if (duplicate) continue;
+        if (p->nkv >= CFG_KV_MAX) {
+            fprintf(stderr, "[config error] too many config keys (max %d)\n", CFG_KV_MAX);
+            p->parseErrors++;
+            continue;
+        }
         snprintf(p->kv[p->nkv].key, CFG_STR_MAX, "%.*s", CFG_STR_MAX-1, line);
         snprintf(p->kv[p->nkv].val, CFG_STR_MAX, "%.*s", CFG_STR_MAX-1, eq + 1);
         p->nkv++;
     }
     fclose(f);
+    return 1;
 }
 
 static void calc_derived(ConfigParser *p) {
@@ -195,6 +253,62 @@ static void validate_config(const L1Config *c) {
 #define CFG_ERR(fmt, ...) \
     do { fprintf(stderr, "[config error] " fmt "\n", ##__VA_ARGS__); errors++; } while(0)
 
+    if (nrb_from_bw_scs(c->bandwidthMHz, c->scsKHz) == 0)
+        CFG_ERR("BANDWIDTH_MHZ=%d and SCS_KHZ=%d are not a supported pair",
+                c->bandwidthMHz, c->scsKHz);
+    if (c->numRB < 1 || c->numRB > 275)
+        CFG_ERR("NUM_RB=%d must be in [1,275]", c->numRB);
+    if (c->nfft < 128 || c->nfft > 4096 || (c->nfft & (c->nfft - 1)))
+        CFG_ERR("NFFT=%d must be a power of two in [128,4096]", c->nfft);
+    if (c->cpLengthFirst <= 0 || c->cpLengthNormal <= 0 ||
+        c->cpLengthFirst >= c->nfft || c->cpLengthNormal >= c->nfft)
+        CFG_ERR("CP_LENGTH_FIRST/NORMAL must be in [1,NFFT-1]");
+    if (c->numOfdmSymbols <= 0)
+        CFG_ERR("NUM_OFDM_SYMBOLS=%d must be > 0", c->numOfdmSymbols);
+    if (c->tdlDelaySpreadNs <= 0.0)
+        CFG_ERR("TDL_DELAY_SPREAD_NS=%.4g must be > 0", c->tdlDelaySpreadNs);
+
+    if (strcmp(c->physicalChannel,"NONE") && strcmp(c->physicalChannel,"BER") &&
+        strcmp(c->physicalChannel,"PBCH") && strcmp(c->physicalChannel,"PDCCH") &&
+        strcmp(c->physicalChannel,"PDSCH") && strcmp(c->physicalChannel,"CSIRS") &&
+        strcmp(c->physicalChannel,"SRS") && strcmp(c->physicalChannel,"PUSCH") &&
+        strcmp(c->physicalChannel,"PUCCH") && strcmp(c->physicalChannel,"PRACH") &&
+        strcmp(c->physicalChannel,"ULPC"))
+        CFG_ERR("PHYSICAL_CHANNEL='%s' is unsupported", c->physicalChannel);
+    if (strcmp(c->channelModel,"AWGN") && strcmp(c->channelModel,"FLAT_FADING") &&
+        strcmp(c->channelModel,"TDL") &&
+        !(strcmp(c->physicalChannel,"BER")==0 && strcmp(c->channelModel,"NONE")==0))
+        CFG_ERR("CHANNEL_MODEL='%s' is unsupported for PHYSICAL_CHANNEL='%s'",
+                c->channelModel, c->physicalChannel);
+    if ((!strcmp(c->physicalChannel,"BER") || !strcmp(c->physicalChannel,"NONE")) &&
+        strcmp(c->channelModel,"AWGN") &&
+        !(strcmp(c->physicalChannel,"BER")==0 && !strcmp(c->channelModel,"NONE")))
+        CFG_ERR("CHANNEL_MODEL='%s' is not implemented for PHYSICAL_CHANNEL='%s'",
+                c->channelModel, c->physicalChannel);
+    if (!strcmp(c->physicalChannel,"NONE") &&
+        strcmp(c->coding,"NONE") && strcmp(c->coding,"LDPC") &&
+        strcmp(c->coding,"POLAR"))
+        CFG_ERR("CODING='%s' is unsupported for legacy simulation", c->coding);
+    if (!strcmp(c->physicalChannel,"PRACH") &&
+        strcmp(c->prachFormat,"SHORT") && strcmp(c->prachFormat,"LONG"))
+        CFG_ERR("PRACH_FORMAT='%s' is unsupported", c->prachFormat);
+    if (!strcmp(c->physicalChannel,"PDSCH") &&
+        strcmp(c->mimoMode,"SISO") && strcmp(c->mimoMode,"SIMO_MRC") &&
+        strcmp(c->mimoMode,"SM_2X2") && strcmp(c->mimoMode,"SM_4X4") &&
+        strcmp(c->mimoMode,"CL_4PORT") && strcmp(c->mimoMode,"CL_8PORT") &&
+        strcmp(c->mimoMode,"CL_32PORT") && strcmp(c->mimoMode,"EIGEN_16PORT") &&
+        strcmp(c->mimoMode,"MU_MIMO") && strcmp(c->mimoMode,"BEAM_MGMT"))
+        CFG_ERR("MIMO_MODE='%s' is unsupported for PDSCH", c->mimoMode);
+    if (!strcmp(c->physicalChannel,"PUSCH") &&
+        strcmp(c->mimoMode,"SISO") && strcmp(c->mimoMode,"SM_2X2") &&
+        strcmp(c->mimoMode,"UL_CB_4PORT") &&
+        strcmp(c->mimoMode,"UL_EIGEN_BF") && strcmp(c->mimoMode,"UL_EIGEN_BF_2TX") &&
+        strcmp(c->mimoMode,"UL_EIGEN_BF_4TX"))
+        CFG_ERR("MIMO_MODE='%s' is unsupported for PUSCH", c->mimoMode);
+    if (!strcmp(c->physicalChannel,"PDSCH") && !c->useDmrs &&
+        !c->ollaEnable && strcmp(c->mimoMode,"SISO"))
+        CFG_ERR("MIMO_MODE='%s' requires USE_DMRS=1 for PDSCH", c->mimoMode);
+
     /* MCS table 문자열 */
     if (strcmp(c->mcsTableType,"TABLE1")!=0 &&
         strcmp(c->mcsTableType,"TABLE2")!=0 &&
@@ -223,6 +337,14 @@ static void validate_config(const L1Config *c) {
     /* 이퀄라이저 */
     if (strcmp(c->equalizer,"ZF")!=0 && strcmp(c->equalizer,"MMSE")!=0)
         CFG_ERR("EQUALIZER='%s' is invalid; must be ZF or MMSE", c->equalizer);
+
+    /* TDL_PROFILE: must resolve to one of TS 38.901 Table 7.7.2-1..5
+     * (TDL-A/B/C/D/E) -- checked via the same lookup tdl_channel_init()
+     * uses, not a hand-duplicated letter list, so this can't drift out
+     * of sync with tdl_tables.c. */
+    if (strlen(c->tdlProfile) != 1 || !tdl_profile_lookup(c->tdlProfile[0]))
+        CFG_ERR("TDL_PROFILE='%s' is invalid; must be one of A, B, C, D, E "
+                 "(TS 38.901 TDL-A/B/C/D/E)", c->tdlProfile);
 
     /* 공간 상관 */
     if (c->spatialCorrTx < 0.0 || c->spatialCorrTx >= 1.0)
@@ -270,17 +392,16 @@ static void validate_config(const L1Config *c) {
                          c->mimoMode, c->channelModel);
         }
 
-        /* PUSCH MIMO x HARQ: SM_2X2(flat/TDL 둘 다, 2026-09-03부터 flat도
-         * 전용 함수 있음)와 UL_EIGEN_BF/_2TX/_4TX(flat/TDL 둘 다, 함수
-         * 내부 is_tdl 분기)만 전용 함수가 있음(2026-09-01, _4TX는
-         * 2026-09-02). 그 외 조합은 같은 오배선 클래스를 재도입하지
-         * 않도록 미리 차단. */
+        /* PUSCH MIMO x HARQ: SM_2X2, UL_EIGEN_BF/_2TX/_4TX,
+         * UL_CB_4PORT의 flat/TDL 전용 경로만 허용한다. 그 외 조합은
+         * SISO HARQ로 잘못 라우팅되지 않도록 미리 차단한다. */
         int pusch_mm_harq_supported =
             strcmp(c->mimoMode,"SISO")==0 ||
             strcmp(c->mimoMode,"UL_EIGEN_BF")==0 ||
             strcmp(c->mimoMode,"UL_EIGEN_BF_2TX")==0 ||
             strcmp(c->mimoMode,"UL_EIGEN_BF_4TX")==0 ||
-            strcmp(c->mimoMode,"SM_2X2")==0;
+            strcmp(c->mimoMode,"SM_2X2")==0 ||
+            strcmp(c->mimoMode,"UL_CB_4PORT")==0;
         if (strcmp(c->physicalChannel,"PUSCH")==0 && !pusch_mm_harq_supported)
             CFG_ERR("PHYSICAL_CHANNEL=PUSCH + MIMO_MODE='%s' + HARQ_ENABLE=1 + "
                      "CHANNEL_MODEL='%s' has no dedicated simulation function — would "
@@ -291,11 +412,19 @@ static void validate_config(const L1Config *c) {
     /* PUSCH UL SM_2X2: TS 38.211 §6.3.1.4 — Transform Precoding(DFT-s-OFDM)은
      * 1개 레이어를 초과하는 전송에 사용할 수 없음(스펙 제약, 구현 선택이
      * 아님) — CP-OFDM 강제. */
-    if (strcmp(c->physicalChannel,"PUSCH")==0 && strcmp(c->mimoMode,"SM_2X2")==0
+    if (strcmp(c->physicalChannel,"PUSCH")==0 &&
+        (strcmp(c->mimoMode,"SM_2X2")==0 || strcmp(c->mimoMode,"UL_CB_4PORT")==0)
         && c->transformPrecoding)
-        CFG_ERR("MIMO_MODE=SM_2X2 (2 layers) + TRANSFORM_PRECODING=1 is invalid — "
+        CFG_ERR("MIMO_MODE=%s (multiple layers) + TRANSFORM_PRECODING=1 is invalid — "
                  "TS 38.211 6.3.1.4 does not allow Transform Precoding with more "
-                 "than 1 layer. Set TRANSFORM_PRECODING=0 (CP-OFDM).");
+                 "than 1 layer. Set TRANSFORM_PRECODING=0 (CP-OFDM).", c->mimoMode);
+
+    if (strcmp(c->physicalChannel,"PUSCH")==0 && strcmp(c->mimoMode,"UL_CB_4PORT")==0) {
+        if (strcmp(c->channelModel,"FLAT_FADING")!=0 && strcmp(c->channelModel,"TDL")!=0)
+            CFG_ERR("MIMO_MODE=UL_CB_4PORT requires CHANNEL_MODEL=FLAT_FADING or TDL");
+        if (strcmp(c->equalizer,"MMSE")!=0)
+            CFG_ERR("MIMO_MODE=UL_CB_4PORT requires EQUALIZER=MMSE");
+    }
 
 
     if (strcmp(c->eigen16ChanEst,"NONE")!=0 && strcmp(c->eigen16ChanEst,"LS")!=0 &&
@@ -315,14 +444,19 @@ static void validate_config(const L1Config *c) {
 
         /* OLLA_ENABLE=1은 main.c에서 다른 모든 PDSCH dispatch보다 우선하며
          * MIMO_MODE를 직접 스위치한다(SISO/SIMO_MRC/SM_2X2, 2026-09-01
-         * SIMO_MRC/SM_2X2 추가) — 그 외 MIMO_MODE 값은 여전히 전용 함수가
-         * 없어 SISO로 조용히 떨어지는 같은 오배선 클래스를 재도입할 수
-         * 있으므로 명시적으로 차단(HARQ 화이트리스트와 동일 원칙). */
+         * SIMO_MRC/SM_2X2 추가; CL_4PORT/CL_8PORT — RI/PMI가 매
+         * 트라이얼 채널 기준으로 바뀌는 경우의 OLLA 결합 설계는
+         * pdsch.c의 run_pdsch_olla_cl_4port_simulation() 헤더 주석 참조)
+         * — 그 외 MIMO_MODE 값은 SISO로 조용히 떨어지는 같은 오배선 클래스를 재도입할
+         * 수 있으므로 명시적으로 차단(HARQ 화이트리스트와 동일 원칙). */
         int olla_mm_supported =
             strcmp(c->mimoMode,"SISO")==0 ||
             strcmp(c->mimoMode,"SIMO_MRC")==0 ||
             strcmp(c->mimoMode,"SM_2X2")==0 ||
-            strcmp(c->mimoMode,"SM_4X4")==0;
+            strcmp(c->mimoMode,"SM_4X4")==0 ||
+            strcmp(c->mimoMode,"CL_4PORT")==0 ||
+            strcmp(c->mimoMode,"CL_8PORT")==0 ||
+            strcmp(c->mimoMode,"CL_32PORT")==0;
         if (!olla_mm_supported)
             CFG_ERR("OLLA_ENABLE=1 + MIMO_MODE='%s' has no dedicated simulation "
                      "function — would silently fall back to SISO OLLA. Not yet "
@@ -344,6 +478,8 @@ static void validate_config(const L1Config *c) {
      * 12비트 이상은 코딩/CRC/rate matching을 아직 구현하지 않았다(확대하려면
      * 별도 설계 필요, tasks/todo.md 참조). PUCCH가 아니면 이 절 전체를 건너뛴다. */
     if (strcmp(c->physicalChannel,"PUCCH")==0) {
+        if (c->pucchFormat < 0 || c->pucchFormat > 3)
+            CFG_ERR("PUCCH_FORMAT=%d must be in [0,3]", c->pucchFormat);
         if (c->pucchFormat==0 || c->pucchFormat==1) {
             if (c->pucchUciBits < 1 || c->pucchUciBits > 2)
                 CFG_ERR("PUCCH_FORMAT=%d + PUCCH_UCI_BITS=%d is invalid -- Format 0/1 supports "
@@ -373,14 +509,7 @@ static void validate_config(const L1Config *c) {
 
 int config_parser_load(ConfigParser *p, const char *filename) {
     config_parser_init(p);
-    FILE *test = fopen(filename, "r");
-    if (!test) {
-        fprintf(stderr, "Warning: Cannot open %s, using defaults.\n", filename);
-        calc_derived(p);
-        return 0;
-    }
-    fclose(test);
-    parse_file(p, filename);
+    if (!parse_file(p, filename)) return 0;
     L1Config *c = &p->cfg;
     c->bandwidthMHz  = kv_int(p, "BANDWIDTH_MHZ",  20);
     c->scsKHz        = kv_int(p, "SCS_KHZ",         30);
@@ -399,7 +528,6 @@ int config_parser_load(ConfigParser *p, const char *filename) {
     c->mcsIndex      = kv_int(p, "MCS_INDEX",           10);
     c->tbSize        = kv_int(p, "TB_SIZE",              0);
     c->numTrials     = kv_int(p, "NUM_TRIALS",         1000);
-    c->numBits       = kv_int(p, "NUM_BITS",              0);
     c->useDmrs       = kv_int(p, "USE_DMRS",             0);
     c->csirsRow      = kv_int(p, "CSIRS_ROW",            2);
     c->csirsScramID  = kv_int(p, "CSIRS_SCRAM_ID",       0);
@@ -417,6 +545,7 @@ int config_parser_load(ConfigParser *p, const char *filename) {
     c->harqEnable    = kv_int(p, "HARQ_ENABLE",          0);
     c->harqMaxRetx   = kv_int(p, "HARQ_MAX_RETX",        4);
     c->tdlDelaySpreadNs = kv_dbl(p, "TDL_DELAY_SPREAD_NS", 300.0);
+    kv_str(p, "TDL_PROFILE", "A", c->tdlProfile, CFG_STR_MAX);
     c->transformPrecoding = kv_int(p, "TRANSFORM_PRECODING", 1);
     c->puschDfeEnable     = kv_int(p, "PUSCH_DFE_ENABLE",     0);
     c->puschTurboEnable  = kv_int(p, "PUSCH_TURBO_ENABLE",   0);
@@ -461,6 +590,21 @@ int config_parser_load(ConfigParser *p, const char *filename) {
     kv_str(p, "HARQ_RV_SEQUENCE","IR",     c->harqRvSeq,      CFG_STR_MAX);
     kv_str(p, "PRACH_FORMAT",    "SHORT",  c->prachFormat,    CFG_STR_MAX);
     kv_str(p, "IQ_DUMP_FILE","iq_dump.txt",c->iqDumpFile,     CFG_STR_MAX);
+    for (int i = 0; i < p->nkv; i++) {
+        if (!p->kv[i].used) {
+            fprintf(stderr, "[config error] unknown key '%s'\n", p->kv[i].key);
+            p->parseErrors++;
+        }
+    }
+    if (p->parseErrors) {
+        fprintf(stderr, "%d config parse error(s) found — aborting.\n", p->parseErrors);
+        return 0;
+    }
+    if (nrb_from_bw_scs(c->bandwidthMHz, c->scsKHz) == 0 ||
+        c->numRB < 0 || c->numRB > 275 || c->nfft < 0 || c->nfft > 4096) {
+        fprintf(stderr, "[config error] invalid BANDWIDTH_MHZ/SCS_KHZ, NUM_RB, or NFFT\n");
+        return 0;
+    }
     calc_derived(p);
     validate_config(&p->cfg);
     return 1;
@@ -485,8 +629,10 @@ void config_parser_print(const ConfigParser *p) {
     printf("CP (normal)  : %d\n",      c->cpLengthNormal);
     printf("Sample Rate  : %.3f MHz\n",c->samplingRate / 1e6);
     printf("Channel      : %s\n",      c->channelModel);
-    if (strcmp(c->channelModel, "TDL") == 0)
-        printf("TDL Delay Spread : %.0f ns (approx profile)\n", c->tdlDelaySpreadNs);
+    if (strcmp(c->channelModel, "TDL") == 0) {
+        printf("TDL Profile      : TDL-%s (TS 38.901 Table 7.7.2-x)\n", c->tdlProfile);
+        printf("TDL Delay Spread : %.0f ns\n", c->tdlDelaySpreadNs);
+    }
     printf("SNR Range    : %.1f to %.1f dB (step %.1f)\n",
            c->snrStart, c->snrEnd, c->snrStep);
     int is_ctrl = (strcmp(c->physicalChannel, "PBCH")  == 0 ||

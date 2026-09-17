@@ -10,6 +10,7 @@
 #include "ldpc.h"
 #include "nr_rate_matching.h"
 #include "nr_sch.h"
+#include "tbs.h"
 #include "modulation.h"
 #include "channel.h"
 #include "dmrs.h"
@@ -18,12 +19,178 @@
 #include "tdl.h"
 #include "mimo.h"
 #include "ul_eigen_bf.h"
+#include "ul_codebook_4port.h"
 #include "eigen_16port.h"
 #include "utils.h"
 #include <stdio.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* Four-SRS-port codebook PUSCH, flat Rayleigh channel. One transport block is
+ * striped over the selected rank's layers (TS 38.211 section 6.3.1.3), then
+ * precoded with a TPMI from section 6.3.1.5. Orthogonal
+ * per-layer DMRS REs give an LS estimate of the precoded effective channel.
+ * The scheduler knows H for RI/TPMI selection; SRS/feedback is abstracted. */
+void run_pusch_ul_cb_4port_simulation(const L1Config *cfg) {
+    const int num_data = 6 * cfg->numRB;
+    const int num_pilots = 6 * cfg->numRB;
+    MCSTableType tbl = mcs_table_from_str(cfg->mcsTableType);
+    MCSEntry mcs = get_mcs_entry(cfg->mcsIndex, tbl);
+    const double cr = get_code_rate(&mcs);
+    const int bps = mcs.modulationOrder;
+
+    printf("=== PUSCH UL 4-port codebook (rank 1-4, flat) ===\n");
+    printf("MCS Index    : %d (Table %s)\n", cfg->mcsIndex, cfg->mcsTableType);
+    printf("Codebook     : TS 38.211 6.3.1.5 four-port TPMI, unit total Tx power\n");
+    printf("Channel Est  : per-layer orthogonal DMRS, averaged LS\n");
+    printf("Detector     : MMSE (gNB 4 Rx)\n");
+    printf("Trials/SNR   : %d\n\n", cfg->numTrials);
+    printf("%10s %13s %10s %9s %9s %9s %9s\n", "SNR(dB)", "BER", "BLER", "R1%", "R2%", "R3%", "R4%");
+
+    for (double snr = cfg->snrStart; snr <= cfg->snrEnd + 1e-6; snr += cfg->snrStep) {
+        const double N0 = 1.0 / pow(10.0, snr / 10.0);
+        const double sigma = sqrt(N0 / 2.0);
+        long total_bits = 0, total_err = 0;
+        int block_err = 0, rank_cnt[5] = {0};
+
+        for (int trial = 0; trial < cfg->numTrials; trial++) {
+            cx_t H[4][4], W[4][4], he[4][4] = {{0}}, hhat[4][4] = {{0}};
+            mimo_channel_draw_4x4(H);
+            int rank, tpmi;
+            ul_cb4_select((const cx_t (*)[4])H, N0, &rank, &tpmi);
+            rank_cnt[rank]++;
+            ul_cb4_precoder(rank, tpmi, W);
+            double beta = ul_cb4_unit_power_beta((const cx_t (*)[4])W, rank);
+            for (int r = 0; r < 4; r++)
+                for (int l = 0; l < rank; l++)
+                    for (int t = 0; t < 4; t++) he[r][l] += H[r][t] * W[t][l] * beta;
+
+            /* FDM pilot observations; the l-th layer has pilot indices
+             * l, l+rank, ... within the project's 6*RB pilot REs. */
+            for (int l = 0; l < rank; l++) {
+                int nppl = (num_pilots + rank - 1 - l) / rank;
+                cx_t *dmrs = (cx_t *)malloc(nppl * sizeof(cx_t));
+                dmrs_sequence(0x87654321u + (uint32_t)l * 0x10203u, nppl, dmrs);
+                for (int p = 0; p < nppl; p++)
+                    for (int r = 0; r < 4; r++) {
+                        cx_t y = he[r][l] * dmrs[p] + CX_MAKE(randn()*sigma, randn()*sigma);
+                        hhat[r][l] += y / dmrs[p];
+                    }
+                for (int r = 0; r < 4; r++) hhat[r][l] /= nppl;
+                free(dmrs);
+            }
+
+            int E = num_data * rank * bps;
+            int tbsz = nr_determine_tbs(E, cr);
+            int B = tbsz + 24;
+            NRSegInfo seg; nr_seg_compute(B, cr, &seg);
+            int payload = seg.Kprime - seg.L;
+            LDPCCodec ldpc;
+            ldpc_init_resolved(&ldpc, seg.Kprime, cr, seg.bg, seg.Zc, seg.Kb,
+                               seg.base_rows, seg.base_info_cols, seg.base_cols,
+                               seg.filler_size);
+            int acsz = ldpc.coded_size;
+            int *Er = (int *)malloc(seg.C * sizeof(int));
+            nr_ldpc_er_alloc(E, rank, bps, seg.C, Er);
+            int *tb = (int *)malloc(tbsz * sizeof(int));
+            int *tb_crc = (int *)malloc(B * sizeof(int));
+            int *cb_bits = (int *)malloc((size_t)seg.C * seg.Kprime * sizeof(int));
+            int *coded = (int *)malloc(acsz * sizeof(int));
+            int **rm = (int **)malloc(seg.C * sizeof(int *));
+            int *selbits = (int *)malloc(E * sizeof(int));
+            cx_t *syms = (cx_t *)malloc((size_t)num_data * rank * sizeof(cx_t));
+            double *allllr = (double *)malloc(E * sizeof(double));
+            double *soft_buf = (double *)malloc(acsz * sizeof(double));
+            int *decoded_cb = (int *)malloc(ldpc.info_size * sizeof(int));
+            int *decoded_tb = (int *)malloc(B * sizeof(int));
+            cx_t *rx_hat[4] = {0};
+            double *layer_llr[4] = {0};
+            double nv_sum[4] = {0};
+            for (int l = 0; l < rank; l++) {
+                rx_hat[l] = (cx_t *)malloc(num_data * sizeof(cx_t));
+                layer_llr[l] = (double *)malloc((size_t)num_data * bps * sizeof(double));
+            }
+            for (int c = 0; c < seg.C; c++) rm[c] = (int *)malloc(Er[c] * sizeof(int));
+
+            gen_random_bits(tb, tbsz);
+            attach_crc(tb, tbsz, CRC24A, tb_crc);
+            nr_seg_split(tb_crc, &seg, cb_bits);
+            for (int c = 0; c < seg.C; c++) {
+                ldpc_encode(&ldpc, cb_bits + (size_t)c * seg.Kprime, coded);
+                nr_ldpc_rate_match_select(coded, acsz, ldpc.bg, ldpc.Zc,
+                                           ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                           0, Er[c], rm[c]);
+            }
+            nr_seg_concat(&seg, (const int *const *)rm, Er, selbits);
+            qam_modulate(selbits, E, mcs.modulation, syms);
+
+            for (int d = 0; d < num_data; d++) {
+                cx_t y[4], xh[4] = {0};
+                double nv[4] = {0};
+                for (int r = 0; r < 4; r++) {
+                    y[r] = CX_MAKE(randn()*sigma, randn()*sigma);
+                    for (int l = 0; l < rank; l++) y[r] += he[r][l] * syms[d*rank+l];
+                }
+                if (rank == 1) {
+                    cx_t h1[4];
+                    for (int r = 0; r < 4; r++) h1[r] = hhat[r][0];
+                    mrc_combine_4rx(h1, y, N0, &xh[0], &nv[0]);
+                } else if (rank == 2) {
+                    cx_t h2[4][2];
+                    for (int r = 0; r < 4; r++)
+                        for (int l = 0; l < 2; l++) h2[r][l] = hhat[r][l];
+                    mimo_mmse_detect_4rx2(h2, y, N0, xh, nv);
+                } else if (rank == 3) {
+                    cx_t h3[4][3];
+                    for (int r = 0; r < 4; r++)
+                        for (int l = 0; l < 3; l++) h3[r][l] = hhat[r][l];
+                    mimo_mmse_detect_4rx3(h3, y, N0, xh, nv);
+                } else {
+                    mimo_mmse_detect_4x4(hhat, y, N0, xh, nv);
+                }
+                for (int l = 0; l < rank; l++) {
+                    rx_hat[l][d] = xh[l]; nv_sum[l] += nv[l];
+                }
+            }
+            for (int l = 0; l < rank; l++)
+                qam_demap_llr(rx_hat[l], num_data, mcs.modulation,
+                              nv_sum[l] / num_data, layer_llr[l]);
+            for (int d = 0; d < num_data; d++)
+                for (int l = 0; l < rank; l++)
+                    for (int b = 0; b < bps; b++)
+                        allllr[(d*rank+l)*bps+b] = layer_llr[l][d*bps+b];
+
+            int cb_crc_ok = 1, roff = 0;
+            for (int c = 0; c < seg.C; c++) {
+                memset(soft_buf, 0, acsz * sizeof(double));
+                nr_ldpc_rate_match_combine(soft_buf, acsz, ldpc.bg, ldpc.Zc,
+                                            ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
+                                            0, Er[c], allllr + roff);
+                roff += Er[c];
+                ldpc_decode(&ldpc, soft_buf, 25, decoded_cb);
+                if (seg.C > 1 && !check_crc(decoded_cb, seg.Kprime, CRC24B)) cb_crc_ok = 0;
+                memcpy(decoded_tb + (size_t)c * payload, decoded_cb, payload * sizeof(int));
+            }
+            int be = 0;
+            for (int i = 0; i < tbsz; i++) if (tb[i] != decoded_tb[i]) be++;
+            total_bits += tbsz; total_err += be;
+            if (!cb_crc_ok || !check_crc(decoded_tb, B, CRC24A) || be) block_err++;
+
+            for (int l = 0; l < rank; l++) { free(rx_hat[l]); free(layer_llr[l]); }
+            for (int c = 0; c < seg.C; c++) free(rm[c]);
+            free(rm); free(Er); free(tb); free(tb_crc); free(cb_bits); free(coded);
+            free(selbits); free(syms); free(allllr); free(soft_buf);
+            free(decoded_cb); free(decoded_tb); ldpc_free(&ldpc);
+        }
+        printf("%10.1f %13.4e %10.4f %9.1f %9.1f %9.1f %9.1f\n",
+               snr, total_bits ? (double)total_err/total_bits : 0.0,
+               (double)block_err/cfg->numTrials,
+               100.0*rank_cnt[1]/cfg->numTrials, 100.0*rank_cnt[2]/cfg->numTrials,
+               100.0*rank_cnt[3]/cfg->numTrials, 100.0*rank_cnt[4]/cfg->numTrials);
+    }
+    printf("PUSCH UL 4-port codebook simulation complete.\n");
+}
 
 /* PUSCH (uplink data channel), SISO + DMRS. Structurally identical to
    run_pdsch_dmrs_simulation() (PHY/src/pdsch.c) -- same DMRS/LS/interp
@@ -59,8 +226,7 @@ void run_pusch_simulation(const L1Config *cfg) {
     dmrs_sequence(c_init, num_pilots, dmrs_sym);
 
     int max_dbits = num_data * bps;
-    int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1) tbsz = 1;
+    int tbsz = nr_determine_tbs(max_dbits, cr);
 
     /* TS 38.212 5.2.2 code block segmentation (P0-2c, 2026-09-03) --
      * see run_pdsch_simulation() (pdsch.c) for the pattern this mirrors. */
@@ -300,8 +466,7 @@ void run_pusch_tdl_simulation(const L1Config *cfg) {
     dmrs_sequence(c_init, num_pilots, dmrs_sym);
 
     int max_dbits = num_data * bps;
-    int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1) tbsz = 1;
+    int tbsz = nr_determine_tbs(max_dbits, cr);
 
     /* TS 38.212 5.2.2 code block segmentation (P0-2c, 2026-09-03) --
      * see run_pdsch_simulation() (pdsch.c) for the pattern this mirrors. */
@@ -354,6 +519,7 @@ void run_pusch_tdl_simulation(const L1Config *cfg) {
     cx_t *h_data     = (cx_t *)malloc(num_data      * sizeof(cx_t));
     cx_t *eq_data    = (cx_t *)malloc(num_data      * sizeof(cx_t));
     cx_t *descrambled= (cx_t *)malloc(num_data      * sizeof(cx_t));
+    double *nv_all   = (double *)malloc(num_data     * sizeof(double));
     double *allllr   = (double *)malloc(E            * sizeof(double));
     double *soft_buf = (double *)malloc(acsz         * sizeof(double));
     int    *decoded_cb = (int *)malloc(ldpc.info_size * sizeof(int));
@@ -367,7 +533,7 @@ void run_pusch_tdl_simulation(const L1Config *cfg) {
 
     TDLChannel tdl_ch;
     for (double snr=cfg->snrStart; snr<=cfg->snrEnd+1e-6; snr+=cfg->snrStep) {
-        tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        tdl_channel_init(&tdl_ch, cfg->tdlProfile[0], cfg->tdlDelaySpreadNs, scs_hz, snr);
         double N0 = 1.0 / pow(10.0, snr/10.0);
         int total_err=0, total_bits=0, blk_err=0;
 
@@ -447,10 +613,15 @@ void run_pusch_tdl_simulation(const L1Config *cfg) {
                     }
                     env = N0 * inv_sum / num_data;
                 } else {
-                    double mhp = 0.0;
-                    for (int d=0;d<num_data;d++) mhp += CX_NORM(h_data[d]);
-                    mhp /= num_data;
-                    env = (mhp > 1e-10) ? N0/mhp : N0;
+                    /* per-RE ZF noise variance N0/|h_d|^2, kept as an array
+                     * instead of averaged (tasks/todo.md "RE별 effective
+                     * noise variance 기반 LLR", P1-1) */
+                    for (int d=0;d<num_data;d++) {
+                        double hp = CX_NORM(h_data[d]);
+                        nv_all[d] = N0 / (hp > 1e-10 ? hp : 1e-10);
+                    }
+                    qam_demap_llr_re(eq_data, num_data, mcs.modulation, nv_all, allllr);
+                    env = -1.0; /* already demapped above */
                 }
             }
             if (env >= 0.0)
@@ -489,7 +660,7 @@ void run_pusch_tdl_simulation(const L1Config *cfg) {
     free(rm); free(Er); free(selbits);
     free(data_syms); free(precoded); free(tx_grid); free(rx_grid);
     free(rx_pilots); free(h_pilots); free(h_full);
-    free(rx_data); free(h_data); free(eq_data); free(descrambled);
+    free(rx_data); free(h_data); free(eq_data); free(descrambled); free(nv_all);
     free(allllr); free(soft_buf); free(decoded_cb); free(decoded_tb); free(taps); free(alpha);
 }
 
@@ -549,8 +720,7 @@ void run_pusch_tdl_dfe_simulation(const L1Config *cfg) {
     dmrs_sequence(c_init, num_pilots, dmrs_sym);
 
     int max_dbits = num_data * bps;
-    int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1) tbsz = 1;
+    int tbsz = nr_determine_tbs(max_dbits, cr);
 
     /* TS 38.212 5.2.2 code block segmentation (P0-2c, 2026-09-03) --
      * see run_pdsch_simulation() (pdsch.c) for the pattern this mirrors. */
@@ -621,7 +791,7 @@ void run_pusch_tdl_dfe_simulation(const L1Config *cfg) {
 
     TDLChannel tdl_ch;
     for (double snr=cfg->snrStart; snr<=cfg->snrEnd+1e-6; snr+=cfg->snrStep) {
-        tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        tdl_channel_init(&tdl_ch, cfg->tdlProfile[0], cfg->tdlDelaySpreadNs, scs_hz, snr);
         double N0 = 1.0 / pow(10.0, snr/10.0);
         int err_nodfe=0, bits_nodfe=0, blk_nodfe=0;
         int err_dfe=0,   bits_dfe=0,   blk_dfe=0;
@@ -826,8 +996,7 @@ void run_pusch_tdl_turbo_simulation(const L1Config *cfg) {
     dmrs_sequence(c_init, num_pilots, dmrs_sym);
 
     int max_dbits = num_data * bps;
-    int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1) tbsz = 1;
+    int tbsz = nr_determine_tbs(max_dbits, cr);
 
     /* TS 38.212 5.2.2 code block segmentation (P0-2c, 2026-09-03) --
      * see run_pdsch_simulation() (pdsch.c) for the pattern this mirrors. */
@@ -907,7 +1076,7 @@ void run_pusch_tdl_turbo_simulation(const L1Config *cfg) {
 
     TDLChannel tdl_ch;
     for (double snr=cfg->snrStart; snr<=cfg->snrEnd+1e-6; snr+=cfg->snrStep) {
-        tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        tdl_channel_init(&tdl_ch, cfg->tdlProfile[0], cfg->tdlDelaySpreadNs, scs_hz, snr);
         double N0 = 1.0 / pow(10.0, snr/10.0);
         int err_nodfe=0, bits_nodfe=0, blk_nodfe=0;
         int err_dfe=0,   bits_dfe=0,   blk_dfe=0;
@@ -1153,8 +1322,7 @@ void run_pusch_harq_simulation(const L1Config *cfg) {
     dmrs_sequence(c_init, num_pilots, dmrs_sym);
 
     int E    = num_data * bps;
-    int tbsz = (int)(E * cr);
-    if (tbsz < 1)    tbsz = 1;
+    int tbsz = nr_determine_tbs(E, cr);
 
     /* TS 38.212 5.2.2 code block segmentation (P0-2c, 2026-09-03) --
      * see run_pusch_simulation() (this file) for the non-HARQ pattern.
@@ -1229,6 +1397,7 @@ void run_pusch_harq_simulation(const L1Config *cfg) {
     double **soft_buf=(double **)malloc(seg.C * sizeof(double *));
     for (int r = 0; r < seg.C; r++) soft_buf[r] = (double *)malloc(acsz * sizeof(double));
     double *alpha  = (double *)malloc(num_data * sizeof(double));
+    double *nv_all = (double *)malloc(num_data * sizeof(double));
     cx_t   *taps   = (cx_t *)malloc(TDL_MAX_TAPS * sizeof(cx_t));
 
     printf("%10s%14s%14s%14s%12s\n", "SNR(dB)", "BER(final)", "BLER(1st)", "BLER(HARQ)", "AvgTx");
@@ -1240,7 +1409,7 @@ void run_pusch_harq_simulation(const L1Config *cfg) {
     AWGNChannel awgn_ch;
 
     for (double snr = cfg->snrStart; snr <= cfg->snrEnd + 1e-6; snr += cfg->snrStep) {
-        if (is_tdl)  tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        if (is_tdl)  tdl_channel_init(&tdl_ch, cfg->tdlProfile[0], cfg->tdlDelaySpreadNs, scs_hz, snr);
         if (is_flat) flat_fading_init(&flat_ch, snr);
         awgn_init(&awgn_ch, snr);
         double N0 = 1.0 / pow(10.0, snr / 10.0);
@@ -1342,10 +1511,15 @@ void run_pusch_harq_simulation(const L1Config *cfg) {
                         }
                         env = N0 * inv_sum / num_data;
                     } else {
-                        double mhp = 0.0;
-                        for (int d=0;d<num_data;d++) mhp += CX_NORM(h_data[d]);
-                        mhp /= num_data;
-                        env = (mhp > 1e-10) ? N0/mhp : N0;
+                        /* per-RE ZF noise variance, kept as an array
+                         * instead of averaged (tasks/todo.md "RE별
+                         * effective noise variance 기반 LLR", P1-1) */
+                        for (int d=0;d<num_data;d++) {
+                            double hp = CX_NORM(h_data[d]);
+                            nv_all[d] = N0 / (hp > 1e-10 ? hp : 1e-10);
+                        }
+                        qam_demap_llr_re(eq_data, num_data, mcs.modulation, nv_all, allllr);
+                        env = -1.0; /* already demapped above */
                     }
                 }
                 if (env >= 0.0)
@@ -1397,7 +1571,7 @@ void run_pusch_harq_simulation(const L1Config *cfg) {
     free(data_syms); free(precoded); free(tx_grid); free(rx_grid);
     free(rx_pilots); free(h_pilots); free(h_full);
     free(rx_data); free(h_data); free(eq_data); free(descrambled);
-    free(allllr); free(alpha); free(taps);
+    free(allllr); free(alpha); free(taps); free(nv_all);
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -1448,8 +1622,7 @@ void run_pusch_sm2x2_simulation(const L1Config *cfg) {
     dmrs_sequence(0x87abcdefu, nppl, dmrsB);
 
     int max_dbits = num_data * bps;
-    int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1) tbsz = 1;
+    int tbsz = nr_determine_tbs(max_dbits, cr);
 
     /* TS 38.212 5.2.2 code block segmentation (P0-2c, 2026-09-03) --
      * see run_pdsch_simulation() (pdsch.c) for the pattern this mirrors. */
@@ -1651,8 +1824,7 @@ void run_pusch_sm2x2_tdl_simulation(const L1Config *cfg) {
     dmrs_sequence(0x87abcdefu, nppl, dmrsB);
 
     int max_dbits = num_data * bps;
-    int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1) tbsz = 1;
+    int tbsz = nr_determine_tbs(max_dbits, cr);
 
     /* TS 38.212 5.2.2 code block segmentation (P0-2c, 2026-09-03) --
      * see run_pdsch_simulation() (pdsch.c) for the pattern this mirrors. */
@@ -1701,6 +1873,7 @@ void run_pusch_sm2x2_tdl_simulation(const L1Config *cfg) {
     cx_t *tx_grid0=(cx_t*)malloc(active*sizeof(cx_t)), *tx_grid1=(cx_t*)malloc(active*sizeof(cx_t));
     cx_t *rx_grid0=(cx_t*)malloc(active*sizeof(cx_t)), *rx_grid1=(cx_t*)malloc(active*sizeof(cx_t));
     cx_t *x_hatA=(cx_t*)malloc(num_data*sizeof(cx_t)), *x_hatB=(cx_t*)malloc(num_data*sizeof(cx_t));
+    double *nvA_all=(double*)malloc(num_data*sizeof(double)), *nvB_all=(double*)malloc(num_data*sizeof(double));
     double *allllrA=(double*)malloc(E*sizeof(double)), *allllrB=(double*)malloc(E*sizeof(double));
     double *soft_bufA=(double*)malloc(acsz*sizeof(double)), *soft_bufB=(double*)malloc(acsz*sizeof(double));
     int *decoded_cb=(int*)malloc(ldpc.info_size*sizeof(int));
@@ -1721,7 +1894,7 @@ void run_pusch_sm2x2_tdl_simulation(const L1Config *cfg) {
 
     TDLChannel tdl_ch;
     for (double snr=cfg->snrStart; snr<=cfg->snrEnd+1e-6; snr+=cfg->snrStep) {
-        tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        tdl_channel_init(&tdl_ch, cfg->tdlProfile[0], cfg->tdlDelaySpreadNs, scs_hz, snr);
         double snrlin = pow(10.0, snr/10.0);
         double N0    = 1.0 / snrlin;
         double sigma = sqrt(1.0 / (2.0 * snrlin));
@@ -1778,7 +1951,6 @@ void run_pusch_sm2x2_tdl_simulation(const L1Config *cfg) {
             interpolate_channel(h_pilots01, nppl, pilotB, active, h01_full);
             interpolate_channel(h_pilots11, nppl, pilotB, active, h11_full);
 
-            double nvA_sum=0.0, nvB_sum=0.0;
             for (int d=0;d<num_data;d++) {
                 int re = data_pos[d];
                 cx_t h_hat[2][2] = {
@@ -1790,12 +1962,11 @@ void run_pusch_sm2x2_tdl_simulation(const L1Config *cfg) {
                 if (use_mmse) mimo_mmse_detect(h_hat, y, N0, xh, nv);
                 else          mimo_zf_detect  (h_hat, y, N0, xh, nv);
                 x_hatA[d] = xh[0]; x_hatB[d] = xh[1];
-                nvA_sum += nv[0]; nvB_sum += nv[1];
+                nvA_all[d] = nv[0]; nvB_all[d] = nv[1];
             }
-            double envA = nvA_sum / num_data, envB = nvB_sum / num_data;
 
-            qam_demap_llr(x_hatA, num_data, mcs.modulation, envA, allllrA);
-            qam_demap_llr(x_hatB, num_data, mcs.modulation, envB, allllrB);
+            qam_demap_llr_re(x_hatA, num_data, mcs.modulation, nvA_all, allllrA);
+            qam_demap_llr_re(x_hatB, num_data, mcs.modulation, nvB_all, allllrB);
             int roffA = 0, roffB = 0;
             int cb_crc_okA = 1, cb_crc_okB = 1;
             for (int r = 0; r < seg.C; r++) {
@@ -1843,6 +2014,7 @@ void run_pusch_sm2x2_tdl_simulation(const L1Config *cfg) {
     free(rmA); free(rmB); free(Er); free(selbitsA); free(selbitsB);
     free(symsA); free(symsB); free(tx_grid0); free(tx_grid1);
     free(rx_grid0); free(rx_grid1); free(x_hatA); free(x_hatB);
+    free(nvA_all); free(nvB_all);
     free(allllrA); free(allllrB); free(soft_bufA); free(soft_bufB);
     free(decoded_cb); free(decoded_tbA); free(decoded_tbB);
     free(rx_pilotsA0); free(rx_pilotsA1); free(rx_pilotsB0); free(rx_pilotsB1);
@@ -1892,8 +2064,7 @@ void run_pusch_sm2x2_tdl_harq_simulation(const L1Config *cfg) {
 
     int E = num_data * bps;
     int max_dbits = E;
-    int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1) tbsz = 1;
+    int tbsz = nr_determine_tbs(max_dbits, cr);
 
     /* TS 38.212 5.2.2 code block segmentation (P0-2c, 2026-09-03) --
      * both independent codewords (A/B) share tbsz/cr so they share one
@@ -1955,6 +2126,7 @@ void run_pusch_sm2x2_tdl_harq_simulation(const L1Config *cfg) {
     cx_t *tx_grid0=(cx_t*)malloc(active*sizeof(cx_t)), *tx_grid1=(cx_t*)malloc(active*sizeof(cx_t));
     cx_t *rx_grid0=(cx_t*)malloc(active*sizeof(cx_t)), *rx_grid1=(cx_t*)malloc(active*sizeof(cx_t));
     cx_t *x_hatA=(cx_t*)malloc(num_data*sizeof(cx_t)), *x_hatB=(cx_t*)malloc(num_data*sizeof(cx_t));
+    double *nvA_all=(double*)malloc(num_data*sizeof(double)), *nvB_all=(double*)malloc(num_data*sizeof(double));
     double *allllrA=(double*)malloc(E*sizeof(double)), *allllrB=(double*)malloc(E*sizeof(double));
     double **soft_bufA=(double**)malloc(seg.C*sizeof(double*)), **soft_bufB=(double**)malloc(seg.C*sizeof(double*));
     for (int r=0;r<seg.C;r++) { soft_bufA[r]=(double*)malloc(acsz*sizeof(double)); soft_bufB[r]=(double*)malloc(acsz*sizeof(double)); }
@@ -1976,7 +2148,7 @@ void run_pusch_sm2x2_tdl_harq_simulation(const L1Config *cfg) {
 
     TDLChannel tdl_ch;
     for (double snr=cfg->snrStart; snr<=cfg->snrEnd+1e-6; snr+=cfg->snrStep) {
-        tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        tdl_channel_init(&tdl_ch, cfg->tdlProfile[0], cfg->tdlDelaySpreadNs, scs_hz, snr);
         double snrlin = pow(10.0, snr/10.0);
         double N0     = 1.0 / snrlin;
         double sigma  = sqrt(1.0 / (2.0 * snrlin));
@@ -2043,7 +2215,6 @@ void run_pusch_sm2x2_tdl_harq_simulation(const L1Config *cfg) {
                 interpolate_channel(h_pilots01, nppl, pilotB, active, h01_full);
                 interpolate_channel(h_pilots11, nppl, pilotB, active, h11_full);
 
-                double nvA_sum=0.0, nvB_sum=0.0;
                 for (int d=0;d<num_data;d++) {
                     int re = data_pos[d];
                     cx_t h_hat[2][2] = {
@@ -2055,12 +2226,11 @@ void run_pusch_sm2x2_tdl_harq_simulation(const L1Config *cfg) {
                     if (use_mmse) mimo_mmse_detect(h_hat, y, N0, xh, nv);
                     else          mimo_zf_detect  (h_hat, y, N0, xh, nv);
                     x_hatA[d] = xh[0]; x_hatB[d] = xh[1];
-                    nvA_sum += nv[0]; nvB_sum += nv[1];
+                    nvA_all[d] = nv[0]; nvB_all[d] = nv[1];
                 }
-                double envA = nvA_sum / num_data, envB = nvB_sum / num_data;
 
-                qam_demap_llr(x_hatA, num_data, mcs.modulation, envA, allllrA);
-                qam_demap_llr(x_hatB, num_data, mcs.modulation, envB, allllrB);
+                qam_demap_llr_re(x_hatA, num_data, mcs.modulation, nvA_all, allllrA);
+                qam_demap_llr_re(x_hatB, num_data, mcs.modulation, nvB_all, allllrB);
 
                 int roffA = 0, roffB = 0;
                 int cbA_crc_ok = 1, cbB_crc_ok = 1;
@@ -2120,6 +2290,7 @@ void run_pusch_sm2x2_tdl_harq_simulation(const L1Config *cfg) {
     free(selbitsA); free(selbitsB);
     free(data_symsA); free(data_symsB); free(tx_grid0); free(tx_grid1);
     free(rx_grid0); free(rx_grid1); free(x_hatA); free(x_hatB);
+    free(nvA_all); free(nvB_all);
     free(allllrA); free(allllrB);
     free(decoded_cbA); free(decoded_cbB); free(decoded_tbA); free(decoded_tbB);
     free(rx_pilotsA0); free(rx_pilotsA1); free(rx_pilotsB0); free(rx_pilotsB1);
@@ -2165,8 +2336,7 @@ void run_pusch_sm2x2_harq_simulation(const L1Config *cfg) {
 
     int E = num_data * bps;
     int max_dbits = E;
-    int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1) tbsz = 1;
+    int tbsz = nr_determine_tbs(max_dbits, cr);
 
     /* TS 38.212 5.2.2 code block segmentation (P0-2c, 2026-09-03) --
      * both independent codewords (A/B) share tbsz/cr so they share one
@@ -2406,8 +2576,7 @@ void run_pusch_ul_eigen_bf_simulation(const L1Config *cfg) {
     int    crc_bits = 24;
 
     int max_dbits = num_data * bps;
-    int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1) tbsz = 1;
+    int tbsz = nr_determine_tbs(max_dbits, cr);
 
     /* TS 38.212 5.2.2 code block segmentation (P0-2c, 2026-09-03) --
      * see run_pdsch_simulation() (pdsch.c) for the pattern this mirrors. */
@@ -2632,8 +2801,7 @@ void run_pusch_ul_eigen_bf_2tx_simulation(const L1Config *cfg) {
     int    use_mmse = (strcmp(cfg->equalizer,"MMSE")==0);
 
     int max_dbits = num_data * bps;
-    int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1) tbsz = 1;
+    int tbsz = nr_determine_tbs(max_dbits, cr);
 
     /* TS 38.212 5.2.2 code block segmentation (P0-2c, 2026-09-03) --
      * see run_pdsch_simulation() (pdsch.c) for the pattern this mirrors. */
@@ -2936,8 +3104,7 @@ void run_pusch_ul_eigen_bf_tdl_simulation(const L1Config *cfg) {
     int    crc_bits = 24;
 
     int max_dbits = num_data * bps;
-    int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1) tbsz = 1;
+    int tbsz = nr_determine_tbs(max_dbits, cr);
 
     /* TS 38.212 5.2.2 code block segmentation (P0-2c, 2026-09-03) --
      * see run_pdsch_simulation() (pdsch.c) for the pattern this mirrors. */
@@ -2981,6 +3148,7 @@ void run_pusch_ul_eigen_bf_tdl_simulation(const L1Config *cfg) {
     cx_t   *sym[2];
     double *allllr[2], *soft_buf[2];
     cx_t   *rx_hat[2];
+    double *nv_all[2];
     for (int s = 0; s < 2; s++) {
         tb[s]     = (int    *)malloc(tbsz  * sizeof(int));
         tb_crc[s] = (int    *)malloc(K     * sizeof(int));
@@ -2994,6 +3162,7 @@ void run_pusch_ul_eigen_bf_tdl_simulation(const L1Config *cfg) {
         soft_buf[s]=(double *)malloc(acsz  * sizeof(double));
         decoded_tb[s] = (int *)malloc(B    * sizeof(int));
         rx_hat[s] = (cx_t  *)malloc(num_data * sizeof(cx_t));
+        nv_all[s] = (double *)malloc(num_data * sizeof(double));
     }
     int *decoded_cb = (int *)malloc(ldpc.info_size * sizeof(int));
     cx_t (*h_est_obs)[UL_EIGEN_NRX] = (cx_t (*)[UL_EIGEN_NRX])malloc((size_t)num_pilots * sizeof(*h_est_obs));
@@ -3006,7 +3175,7 @@ void run_pusch_ul_eigen_bf_tdl_simulation(const L1Config *cfg) {
 
     TDLChannel tdl_ch;
     for (double snr = cfg->snrStart; snr <= cfg->snrEnd + 1e-6; snr += cfg->snrStep) {
-        tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        tdl_channel_init(&tdl_ch, cfg->tdlProfile[0], cfg->tdlDelaySpreadNs, scs_hz, snr);
         double N0    = 1.0 / pow(10.0, snr / 10.0);
         double sigma = sqrt(N0 / 2.0);
 
@@ -3050,7 +3219,6 @@ void run_pusch_ul_eigen_bf_tdl_simulation(const L1Config *cfg) {
 
             /* ④ RE마다 Genie(정확한 MRC)/Eigen-BF(고정 wideband 빔) 유효채널
              * 계산 후 검출 */
-            double nv_sum[2] = {0.0, 0.0};
             for (int d = 0; d < num_data; d++) {
                 cx_t g_re = tdl_freq_response(&tdl_ch, cluster_taps, data_pos[d]);
                 cx_t h_re[UL_EIGEN_NRX];
@@ -3067,8 +3235,7 @@ void run_pusch_ul_eigen_bf_tdl_simulation(const L1Config *cfg) {
 
                 for (int s = 0; s < 2; s++) {
                     double g_abs2 = CX_NORM(g[s]);
-                    double nv = (g_abs2 > 1e-12) ? N0 / g_abs2 : N0 * 1e6;
-                    nv_sum[s] += nv;
+                    nv_all[s][d] = (g_abs2 > 1e-12) ? N0 / g_abs2 : N0 * 1e6;
                     cx_t noise = CX_MAKE(randn() * sigma, randn() * sigma);
                     cx_t y = g[s] * sym[s][d] + noise;
                     rx_hat[s][d] = (g_abs2 > 1e-12) ? y / g[s] : CX_ZERO;
@@ -3076,8 +3243,7 @@ void run_pusch_ul_eigen_bf_tdl_simulation(const L1Config *cfg) {
             }
 
             for (int s = 0; s < 2; s++) {
-                double env = nv_sum[s] / num_data;
-                qam_demap_llr(rx_hat[s], num_data, mcs.modulation, env, allllr[s]);
+                qam_demap_llr_re(rx_hat[s], num_data, mcs.modulation, nv_all[s], allllr[s]);
 
                 int roff = 0;
                 int cb_crc_ok = 1;
@@ -3123,6 +3289,7 @@ void run_pusch_ul_eigen_bf_tdl_simulation(const L1Config *cfg) {
         free(rm[s]); free(selbits[s]);
         free(sym[s]); free(allllr[s]); free(soft_buf[s]); free(decoded_tb[s]);
         free(rx_hat[s]);
+        free(nv_all[s]);
     }
 }
 
@@ -3162,8 +3329,7 @@ void run_pusch_ul_eigen_bf_harq_simulation(const L1Config *cfg) {
     int    crc_bits = 24;
 
     int E    = num_data * bps;
-    int tbsz = (int)(E * cr);
-    if (tbsz < 1)    tbsz = 1;
+    int tbsz = nr_determine_tbs(E, cr);
 
     /* TS 38.212 5.2.2 code block segmentation (P0-2c, 2026-09-03) --
      * both scenarios (Genie s=0 / Eigen-BF s=1) share tbsz/cr, so they
@@ -3214,7 +3380,7 @@ void run_pusch_ul_eigen_bf_harq_simulation(const L1Config *cfg) {
     int   *tb[2], *tb_crc[2], *cb_bits[2], *selbits[2], *decoded_cb[2], *decoded_tb[2];
     int  **coded_all[2], **rm[2];
     cx_t  *sym[2], *rx_hat[2];
-    double *allllr[2], **soft_buf[2];
+    double *allllr[2], **soft_buf[2], *nv_all[2];
     for (int s = 0; s < 2; s++) {
         tb[s]         = (int    *)malloc(tbsz     * sizeof(int));
         tb_crc[s]     = (int    *)malloc(B        * sizeof(int));
@@ -3232,6 +3398,7 @@ void run_pusch_ul_eigen_bf_harq_simulation(const L1Config *cfg) {
         decoded_tb[s] = (int    *)malloc(B        * sizeof(int));
         sym[s]        = (cx_t  *)malloc(num_data  * sizeof(cx_t));
         rx_hat[s]     = (cx_t  *)malloc(num_data  * sizeof(cx_t));
+        nv_all[s]     = (double *)malloc(num_data  * sizeof(double));
         allllr[s]     = (double *)malloc(E        * sizeof(double));
     }
     cx_t (*h_est_obs)[UL_EIGEN_NRX] = (cx_t (*)[UL_EIGEN_NRX])malloc((size_t)num_pilots * sizeof(*h_est_obs));
@@ -3244,7 +3411,7 @@ void run_pusch_ul_eigen_bf_harq_simulation(const L1Config *cfg) {
 
     TDLChannel tdl_ch;
     for (double snr = cfg->snrStart; snr <= cfg->snrEnd + 1e-6; snr += cfg->snrStep) {
-        if (is_tdl) tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        if (is_tdl) tdl_channel_init(&tdl_ch, cfg->tdlProfile[0], cfg->tdlDelaySpreadNs, scs_hz, snr);
         double N0    = 1.0 / pow(10.0, snr / 10.0);
         double sigma = sqrt(N0 / 2.0);
 
@@ -3299,7 +3466,6 @@ void run_pusch_ul_eigen_bf_harq_simulation(const L1Config *cfg) {
                  * attempt 0의 첫 draw는 위 파일럿 관측과 동일 상태를 재사용) */
                 if (is_tdl && attempt > 0) tdl_draw(&tdl_ch, cluster_taps);
 
-                double nv_sum[2] = {0.0, 0.0};
                 for (int d = 0; d < num_data; d++) {
                     cx_t g_re = is_tdl ? tdl_freq_response(&tdl_ch, cluster_taps, data_pos[d]) : CX_MAKE(1.0, 0.0);
                     cx_t h_re[UL_EIGEN_NRX];
@@ -3316,8 +3482,7 @@ void run_pusch_ul_eigen_bf_harq_simulation(const L1Config *cfg) {
 
                     for (int s = 0; s < 2; s++) {
                         double g_abs2 = CX_NORM(g[s]);
-                        double nv = (g_abs2 > 1e-12) ? N0 / g_abs2 : N0 * 1e6;
-                        nv_sum[s] += nv;
+                        nv_all[s][d] = (g_abs2 > 1e-12) ? N0 / g_abs2 : N0 * 1e6;
                         cx_t noise = CX_MAKE(randn() * sigma, randn() * sigma);
                         cx_t y = g[s] * sym[s][d] + noise;
                         rx_hat[s][d] = (g_abs2 > 1e-12) ? y / g[s] : CX_ZERO;
@@ -3325,8 +3490,7 @@ void run_pusch_ul_eigen_bf_harq_simulation(const L1Config *cfg) {
                 }
 
                 for (int s = 0; s < 2; s++) {
-                    double env = nv_sum[s] / num_data;
-                    qam_demap_llr(rx_hat[s], num_data, mcs.modulation, env, allllr[s]);
+                    qam_demap_llr_re(rx_hat[s], num_data, mcs.modulation, nv_all[s], allllr[s]);
                     int roff = 0;
                     int cb_crc_ok = 1;
                     for (int r = 0; r < seg.C; r++) {
@@ -3383,7 +3547,7 @@ void run_pusch_ul_eigen_bf_harq_simulation(const L1Config *cfg) {
         }
         free(coded_all[s]); free(rm[s]); free(soft_buf[s]);
         free(selbits[s]); free(decoded_cb[s]); free(decoded_tb[s]);
-        free(sym[s]); free(rx_hat[s]);
+        free(sym[s]); free(rx_hat[s]); free(nv_all[s]);
         free(allllr[s]);
     }
 }
@@ -3422,8 +3586,7 @@ void run_pusch_ul_eigen_bf_2tx_tdl_simulation(const L1Config *cfg) {
     int    use_mmse = (strcmp(cfg->equalizer,"MMSE")==0);
 
     int max_dbits = num_data * bps;
-    int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1) tbsz = 1;
+    int tbsz = nr_determine_tbs(max_dbits, cr);
 
     /* TS 38.212 5.2.2 code block segmentation (P0-2c, 2026-09-03) --
      * see run_pdsch_simulation() (pdsch.c) for the pattern this mirrors. */
@@ -3470,6 +3633,7 @@ void run_pusch_ul_eigen_bf_2tx_tdl_simulation(const L1Config *cfg) {
     cx_t   *sym[2][2];
     double *allllr[2][2], *soft_buf[2][2];
     cx_t   *rx_hat[2][2];
+    double *nv_all[2][2];
     for (int p = 0; p < 2; p++) {
         for (int l = 0; l < 2; l++) {
             tb[p][l]     = (int    *)malloc(tbsz  * sizeof(int));
@@ -3484,6 +3648,7 @@ void run_pusch_ul_eigen_bf_2tx_tdl_simulation(const L1Config *cfg) {
             soft_buf[p][l]=(double *)malloc(acsz  * sizeof(double));
             decoded_tb[p][l] = (int *)malloc(B    * sizeof(int));
             rx_hat[p][l] = (cx_t  *)malloc(num_data * sizeof(cx_t));
+            nv_all[p][l] = (double *)malloc(num_data * sizeof(double));
         }
     }
     int *decoded_cb = (int *)malloc(ldpc.info_size * sizeof(int));
@@ -3497,7 +3662,7 @@ void run_pusch_ul_eigen_bf_2tx_tdl_simulation(const L1Config *cfg) {
 
     TDLChannel tdl_ch;
     for (double snr = cfg->snrStart; snr <= cfg->snrEnd + 1e-6; snr += cfg->snrStep) {
-        tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        tdl_channel_init(&tdl_ch, cfg->tdlProfile[0], cfg->tdlDelaySpreadNs, scs_hz, snr);
         double N0    = 1.0 / pow(10.0, snr / 10.0);
         double sigma = sqrt(N0 / 2.0);
 
@@ -3581,7 +3746,6 @@ void run_pusch_ul_eigen_bf_2tx_tdl_simulation(const L1Config *cfg) {
                 }
             }
 
-            double nv_sum[2][2] = {{0,0},{0,0}};
             for (int d = 0; d < num_data; d++) {
                 cx_t g_re = tdl_freq_response(&tdl_ch, cluster_taps, data_pos[d]);
                 cx_t Heff_g[2][2] = {
@@ -3605,7 +3769,7 @@ void run_pusch_ul_eigen_bf_2tx_tdl_simulation(const L1Config *cfg) {
                     if (use_mmse) mimo_mmse_detect(Heff_g, y_g, N0, xh_g, nv_g);
                     else          mimo_zf_detect  (Heff_g, y_g, N0, xh_g, nv_g);
                     rx_hat[0][0][d] = xh_g[0]; rx_hat[0][1][d] = xh_g[1];
-                    nv_sum[0][0] += nv_g[0]; nv_sum[0][1] += nv_g[1];
+                    nv_all[0][0][d] = nv_g[0]; nv_all[0][1][d] = nv_g[1];
 
                     cx_t y_e[2] = {
                         Heff_e[0][0]*sym[1][0][d] + Heff_e[0][1]*sym[1][1][d] + noise_e[0],
@@ -3615,31 +3779,24 @@ void run_pusch_ul_eigen_bf_2tx_tdl_simulation(const L1Config *cfg) {
                     if (use_mmse) mimo_mmse_detect(Heff_e, y_e, N0, xh_e, nv_e);
                     else          mimo_zf_detect  (Heff_e, y_e, N0, xh_e, nv_e);
                     rx_hat[1][0][d] = xh_e[0]; rx_hat[1][1][d] = xh_e[1];
-                    nv_sum[1][0] += nv_e[0]; nv_sum[1][1] += nv_e[1];
+                    nv_all[1][0][d] = nv_e[0]; nv_all[1][1][d] = nv_e[1];
                 } else {   /* rank == 1: 열 0(layer A)만, 2-branch MRC 재사용 */
                     cx_t hcol_g[2] = { Heff_g[0][0], Heff_g[1][0] };
                     cx_t y_g[2] = { Heff_g[0][0]*sym[0][0][d] + noise_g[0],
                                      Heff_g[1][0]*sym[0][0][d] + noise_g[1] };
-                    cx_t xh_g; double nv_g;
-                    mrc_combine(hcol_g, y_g, N0, &xh_g, &nv_g);
-                    rx_hat[0][0][d] = xh_g;
-                    nv_sum[0][0] += nv_g;
+                    mrc_combine(hcol_g, y_g, N0, &rx_hat[0][0][d], &nv_all[0][0][d]);
 
                     cx_t hcol_e[2] = { Heff_e[0][0], Heff_e[1][0] };
                     cx_t y_e[2] = { Heff_e[0][0]*sym[1][0][d] + noise_e[0],
                                      Heff_e[1][0]*sym[1][0][d] + noise_e[1] };
-                    cx_t xh_e; double nv_e;
-                    mrc_combine(hcol_e, y_e, N0, &xh_e, &nv_e);
-                    rx_hat[1][0][d] = xh_e;
-                    nv_sum[1][0] += nv_e;
+                    mrc_combine(hcol_e, y_e, N0, &rx_hat[1][0][d], &nv_all[1][0][d]);
                 }
             }
 
             int any_err[2] = {0, 0};
             for (int p = 0; p < 2; p++) {
                 for (int l = 0; l < rank; l++) {
-                    double env = nv_sum[p][l] / num_data;
-                    qam_demap_llr(rx_hat[p][l], num_data, mcs.modulation, env, allllr[p][l]);
+                    qam_demap_llr_re(rx_hat[p][l], num_data, mcs.modulation, nv_all[p][l], allllr[p][l]);
 
                     int roff = 0;
                     int cb_crc_ok = 1;
@@ -3689,6 +3846,7 @@ void run_pusch_ul_eigen_bf_2tx_tdl_simulation(const L1Config *cfg) {
             free(rm[p][l]); free(selbits[p][l]);
             free(sym[p][l]); free(allllr[p][l]); free(soft_buf[p][l]); free(decoded_tb[p][l]);
             free(rx_hat[p][l]);
+            free(nv_all[p][l]);
         }
     }
 }
@@ -3735,8 +3893,7 @@ void run_pusch_ul_eigen_bf_2tx_harq_simulation(const L1Config *cfg) {
     int    use_mmse = (strcmp(cfg->equalizer,"MMSE")==0);
 
     int E    = num_data * bps;
-    int tbsz = (int)(E * cr);
-    if (tbsz < 1)    tbsz = 1;
+    int tbsz = nr_determine_tbs(E, cr);
 
     /* TS 38.212 5.2.2 code block segmentation (P0-2c, 2026-09-03) --
      * every [p][l] combination (scenario Genie/Eigen-BF x layer) is an
@@ -3791,6 +3948,7 @@ void run_pusch_ul_eigen_bf_2tx_harq_simulation(const L1Config *cfg) {
     int   *tb[2][2], *tb_crc[2][2], *cb_bits[2][2], *selbits[2][2], *decoded_cb[2][2], *decoded_tb[2][2];
     int  **coded_all[2][2], **rm[2][2];
     cx_t  *sym[2][2], *rx_hat[2][2];
+    double *nv_all[2][2];
     double *allllr[2][2], **soft_buf[2][2];
     for (int p = 0; p < 2; p++) {
         for (int l = 0; l < 2; l++) {
@@ -3810,6 +3968,7 @@ void run_pusch_ul_eigen_bf_2tx_harq_simulation(const L1Config *cfg) {
             decoded_tb[p][l] = (int    *)malloc(B        * sizeof(int));
             sym[p][l]        = (cx_t  *)malloc(num_data  * sizeof(cx_t));
             rx_hat[p][l]     = (cx_t  *)malloc(num_data  * sizeof(cx_t));
+            nv_all[p][l]     = (double *)malloc(num_data  * sizeof(double));
             allllr[p][l]     = (double *)malloc(E        * sizeof(double));
         }
     }
@@ -3822,7 +3981,7 @@ void run_pusch_ul_eigen_bf_2tx_harq_simulation(const L1Config *cfg) {
 
     TDLChannel tdl_ch;
     for (double snr = cfg->snrStart; snr <= cfg->snrEnd + 1e-6; snr += cfg->snrStep) {
-        if (is_tdl) tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        if (is_tdl) tdl_channel_init(&tdl_ch, cfg->tdlProfile[0], cfg->tdlDelaySpreadNs, scs_hz, snr);
         double N0    = 1.0 / pow(10.0, snr / 10.0);
         double sigma = sqrt(N0 / 2.0);
 
@@ -3917,7 +4076,6 @@ void run_pusch_ul_eigen_bf_2tx_harq_simulation(const L1Config *cfg) {
                  * 첫 draw는 위 파일럿 관측과 동일 상태를 재사용) */
                 if (is_tdl && attempt > 0) tdl_draw(&tdl_ch, cluster_taps);
 
-                double nv_sum[2][2] = {{0.0,0.0},{0.0,0.0}};
                 for (int d = 0; d < num_data; d++) {
                     cx_t g_re = is_tdl ? tdl_freq_response(&tdl_ch, cluster_taps, data_pos[d]) : CX_MAKE(1.0, 0.0);
                     cx_t Heff_g[2][2] = {
@@ -3941,7 +4099,7 @@ void run_pusch_ul_eigen_bf_2tx_harq_simulation(const L1Config *cfg) {
                         if (use_mmse) mimo_mmse_detect(Heff_g, y_g, N0, xh_g, nv_g);
                         else          mimo_zf_detect  (Heff_g, y_g, N0, xh_g, nv_g);
                         rx_hat[0][0][d] = xh_g[0]; rx_hat[0][1][d] = xh_g[1];
-                        nv_sum[0][0] += nv_g[0]; nv_sum[0][1] += nv_g[1];
+                        nv_all[0][0][d] = nv_g[0]; nv_all[0][1][d] = nv_g[1];
 
                         cx_t y_e[2] = {
                             Heff_e[0][0]*sym[1][0][d] + Heff_e[0][1]*sym[1][1][d] + noise_e[0],
@@ -3951,30 +4109,23 @@ void run_pusch_ul_eigen_bf_2tx_harq_simulation(const L1Config *cfg) {
                         if (use_mmse) mimo_mmse_detect(Heff_e, y_e, N0, xh_e, nv_e);
                         else          mimo_zf_detect  (Heff_e, y_e, N0, xh_e, nv_e);
                         rx_hat[1][0][d] = xh_e[0]; rx_hat[1][1][d] = xh_e[1];
-                        nv_sum[1][0] += nv_e[0]; nv_sum[1][1] += nv_e[1];
+                        nv_all[1][0][d] = nv_e[0]; nv_all[1][1][d] = nv_e[1];
                     } else {   /* rank == 1: 열 0(layer A)만, 2-branch MRC 재사용 */
                         cx_t hcol_g[2] = { Heff_g[0][0], Heff_g[1][0] };
                         cx_t y_g[2] = { Heff_g[0][0]*sym[0][0][d] + noise_g[0],
                                          Heff_g[1][0]*sym[0][0][d] + noise_g[1] };
-                        cx_t xh_g; double nv_g;
-                        mrc_combine(hcol_g, y_g, N0, &xh_g, &nv_g);
-                        rx_hat[0][0][d] = xh_g;
-                        nv_sum[0][0] += nv_g;
+                        mrc_combine(hcol_g, y_g, N0, &rx_hat[0][0][d], &nv_all[0][0][d]);
 
                         cx_t hcol_e[2] = { Heff_e[0][0], Heff_e[1][0] };
                         cx_t y_e[2] = { Heff_e[0][0]*sym[1][0][d] + noise_e[0],
                                          Heff_e[1][0]*sym[1][0][d] + noise_e[1] };
-                        cx_t xh_e; double nv_e;
-                        mrc_combine(hcol_e, y_e, N0, &xh_e, &nv_e);
-                        rx_hat[1][0][d] = xh_e;
-                        nv_sum[1][0] += nv_e;
+                        mrc_combine(hcol_e, y_e, N0, &rx_hat[1][0][d], &nv_all[1][0][d]);
                     }
                 }
 
                 for (int p = 0; p < 2; p++) {
                     for (int l = 0; l < rank; l++) {
-                        double env = nv_sum[p][l] / num_data;
-                        qam_demap_llr(rx_hat[p][l], num_data, mcs.modulation, env, allllr[p][l]);
+                        qam_demap_llr_re(rx_hat[p][l], num_data, mcs.modulation, nv_all[p][l], allllr[p][l]);
                         int roff = 0;
                         int cb_crc_ok = 1;
                         for (int r = 0; r < seg.C; r++) {
@@ -4042,7 +4193,7 @@ void run_pusch_ul_eigen_bf_2tx_harq_simulation(const L1Config *cfg) {
             }
             free(coded_all[p][l]); free(rm[p][l]); free(soft_buf[p][l]);
             free(selbits[p][l]); free(decoded_cb[p][l]); free(decoded_tb[p][l]);
-            free(sym[p][l]); free(rx_hat[p][l]);
+            free(sym[p][l]); free(rx_hat[p][l]); free(nv_all[p][l]);
             free(allllr[p][l]);
         }
     }
@@ -4128,8 +4279,7 @@ void run_pusch_ul_eigen_bf_4tx_simulation(const L1Config *cfg) {
     int    crc_bits = 24;
 
     int max_dbits = num_data * bps;
-    int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1) tbsz = 1;
+    int tbsz = nr_determine_tbs(max_dbits, cr);
 
     /* TS 38.212 5.2.2 code block segmentation (P0-2c, 2026-09-03) --
      * see run_pdsch_simulation() (pdsch.c) for the pattern this mirrors. */
@@ -4382,8 +4532,7 @@ void run_pusch_ul_eigen_bf_4tx_tdl_simulation(const L1Config *cfg) {
     int    crc_bits = 24;
 
     int max_dbits = num_data * bps;
-    int tbsz = (int)(max_dbits * cr);
-    if (tbsz < 1) tbsz = 1;
+    int tbsz = nr_determine_tbs(max_dbits, cr);
 
     /* TS 38.212 5.2.2 code block segmentation (P0-2c, 2026-09-03) --
      * see run_pdsch_simulation() (pdsch.c) for the pattern this mirrors. */
@@ -4432,6 +4581,7 @@ void run_pusch_ul_eigen_bf_4tx_tdl_simulation(const L1Config *cfg) {
     cx_t   *sym[2][4];
     double *allllr[2][4], *soft_buf[2][4];
     cx_t   *rx_hat[2][4];
+    double *nv_all[2][4];
     for (int p = 0; p < 2; p++) {
         for (int l = 0; l < 4; l++) {
             tb[p][l]     = (int    *)malloc(tbsz  * sizeof(int));
@@ -4446,6 +4596,7 @@ void run_pusch_ul_eigen_bf_4tx_tdl_simulation(const L1Config *cfg) {
             soft_buf[p][l]=(double *)malloc(acsz  * sizeof(double));
             decoded_tb[p][l] = (int *)malloc(B    * sizeof(int));
             rx_hat[p][l] = (cx_t  *)malloc(num_data * sizeof(cx_t));
+            nv_all[p][l] = (double *)malloc(num_data * sizeof(double));
         }
     }
     int *decoded_cb = (int *)malloc(ldpc.info_size * sizeof(int));
@@ -4459,7 +4610,7 @@ void run_pusch_ul_eigen_bf_4tx_tdl_simulation(const L1Config *cfg) {
 
     TDLChannel tdl_ch;
     for (double snr = cfg->snrStart; snr <= cfg->snrEnd + 1e-6; snr += cfg->snrStep) {
-        tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        tdl_channel_init(&tdl_ch, cfg->tdlProfile[0], cfg->tdlDelaySpreadNs, scs_hz, snr);
         double N0    = 1.0 / pow(10.0, snr / 10.0);
         double sigma = sqrt(N0 / 2.0);
 
@@ -4535,7 +4686,6 @@ void run_pusch_ul_eigen_bf_4tx_tdl_simulation(const L1Config *cfg) {
                     qam_modulate(selbits[p][l], E, mcs.modulation, sym[p][l]);
                 }
 
-            double nv_sum[2][4] = {{0}};
             for (int d = 0; d < num_data; d++) {
                 cx_t g_re = tdl_freq_response(&tdl_ch, cluster_taps, data_pos[d]);
                 cx_t Heff_g[4][4], Heff_e[4][4];
@@ -4558,16 +4708,15 @@ void run_pusch_ul_eigen_bf_4tx_tdl_simulation(const L1Config *cfg) {
                 ul_eigen4_detect_re(Heff_g, rank, sym_g, noise_g, N0, xh_g, nv_g);
                 ul_eigen4_detect_re(Heff_e, rank, sym_e, noise_e, N0, xh_e, nv_e);
                 for (int l = 0; l < rank; l++) {
-                    rx_hat[0][l][d] = xh_g[l]; nv_sum[0][l] += nv_g[l];
-                    rx_hat[1][l][d] = xh_e[l]; nv_sum[1][l] += nv_e[l];
+                    rx_hat[0][l][d] = xh_g[l]; nv_all[0][l][d] = nv_g[l];
+                    rx_hat[1][l][d] = xh_e[l]; nv_all[1][l][d] = nv_e[l];
                 }
             }
 
             int any_err[2] = {0, 0};
             for (int p = 0; p < 2; p++) {
                 for (int l = 0; l < rank; l++) {
-                    double env = nv_sum[p][l] / num_data;
-                    qam_demap_llr(rx_hat[p][l], num_data, mcs.modulation, env, allllr[p][l]);
+                    qam_demap_llr_re(rx_hat[p][l], num_data, mcs.modulation, nv_all[p][l], allllr[p][l]);
 
                     int roff = 0;
                     int cb_crc_ok = 1;
@@ -4617,6 +4766,7 @@ void run_pusch_ul_eigen_bf_4tx_tdl_simulation(const L1Config *cfg) {
             free(rm[p][l]); free(selbits[p][l]);
             free(sym[p][l]); free(allllr[p][l]); free(soft_buf[p][l]); free(decoded_tb[p][l]);
             free(rx_hat[p][l]);
+            free(nv_all[p][l]);
         }
 }
 
@@ -4659,8 +4809,7 @@ void run_pusch_ul_eigen_bf_4tx_harq_simulation(const L1Config *cfg) {
     int    crc_bits = 24;
 
     int E    = num_data * bps;
-    int tbsz = (int)(E * cr);
-    if (tbsz < 1)    tbsz = 1;
+    int tbsz = nr_determine_tbs(E, cr);
 
     /* TS 38.212 5.2.2 code block segmentation (P0-2c, 2026-09-03) --
      * every [p][l] combination (scenario x layer) is an independent
@@ -4717,6 +4866,7 @@ void run_pusch_ul_eigen_bf_4tx_harq_simulation(const L1Config *cfg) {
     int   *tb[2][4], *tb_crc[2][4], *cb_bits[2][4], *selbits[2][4], *decoded_cb[2][4], *decoded_tb[2][4];
     int  **coded_all[2][4], **rm[2][4];
     cx_t  *sym[2][4], *rx_hat[2][4];
+    double *nv_all[2][4];
     double *allllr[2][4], **soft_buf[2][4];
     for (int p = 0; p < 2; p++) {
         for (int l = 0; l < 4; l++) {
@@ -4736,6 +4886,7 @@ void run_pusch_ul_eigen_bf_4tx_harq_simulation(const L1Config *cfg) {
             decoded_tb[p][l] = (int    *)malloc(B        * sizeof(int));
             sym[p][l]        = (cx_t  *)malloc(num_data  * sizeof(cx_t));
             rx_hat[p][l]     = (cx_t  *)malloc(num_data  * sizeof(cx_t));
+            nv_all[p][l]     = (double *)malloc(num_data  * sizeof(double));
             allllr[p][l]     = (double *)malloc(E        * sizeof(double));
         }
     }
@@ -4748,7 +4899,7 @@ void run_pusch_ul_eigen_bf_4tx_harq_simulation(const L1Config *cfg) {
 
     TDLChannel tdl_ch;
     for (double snr = cfg->snrStart; snr <= cfg->snrEnd + 1e-6; snr += cfg->snrStep) {
-        if (is_tdl) tdl_channel_init(&tdl_ch, cfg->tdlDelaySpreadNs, scs_hz, snr);
+        if (is_tdl) tdl_channel_init(&tdl_ch, cfg->tdlProfile[0], cfg->tdlDelaySpreadNs, scs_hz, snr);
         double N0    = 1.0 / pow(10.0, snr / 10.0);
         double sigma = sqrt(N0 / 2.0);
 
@@ -4834,7 +4985,6 @@ void run_pusch_ul_eigen_bf_4tx_harq_simulation(const L1Config *cfg) {
                  * 첫 draw는 위 파일럿 관측과 동일 상태를 재사용) */
                 if (is_tdl && attempt > 0) tdl_draw(&tdl_ch, cluster_taps);
 
-                double nv_sum[2][4] = {{0}};
                 for (int d = 0; d < num_data; d++) {
                     cx_t g_re = is_tdl ? tdl_freq_response(&tdl_ch, cluster_taps, data_pos[d]) : CX_MAKE(1.0, 0.0);
                     cx_t Heff_g[4][4], Heff_e[4][4];
@@ -4857,15 +5007,14 @@ void run_pusch_ul_eigen_bf_4tx_harq_simulation(const L1Config *cfg) {
                     ul_eigen4_detect_re(Heff_g, rank, sym_g, noise_g, N0, xh_g, nv_g);
                     ul_eigen4_detect_re(Heff_e, rank, sym_e, noise_e, N0, xh_e, nv_e);
                     for (int l = 0; l < rank; l++) {
-                        rx_hat[0][l][d] = xh_g[l]; nv_sum[0][l] += nv_g[l];
-                        rx_hat[1][l][d] = xh_e[l]; nv_sum[1][l] += nv_e[l];
+                        rx_hat[0][l][d] = xh_g[l]; nv_all[0][l][d] = nv_g[l];
+                        rx_hat[1][l][d] = xh_e[l]; nv_all[1][l][d] = nv_e[l];
                     }
                 }
 
                 for (int p = 0; p < 2; p++) {
                     for (int l = 0; l < rank; l++) {
-                        double env = nv_sum[p][l] / num_data;
-                        qam_demap_llr(rx_hat[p][l], num_data, mcs.modulation, env, allllr[p][l]);
+                        qam_demap_llr_re(rx_hat[p][l], num_data, mcs.modulation, nv_all[p][l], allllr[p][l]);
                         int roff = 0;
                         int cb_crc_ok = 1;
                         for (int r = 0; r < seg.C; r++) {
@@ -4933,7 +5082,7 @@ void run_pusch_ul_eigen_bf_4tx_harq_simulation(const L1Config *cfg) {
             }
             free(coded_all[p][l]); free(rm[p][l]); free(soft_buf[p][l]);
             free(selbits[p][l]); free(decoded_cb[p][l]); free(decoded_tb[p][l]);
-            free(sym[p][l]); free(rx_hat[p][l]);
+            free(sym[p][l]); free(rx_hat[p][l]); free(nv_all[p][l]);
             free(allllr[p][l]);
         }
 }
