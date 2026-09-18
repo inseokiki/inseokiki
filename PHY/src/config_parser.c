@@ -127,6 +127,10 @@ void config_parser_init(ConfigParser *p) {
     c->seed = 12345;
     c->harqEnable = 0; c->harqMaxRetx = 4;
     c->tdlDelaySpreadNs = 300.0;
+    c->tdlTimeCorrelation = 0;
+    c->tdlMaxDopplerHz = 0.0;
+    c->tdlSpatialCorrTx = c->tdlSpatialCorrRx = 0.0;
+    c->tdlHarqIntervalMs = 1.0;
     strncpy(c->tdlProfile, "A", CFG_STR_MAX-1);
     c->transformPrecoding = 1;
     c->puschDfeEnable = 0;
@@ -419,11 +423,42 @@ static void validate_config(const L1Config *c) {
                  "TS 38.211 6.3.1.4 does not allow Transform Precoding with more "
                  "than 1 layer. Set TRANSFORM_PRECODING=0 (CP-OFDM).", c->mimoMode);
 
+    if (c->tdlSpatialCorrTx < 0.0 || c->tdlSpatialCorrTx >= 1.0)
+        CFG_ERR("TDL_SPATIAL_CORR_TX must be in [0,1)");
+    if (c->tdlSpatialCorrRx < 0.0 || c->tdlSpatialCorrRx >= 1.0)
+        CFG_ERR("TDL_SPATIAL_CORR_RX must be in [0,1)");
+    if (c->tdlSpatialCorrTx > 0.0 || c->tdlSpatialCorrRx > 0.0) {
+        if (strcmp(c->physicalChannel,"PUSCH") || strcmp(c->mimoMode,"UL_CB_4PORT") ||
+            strcmp(c->channelModel,"TDL"))
+            CFG_ERR("TDL_SPATIAL_CORR_TX/RX require PUSCH + UL_CB_4PORT + TDL");
+        if (strcmp(c->tdlProfile,"A") && strcmp(c->tdlProfile,"B") && strcmp(c->tdlProfile,"C"))
+            CFG_ERR("TDL spatial correlation supports A/B/C only; D/E LOS steering is not implemented");
+    }
+
+    if (c->tdlTimeCorrelation != 0 && c->tdlTimeCorrelation != 1)
+        CFG_ERR("TDL_TIME_CORRELATION must be 0 or 1");
+    if (c->tdlMaxDopplerHz < 0.0)
+        CFG_ERR("TDL_MAX_DOPPLER_HZ must be >= 0");
+    if (c->tdlHarqIntervalMs <= 0.0)
+        CFG_ERR("TDL_HARQ_INTERVAL_MS must be > 0");
+    if (c->tdlTimeCorrelation) {
+        if (strcmp(c->physicalChannel,"PUSCH") || strcmp(c->mimoMode,"UL_CB_4PORT") ||
+            strcmp(c->channelModel,"TDL") || !c->harqEnable)
+            CFG_ERR("TDL_TIME_CORRELATION requires PUSCH + UL_CB_4PORT + TDL + HARQ_ENABLE=1");
+        double last_time_s = (c->tdlHarqIntervalMs/1000.0)*(c->harqMaxRetx-1.0);
+        if (!isfinite(last_time_s) || !isfinite(c->tdlMaxDopplerHz*last_time_s))
+            CFG_ERR("TDL Doppler/time product overflows; reduce TDL_MAX_DOPPLER_HZ or TDL_HARQ_INTERVAL_MS");
+    }
+
     if (strcmp(c->physicalChannel,"PUSCH")==0 && strcmp(c->mimoMode,"UL_CB_4PORT")==0) {
         if (strcmp(c->channelModel,"FLAT_FADING")!=0 && strcmp(c->channelModel,"TDL")!=0)
             CFG_ERR("MIMO_MODE=UL_CB_4PORT requires CHANNEL_MODEL=FLAT_FADING or TDL");
         if (strcmp(c->equalizer,"MMSE")!=0)
             CFG_ERR("MIMO_MODE=UL_CB_4PORT requires EQUALIZER=MMSE");
+        if (c->puschDfeEnable)
+            CFG_ERR("MIMO_MODE=UL_CB_4PORT does not support PUSCH_DFE_ENABLE=1; set PUSCH_DFE_ENABLE=0");
+        if (c->puschTurboEnable)
+            CFG_ERR("MIMO_MODE=UL_CB_4PORT does not support PUSCH_TURBO_ENABLE=1; set PUSCH_TURBO_ENABLE=0");
     }
 
 
@@ -545,6 +580,11 @@ int config_parser_load(ConfigParser *p, const char *filename) {
     c->harqEnable    = kv_int(p, "HARQ_ENABLE",          0);
     c->harqMaxRetx   = kv_int(p, "HARQ_MAX_RETX",        4);
     c->tdlDelaySpreadNs = kv_dbl(p, "TDL_DELAY_SPREAD_NS", 300.0);
+    c->tdlTimeCorrelation = kv_int(p, "TDL_TIME_CORRELATION", 0);
+    c->tdlMaxDopplerHz = kv_dbl(p, "TDL_MAX_DOPPLER_HZ", 0.0);
+    c->tdlSpatialCorrTx = kv_dbl(p, "TDL_SPATIAL_CORR_TX", 0.0);
+    c->tdlSpatialCorrRx = kv_dbl(p, "TDL_SPATIAL_CORR_RX", 0.0);
+    c->tdlHarqIntervalMs = kv_dbl(p, "TDL_HARQ_INTERVAL_MS", 1.0);
     kv_str(p, "TDL_PROFILE", "A", c->tdlProfile, CFG_STR_MAX);
     c->transformPrecoding = kv_int(p, "TRANSFORM_PRECODING", 1);
     c->puschDfeEnable     = kv_int(p, "PUSCH_DFE_ENABLE",     0);
@@ -686,6 +726,12 @@ void config_parser_print(const ConfigParser *p) {
             }
         }
         if (strcmp(c->physicalChannel, "PUSCH") == 0) {
+            if (strcmp(c->mimoMode, "UL_CB_4PORT") == 0) {
+                printf("Channel Est  : fixed LS (%s)\n",
+                       strcmp(c->channelModel, "TDL") == 0 ? "per-layer FDM pilots + linear interpolation" : "per-layer averaged FDM pilots");
+                if (strcmp(c->chanEstMethod, "NONE") != 0)
+                    printf("Config note  : CHAN_EST_METHOD=%s applies to DL codebooks; UL_CB_4PORT uses fixed LS\n", c->chanEstMethod);
+            }
             printf("Transform Precoding : %s\n",
                    c->transformPrecoding ? "ON (DFT-s-OFDM)" : "OFF (CP-OFDM)");
             if (c->puschTurboEnable)

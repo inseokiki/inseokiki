@@ -56,8 +56,10 @@ cd BER && make
 | `codebook.c` | Type I SP 4-port 코드북(N1=2,N2=1,O1=4,P=4, TS 38.214 §5.2.2.2.1) — rank-1/2 프리코더 + RI/PMI 동시 적응 선택기(전수탐색). CL_4PORT 계열의 기반. `codebook_type1_sp_4port_effective_snr_db()`(2026-09-15 신규, OLLA용) — RI/PMI 선택기 내부의 rank-1/rank-2 capacity 공식(`rank1_capacity_bps()`/`rank2_capacity_bps()`로 공용 추출, 선택기 자체의 동작은 무변경)을 이미 선택된 후보 하나에 대해서만 재계산해 유효 per-layer SNR[dB] 하나로 변환 — RI/PMI 선택 자체에는 영향 없음, `run_pdsch_olla_cl_4port_simulation()`이 MCS 선택에만 사용 |
 | `codebook_8port.c` | Type I SP 8-port 코드북(N1=4,N2=1,O1=4,P=8) — 4-port와 동일 수식 구조를 N1=4로 일반화(rank-1 64 + rank-2 256 = 320 후보). 선택된 RI/PMI의 rank별 유효 SNR 계산을 OLLA MCS 선택에 사용(2026-09-17). CL_8PORT 계열의 기반 |
 | `codebook_32port.c` | Type I SP 32-port 코드북(N1=4,N2=4,O1=O2=4,P=32, TS 38.214 Rel-18 Type I SP 스펙상 최댓값) — 순수 2D 배열이라 v_{l,m}에 수직 성분(u_m) 추가, rank 1~4 지원(rank3/4는 P≥16 분기, ṽ 절반길이 빔벡터). RI+PMI 5120후보 전수탐색과 선택된 후보의 후 MMSE 용량 기반 유효 SNR 계산(OLLA MCS용). CL_32PORT 계열의 기반이자 `beam_mgmt.c`의 후보 빔 집합(rank-1 1024개) 재사용처 |
-| `ul_codebook_4port.c` | PUSCH UL 4포트 코드북(TS 38.211 §6.3.1.5, Tables -3/-5/-6/-7)의 전체 TPMI: rank 1/2/3/4별 28/22/7/5개. DL Type I SP 코드북과 별개이며 후 MMSE 용량으로 RI/TPMI 선택. 표준 W의 총 전력이 후보마다 달라 `1/sqrt(sum |W|²)`로 송신전력 정규화(LLS 구현 가정) |
-| `pusch_ul_cb_4port.c` | UL_CB_4PORT의 TDL 비-HARQ 및 flat/TDL HARQ 경로. 4Tx/4Rx 독립 안테나쌍 TDL, 레이어별 FDM 파일럿 LS·주파수 보간, RE별 검출 잡음분산 기반 LLR, 버스트당 RI/TPMI 고정, CB별 IR/Chase 소프트 결합 |
+| `pusch_codebook_4port.c` | PUSCH UL 4포트 코드북(TS 38.211 §6.3.1.5, Tables -3/-5/-6/-7)의 전체 TPMI: rank 1/2/3/4별 28/22/7/5개. DL Type I SP 코드북과 별개이며 후 MMSE 용량으로 RI/TPMI 선택. 표준 W의 총 전력이 후보마다 달라 `1/sqrt(sum |W|²)`로 송신전력 정규화(LLS 구현 가정) |
+| `tdl_mimo.c` | UL 4×4 TDL-A/B/C의 tap별 Tx/Rx 지수상관 변환; 연구용 상관행렬 모델, LOS/preset은 후속 |
+| `tdl_time.c` | opt-in 시간상관 TDL: 32성분 Gaussian spectral sum, 절대 시간 조회, D/E LOS 0.7 fD. UL 4포트 TDL HARQ의 attempt 간 상태 유지에 연결; attempt 내부 block channel 유지 |
+| `pusch_codebook_4port_sim.c` | UL_CB_4PORT의 TDL 비-HARQ 및 flat/TDL HARQ 경로. 4Tx/4Rx 독립 안테나쌍 TDL, 레이어별 FDM 파일럿 LS·주파수 보간, RE별 검출 잡음분산 기반 LLR, 버스트당 RI/TPMI 고정, CB별 IR/Chase 소프트 결합 |
 | `eigen_16port.c` | Eigen-Beamforming(SVD) 16-port, 비-코드북 개루프 방식 — 4×4 Hermitian 고유분해(복소 Cyclic Jacobi)로 4×16 채널 SVD 경량 계산, rank 적응은 등력분배 기준 용량 최대화. 코드북 양자화 손실 없는 상한 성격(CL_32PORT 대비 실측 확인). 고유분해 자체는 `utils.c`의 `herm4x4_eig()`로 추출돼(2026-09-02) `ul_eigen_bf.c`(UL Eigen-BF 4-Tx 확장)와 공유 |
 | `olla.c` | OLLA(Outer Loop Link Adaptation) — ACK/NACK 기반 SNR 오프셋 폐루프 보정(`OLLAState`), `olla_select_mcs()`(Shannon 용량+구현마진으로 MCS 선택). 개루프 근사가 실제 코덱과 못 맞는 문제(3GPP 미규정, 구현 정의)를 보정. 고정 SNR 시계열 전용(SNR sweep 무시), `OLLA_ENABLE=1`이 다른 모든 PDSCH dispatch보다 우선. SISO 외 SIMO_MRC(MRC 다이버시티)/SM_2X2(공간다중화, ZF/MMSE)도 지원(2026-09-01) — MCS 예측식은 세 모드 모두 동일(SISO 기준, 다이버시티 이득/MIMO 검출손실 미반영, 의도적 단순화). 검증 중 발견: 저SNR+SIMO_MRC 조합에서 MCS 테이블 최하단에서도 목표 BLER을 못 맞추는 진짜 하한(floor) 확인 — Shannon+gap 근사가 이 프로젝트 LDPC 코덱엔 낙관적이라는 기존 발견이 블록-플랫 페이딩과 결합한 결과(버그 아님). CL_4PORT(2026-09-15) — RI+PMI가 레이어 수 고정이 아니라 매 트라이얼 채널 기준으로 바뀌는 첫 OLLA 확장이라 다른 세 모드와 설계가 다르다: RI/PMI 선택(`codebook_type1_sp_4port_ri_pmi_select()`) 자체는 OLLA 오프셋과 완전 무관(순수 채널 기준, 기존 관례 유지)하되, 선택된 rank의 프리코딩 이득은 신규 `codebook_type1_sp_4port_effective_snr_db()`(codebook.c, RI/PMI 선택기 내부와 동일 capacity 공식을 선택된 후보 하나에 대해 재계산)로 MCS 선택에 반영 — rank-1/rank-2가 서로 다른 MCS를 받음(사용자와 이 두 결합 방식을 확인 후 결정, `pdsch.c`의 `run_pdsch_olla_cl_4port_simulation()` 헤더 주석 참조). CL_8PORT는 2026-09-17 동일 설계로 확장 완료; CL_32PORT OLLA completed on 2026-09-17 with rank 1-4 effective SNR and combined ACK |
 | `mumimo.c` | MU-MIMO(Multi-User MIMO) 하향링크 — Zero-Forcing Beamforming(우측 유사역행렬 H^+=H^H(HH^H)^-1)로 서로 다른 사용자 간 간섭을 설계상 제거. Nt=4/K=4 사용자(각 1 Rx, MU-MISO, 2026-09-09 K=2→4 확장 — ZF-BF 성립조건상 K<=Nt가 상한이라 이 안테나 수 기준 최대치). `mumimo_zf_precode()`는 부분 피벗팅 적용 일반 K×K Gauss-Jordan 역행렬(`invKxK_local()`)이라 RE당 비용이 여전히 무시할 만해 TDL에서도 PRG 근사 없이 매 RE 정확히 재설계, flat/TDL/HARQ 모두 지원 |
@@ -499,3 +501,12 @@ QPSK(M=4): 정확한 값 / 16·64·256QAM: tight 근사
 ---
 
 *이 문서는 코드 리뷰 및 구조 파악을 위한 참조 문서입니다.*
+
+### UL 4포트 코드북 설정 범위
+
+`MIMO_MODE=UL_CB_4PORT`는 `EQUALIZER=MMSE`, CP-OFDM 및 flat/TDL을
+지원한다. `PUSCH_DFE_ENABLE=1`과 `PUSCH_TURBO_ENABLE=1`은 지원하지
+않으므로 설정 오류로 종료한다. 채널추정은 flat의 레이어별 평균 LS,
+TDL의 레이어별 파일럿 LS + 선형 보간으로 고정된다. DL 코드북용
+`CHAN_EST_METHOD`는 이 UL 경로의 추정기를 변경하지 않으며, 비기본값이
+설정돼 있으면 출력에 적용 범위를 명시한다.

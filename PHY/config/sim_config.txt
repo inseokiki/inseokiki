@@ -106,6 +106,19 @@ TDL_PROFILE = A
 # chosen profile's normalized delays (TS 38.901 §7.7.3 eq.(7.7-1)).
 TDL_DELAY_SPREAD_NS = 300
 
+# Opt-in temporal channel, currently PUSCH + UL_CB_4PORT + TDL + HARQ only.
+# 0 preserves independent redraw per attempt; 1 keeps one realization per TB.
+# fD=0 with correlation enabled means a static channel across HARQ attempts.
+# Interval is a simulation assumption; this is not symbol-level Doppler/ICI.
+TDL_TIME_CORRELATION = 0
+TDL_MAX_DOPPLER_HZ = 0
+TDL_HARQ_INTERVAL_MS = 1
+# Research exponential Tx/Rx port correlation, PUSCH UL_CB_4PORT TDL-A/B/C only.
+# Each rho is in [0,1); zero preserves the independent spatial model.
+# D/E LOS steering is not implemented for this correlation extension.
+TDL_SPATIAL_CORR_TX = 0
+TDL_SPATIAL_CORR_RX = 0
+
 # PUSCH transform precoding (DFT-s-OFDM): 1=ON (low-PAPR UL waveform,
 # spec default), 0=OFF (plain CP-OFDM, same chain as PDSCH+DMRS -- useful
 # for A/B comparison). Only affects PHYSICAL_CHANNEL=PUSCH.
@@ -115,6 +128,7 @@ TRANSFORM_PRECODING = 1
 # takes effect when CHANNEL_MODEL=TDL (forces MMSE+DFT-s-OFDM internally,
 # ignoring EQUALIZER/TRANSFORM_PRECODING -- see STRUCTURE.md). Reports
 # BLER with vs without residual-ISI cancellation side by side.
+# Not supported with MIMO_MODE=UL_CB_4PORT (configuration error).
 PUSCH_DFE_ENABLE = 0
 
 # PUSCH turbo equalization research prototype: 1=ON, only takes effect when
@@ -122,6 +136,7 @@ PUSCH_DFE_ENABLE = 0
 # forces MMSE+DFT-s-OFDM internally -- see STRUCTURE.md). Iteratively
 # exchanges soft (extrinsic) LLRs between the equalizer and LDPC decoder.
 # Reports BLER(noDFE)/BLER(hardDFE)/BLER(turbo) side by side.
+# Not supported with MIMO_MODE=UL_CB_4PORT (configuration error).
 PUSCH_TURBO_ENABLE = 0
 PUSCH_TURBO_ITERS = 3
 

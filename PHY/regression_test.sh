@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # PHY LLS regression test suite
-# Usage: cd PHY && bash regression_test.sh
+# Usage: cd PHY && bash regression_test.sh [--list | --match TEXT | LABEL ...]
 # Requires: lls_sim_c binary already built (make -f c_Makefile)
 
 set -uo pipefail
@@ -9,8 +9,29 @@ cd "$(dirname "$0")"
 SIM=./lls_sim_c
 PASS=0; FAIL=0
 CASE_ID=0
-TMPD=$(mktemp -d)
-trap 'rm -rf "$TMPD"' EXIT
+MODE=discover
+LABELS=()
+REQUESTED=("$@")
+MATCH=""
+
+# Enumerate the same cases used for execution, without touching the simulator.
+select_case() {
+    local label="$1"
+    if [[ "$MODE" == discover ]]; then
+        LABELS+=("$label")
+        return 1
+    fi
+    if [[ -n "$MATCH" ]]; then [[ "$label" == *"$MATCH"* ]]; return; fi
+    if [[ ${#REQUESTED[@]} -eq 0 ]]; then return 0; fi
+    local requested
+    for requested in "${REQUESTED[@]}"; do
+        [[ "$label" == "$requested" ]] && return 0
+    done
+    return 1
+}
+group_heading() {
+    if [[ "$MODE" == run && ${#REQUESTED[@]} -eq 0 ]]; then printf '\n=== %s ===\n' "$1"; fi
+}
 
 pass() { echo "[PASS] $1"; PASS=$((PASS+1)); }
 fail() { echo "[FAIL] $1"; FAIL=$((FAIL+1)); }
@@ -35,6 +56,7 @@ run_sim() {
 # expected rejection (lab/PHY_REVIEW_2026-09-10.md 5절 권장사항, 2026-09-10).
 expect_fail() {
     local label="$1"; shift
+    select_case "$label" || return 0
     CASE_ID=$((CASE_ID+1))
     local cfg="$TMPD/case_${CASE_ID}.cfg"
     if ! write_cfg "$cfg" "$@"; then
@@ -61,6 +83,7 @@ expect_fail() {
 # PATTERN="" to skip pattern check
 expect_pass() {
     local label="$1"; shift
+    select_case "$label" || return 0
     local pattern="$1"; shift
     CASE_ID=$((CASE_ID+1))
     local cfg="$TMPD/case_${CASE_ID}.cfg"
@@ -82,6 +105,7 @@ expect_pass() {
     fi
 }
 
+define_cases() {
 # Common reusable arrays (use "${ARR[@]}" at call sites)
 BASE=("SNR_START = 10" "SNR_END = 10" "SNR_STEP = 1" "NUM_TRIALS = 20")
 PDSCH_COMMON=("MCS_INDEX = 10" "MCS_TABLE = TABLE1"
@@ -95,15 +119,17 @@ TDL=("CHANNEL_MODEL = TDL" "TDL_DELAY_SPREAD_NS = 300")
 # ──────────────────────────────────────────
 # GROUP 1: config validation (expect non-zero exit)
 # ──────────────────────────────────────────
-echo ""
-echo "=== GROUP 1: config validation ==="
+group_heading "GROUP 1: config validation"
 
+if select_case "missing config file"; then
 if out=$(run_sim "$TMPD/missing.cfg" 2>&1); then
     fail "missing config file (unexpected successful run)"
 elif [[ "$out" == *"[config error] Cannot open"* ]]; then
     pass "missing config file"
 else
     fail "missing config file (wrong failure path)"
+fi
+
 fi
 
 expect_fail "malformed integer" "PHYSICAL_CHANNEL = PDSCH" "NUM_TRIALS = 2x"
@@ -180,6 +206,17 @@ expect_fail "PUSCH UL_CB_4PORT + Transform Precoding" \
     "TRANSFORM_PRECODING = 1"
 
 
+# UL codebook drivers do not dispatch the SISO DFE/turbo research paths.
+expect_fail "PUSCH UL_CB_4PORT + PUSCH_DFE_ENABLE" \
+    "${BASE[@]}" "PHYSICAL_CHANNEL = PUSCH" "MIMO_MODE = UL_CB_4PORT" \
+    "CHANNEL_MODEL = TDL" "TRANSFORM_PRECODING = 0" "EQUALIZER = MMSE" "PUSCH_DFE_ENABLE = 1"
+
+expect_fail "PUSCH UL_CB_4PORT + PUSCH_TURBO_ENABLE" \
+    "${BASE[@]}" "PHYSICAL_CHANNEL = PUSCH" "MIMO_MODE = UL_CB_4PORT" \
+    "CHANNEL_MODEL = TDL" "TRANSFORM_PRECODING = 0" "EQUALIZER = MMSE" "PUSCH_TURBO_ENABLE = 1"
+
+
+
 expect_fail "OLLA_ENABLE=1 + unsupported MIMO_MODE (EIGEN_16PORT) has no dedicated function" \
     "MCS_INDEX = 5" "MCS_TABLE = TABLE1" "SNR_START = 10" "SNR_END = 10" "SNR_STEP = 1" "NUM_TRIALS = 20" \
     "PHYSICAL_CHANNEL = PDSCH" "USE_DMRS = 1" "MIMO_MODE = EIGEN_16PORT" "CHANNEL_MODEL = AWGN" "CODING = LDPC" "EQUALIZER = MMSE" \
@@ -209,8 +246,7 @@ expect_fail "PUCCH Format 0 + PUCCH_UCI_BITS=3 (Format 0/1 support only 1-2 bits
 # ──────────────────────────────────────────
 # GROUP 2: MCS table dispatch (P0-1 regression)
 # ──────────────────────────────────────────
-echo ""
-echo "=== GROUP 2: MCS table dispatch ==="
+group_heading "GROUP 2: MCS table dispatch"
 
 expect_pass "TABLE1 dispatch" "TABLE1 (TS 38.214" \
     "${BASE[@]}" "MCS_INDEX = 10" "MCS_TABLE = TABLE1" \
@@ -230,8 +266,7 @@ expect_pass "TABLE3 dispatch" "TABLE3 (TS 38.214" \
 # ──────────────────────────────────────────
 # GROUP 3: PDSCH dispatch reachability
 # ──────────────────────────────────────────
-echo ""
-echo "=== GROUP 3: PDSCH dispatch ==="
+group_heading "GROUP 3: PDSCH dispatch"
 
 expect_pass "PDSCH SISO AWGN" "BER" \
     "${BASE[@]}" "${PDSCH_COMMON[@]}" "MIMO_MODE = SISO" "CHANNEL_MODEL = AWGN"
@@ -397,8 +432,7 @@ expect_pass "PDSCH legacy AWGN C=2 segmentation" "Code Blocks: C=2" \
 # ──────────────────────────────────────────
 # GROUP 4: PUSCH dispatch
 # ──────────────────────────────────────────
-echo ""
-echo "=== GROUP 4: PUSCH dispatch ==="
+group_heading "GROUP 4: PUSCH dispatch"
 
 expect_pass "PUSCH AWGN CP-OFDM" "BER" \
     "${BASE[@]}" "${PUSCH_COMMON[@]}" "CHANNEL_MODEL = AWGN" "TRANSFORM_PRECODING = 0"
@@ -433,6 +467,42 @@ expect_pass "PUSCH UL_CB_4PORT HARQ flat" "BLER(final)" \
 expect_pass "PUSCH UL_CB_4PORT HARQ TDL" "BLER(final)" \
     "${BASE[@]}" "${PUSCH_COMMON[@]}" "NUM_RB = 24" "${HQ[@]}" \
     "CHANNEL_MODEL = TDL" "TRANSFORM_PRECODING = 0" "MIMO_MODE = UL_CB_4PORT"
+
+expect_pass "PUSCH UL_CB_4PORT fixed LS setting note" "CHAN_EST_METHOD=MMSE applies to DL codebooks; UL_CB_4PORT uses fixed LS" \
+    "${BASE[@]}" "${PUSCH_COMMON[@]}" "NUM_RB = 24" "CHAN_EST_METHOD = MMSE" \
+    "CHANNEL_MODEL = TDL" "TRANSFORM_PRECODING = 0" "MIMO_MODE = UL_CB_4PORT"
+
+# Time correlation is opt-in and restricted to this HARQ driver.
+UL_TIME_BASE=("${BASE[@]}" "${PUSCH_COMMON[@]}" "NUM_RB = 4"
+              "MIMO_MODE = UL_CB_4PORT" "CHANNEL_MODEL = TDL"
+              "TRANSFORM_PRECODING = 0" "${HQ[@]}")
+expect_pass "PUSCH UL_CB_4PORT correlated TDL" "TDL time     : correlated" \
+    "${UL_TIME_BASE[@]}" "TDL_TIME_CORRELATION = 1" "TDL_MAX_DOPPLER_HZ = 100" "TDL_HARQ_INTERVAL_MS = 1"
+expect_pass "PUSCH UL_CB_4PORT static HARQ channel" "fD=0.000 Hz" \
+    "${UL_TIME_BASE[@]}" "TDL_TIME_CORRELATION = 1" "TDL_MAX_DOPPLER_HZ = 0"
+expect_fail "PUSCH UL_CB_4PORT invalid time correlation flag" \
+    "${UL_TIME_BASE[@]}" "TDL_TIME_CORRELATION = 2"
+expect_fail "PUSCH UL_CB_4PORT negative Doppler" \
+    "${UL_TIME_BASE[@]}" "TDL_TIME_CORRELATION = 1" "TDL_MAX_DOPPLER_HZ = -1"
+expect_fail "PUSCH UL_CB_4PORT zero HARQ interval" \
+    "${UL_TIME_BASE[@]}" "TDL_TIME_CORRELATION = 1" "TDL_HARQ_INTERVAL_MS = 0"
+expect_fail "PUSCH UL_CB_4PORT overflowing time phase" \
+    "${UL_TIME_BASE[@]}" "TDL_TIME_CORRELATION = 1" "TDL_HARQ_INTERVAL_MS = 1e300" "TDL_MAX_DOPPLER_HZ = 1e300"
+expect_fail "TDL time correlation unsupported PDSCH" \
+    "${BASE[@]}" "${PDSCH_COMMON[@]}" "CHANNEL_MODEL = TDL" "TDL_TIME_CORRELATION = 1" "${HQ[@]}"
+expect_fail "PUSCH UL_CB_4PORT time correlation without HARQ" \
+    "${BASE[@]}" "${PUSCH_COMMON[@]}" "MIMO_MODE = UL_CB_4PORT" "CHANNEL_MODEL = TDL" \
+    "TRANSFORM_PRECODING = 0" "TDL_TIME_CORRELATION = 1"
+
+expect_pass "PUSCH UL_CB_4PORT spatial TDL" "TDL spatial  : exponential Tx=0.700 Rx=0.600" \
+    "${UL_TIME_BASE[@]}" "TDL_SPATIAL_CORR_TX = 0.7" "TDL_SPATIAL_CORR_RX = 0.6"
+expect_pass "PUSCH UL_CB_4PORT spatial and temporal TDL" "TDL time     : correlated" \
+    "${UL_TIME_BASE[@]}" "TDL_TIME_CORRELATION = 1" "TDL_MAX_DOPPLER_HZ = 100" \
+    "TDL_SPATIAL_CORR_TX = 0.7" "TDL_SPATIAL_CORR_RX = 0.6"
+expect_fail "PUSCH UL_CB_4PORT invalid spatial rho" \
+    "${UL_TIME_BASE[@]}" "TDL_SPATIAL_CORR_TX = 1"
+expect_fail "PUSCH UL_CB_4PORT spatial LOS unsupported" \
+    "${UL_TIME_BASE[@]}" "TDL_SPATIAL_CORR_RX = 0.6" "TDL_PROFILE = D"
 
 expect_pass "PUSCH SM_2X2 TDL" "BER" \
     "${BASE[@]}" "${PUSCH_COMMON[@]}" "${TDL[@]}" "TRANSFORM_PRECODING = 0" "MIMO_MODE = SM_2X2"
@@ -482,8 +552,7 @@ expect_pass "PUSCH UL_EIGEN_BF_4TX HARQ TDL" "BLER(HARQ)" \
 # ──────────────────────────────────────────
 # GROUP 5: control/reference channels
 # ──────────────────────────────────────────
-echo ""
-echo "=== GROUP 5: control/reference channels ==="
+group_heading "GROUP 5: control/reference channels"
 
 CTRL_BASE=("MCS_INDEX = 0" "MCS_TABLE = TABLE1" "${BASE[@]}")
 
@@ -539,6 +608,44 @@ expect_fail "ULPC UL_PC_PL_VAR_STD_DB < 0" \
     "${ULPC_BASE[@]}" "UL_PC_PL_VAR_STD_DB = -1.0"
 expect_fail "ULPC UL_PC_PL_VAR_CORR >= 1" \
     "${ULPC_BASE[@]}" "UL_PC_PL_VAR_CORR = 1.0"
+
+}
+
+define_cases
+usage() {
+    echo 'Usage: bash regression_test.sh [--list | --help | --match TEXT | LABEL ...]'
+    echo 'Exact labels select cases; --match uses a literal, case-sensitive substring.'
+    echo 'No arguments runs all cases. Quote labels containing spaces.'
+}
+if [[ $# -eq 1 && "$1" == --help ]]; then usage; exit 0; fi
+if [[ $# -eq 1 && "$1" == --list ]]; then
+    printf '%s\n' "${LABELS[@]}"
+    exit 0
+fi
+if [[ $# -gt 0 && "$1" == --match ]]; then
+    if [[ $# -ne 2 || -z "$2" ]]; then usage >&2; exit 2; fi
+    MATCH="$2"
+    found=0
+    for label in "${LABELS[@]}"; do
+        [[ "$label" == *"$MATCH"* ]] && found=1
+    done
+    if [[ $found -eq 0 ]]; then echo "No cases match: $MATCH" >&2; exit 2; fi
+else
+    for requested in "$@"; do
+        found=0
+        for label in "${LABELS[@]}"; do
+            [[ "$label" == "$requested" ]] && found=1
+        done
+        if [[ $found -eq 0 ]]; then
+            echo "Unknown case or invalid option: $requested (use --list)" >&2
+            exit 2
+        fi
+    done
+fi
+TMPD=$(mktemp -d) || exit 1
+trap 'rm -rf "$TMPD"' EXIT
+MODE=run
+define_cases
 
 # ──────────────────────────────────────────
 # SUMMARY

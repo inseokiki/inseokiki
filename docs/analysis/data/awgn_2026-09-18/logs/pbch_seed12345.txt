@@ -1,0 +1,38 @@
+=== 5G PHY Link Level Simulator (C) ===
+=== L1 Configuration ===
+Bandwidth    : 20 MHz
+SCS          : 30 kHz
+Num RB       : 24
+Subcarriers  : 288
+NFFT         : 1024
+CP (sym 0,7) : 80
+CP (normal)  : 72
+Sample Rate  : 30.720 MHz
+Channel      : AWGN
+SNR Range    : -10.0 to 20.0 dB (step 5.0)
+Coding       : POLAR
+Modulation   : QPSK (Qm=2) [fixed by spec]
+Phys Channel : PBCH
+Num Trials   : 200
+Seed         : 12345
+========================
+
+=== PBCH Simulation ===
+Payload: 32 bits
+CRC: CRC-24C (24 bits)
+Polar code: (512, 56)
+Rate matching: 512 -> 864 bits
+Modulation: QPSK (432 symbols)
+Trials per SNR: 200
+
+    SNR (dB)           BLER
+---------------------------
+       -10.0     6.4000e-01
+        -5.0     0.0000e+00
+         0.0     0.0000e+00
+         5.0     0.0000e+00
+        10.0     0.0000e+00
+        15.0     0.0000e+00
+        20.0     0.0000e+00
+
+PBCH simulation complete.

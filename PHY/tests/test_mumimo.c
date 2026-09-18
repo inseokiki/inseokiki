@@ -18,7 +18,8 @@
  * UT-06 (lab/PHY_UNIT_VALIDATION_PLAN.md, 2026-09-10): checks 1/2/3 above
  * are closed-form algebraic properties/hand-computed values, not
  * dependent on an external reference implementation -- there is no
- * independent ZF-BF reference vector cross-checked here, but unlike a
+ * independent reference in those original checks. Fixed NumPy SVD vectors
+ * have since been added (reference_vectors/), but unlike a
  * codec round-trip, correctness here doesn't hinge on two sides of this
  * project agreeing with each other (the math is verified directly).
  *
@@ -26,6 +27,7 @@
  */
 #include "mumimo.h"
 #include "utils.h"
+#include "reference_vectors/mumimo_reference_vectors.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
@@ -49,6 +51,20 @@ int main(void) {
      * here seeded a stream nothing in this test actually reads from,
      * making the "seed" cosmetic only. Seed the RNG that's actually used. */
     rng_seed(2026);
+
+    /* Independent NumPy/LAPACK SVD reference, committed as fixed vectors. */
+    {
+        int reference_ok = MUMIMO_K == 4 && MUMIMO_NT == 4;
+        for (int v = 0; reference_ok && v < MUMIMO_REFERENCE_CASES; v++) {
+            cx_t W[MUMIMO_NT][MUMIMO_K];
+            mumimo_zf_precode(mumimo_reference_h[v], W);
+            for (int r = 0; r < 4; r++)
+                for (int c = 0; c < 4; c++)
+                    if (!is_finite_cx(W[r][c]) || cabs(W[r][c]-mumimo_reference_w[v][r][c]) > 1e-10)
+                        reference_ok = 0;
+        }
+        CHECK(reference_ok, "3 fixed complex-channel vectors match independent NumPy SVD precoders");
+    }
 
     /* 1+2: random channels, diagonal-not-identity property + column power.
      * UT-04 (lab/PHY_UNIT_VALIDATION_PLAN.md, 2026-09-10): plain

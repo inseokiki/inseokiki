@@ -1,0 +1,47 @@
+=== 5G PHY Link Level Simulator (C) ===
+=== L1 Configuration ===
+Bandwidth    : 20 MHz
+SCS          : 30 kHz
+Num RB       : 24
+Subcarriers  : 288
+NFFT         : 1024
+CP (sym 0,7) : 80
+CP (normal)  : 72
+Sample Rate  : 30.720 MHz
+Channel      : AWGN
+SNR Range    : -10.0 to 20.0 dB (step 5.0)
+Coding       : LDPC
+MCS Table    : TABLE1 (TS 38.214 Table 5.1.3.1-1)
+MCS Index    : 5
+Modulation   : QPSK (Qm=2)
+Code Rate    : 0.3701 (R*1024=379)
+Spectral Eff : 0.740 bits/RE
+Phys Channel : PUSCH
+Num Trials   : 200
+Seed         : 67890
+Transform Precoding : OFF (CP-OFDM)
+========================
+
+=== PUSCH (HARQ Circular Buffer Chase), AWGN, CP-OFDM ===
+MCS Index    : 5 (Table TABLE1)
+Modulation   : QPSK (Qm=2)
+Target Rate  : 0.3701
+Mother Rate  : 0.1119 (Ncb=1144, actual NR LDPC BG2/Zc=22 achieved rate)
+Num RB       : 24
+TB Size      : 104 bits
+Code Blocks  : C=1
+Max Retx     : 4
+Equalizer    : MMSE with LS channel estimation
+Trials/SNR   : 200
+
+   SNR(dB)    BER(final)     BLER(1st)    BLER(HARQ)       AvgTx
+----------------------------------------------------------------
+     -10.0    2.6010e-01        1.0000        1.0000        4.00
+      -5.0    1.9615e-02        1.0000        0.2400        3.79
+       0.0    0.0000e+00        0.7500        0.0000        1.75
+       5.0    0.0000e+00        0.0000        0.0000        1.00
+      10.0    0.0000e+00        0.0000        0.0000        1.00
+      15.0    0.0000e+00        0.0000        0.0000        1.00
+      20.0    0.0000e+00        0.0000        0.0000        1.00
+
+PUSCH + HARQ simulation complete.

@@ -1,0 +1,652 @@
+{
+  "seed": 38212542,
+  "reference": "py3gpp 0.6.0 nrRateMatchLDPC",
+  "packages": {
+    "py3gpp": "0.6.0",
+    "numpy": "2.0.2"
+  },
+  "source_sha256": "b13184bb8edfd8272097b72ff029cdfdd7873b83b898eef2b44fa030cedee44c",
+  "reference_sha256": "c45dee2fa53445434855f8f257a544056166564fb2b05aa9b53bdb82dcab48ed",
+  "cases": [
+    {
+      "bg": 1,
+      "Zc": 8,
+      "rv": 0,
+      "qm": 2,
+      "E": 266,
+      "repetition": false,
+      "current_mismatches": 139,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 1,
+      "Zc": 8,
+      "rv": 0,
+      "qm": 2,
+      "E": 1058,
+      "repetition": true,
+      "current_mismatches": 540,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 1,
+      "Zc": 8,
+      "rv": 0,
+      "qm": 4,
+      "E": 268,
+      "repetition": false,
+      "current_mismatches": 140,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 1,
+      "Zc": 8,
+      "rv": 0,
+      "qm": 4,
+      "E": 1060,
+      "repetition": true,
+      "current_mismatches": 515,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 1,
+      "Zc": 8,
+      "rv": 0,
+      "qm": 6,
+      "E": 270,
+      "repetition": false,
+      "current_mismatches": 138,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 1,
+      "Zc": 8,
+      "rv": 0,
+      "qm": 6,
+      "E": 1062,
+      "repetition": true,
+      "current_mismatches": 525,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 1,
+      "Zc": 8,
+      "rv": 0,
+      "qm": 8,
+      "E": 272,
+      "repetition": false,
+      "current_mismatches": 131,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 1,
+      "Zc": 8,
+      "rv": 0,
+      "qm": 8,
+      "E": 1064,
+      "repetition": true,
+      "current_mismatches": 509,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 1,
+      "Zc": 8,
+      "rv": 1,
+      "qm": 2,
+      "E": 266,
+      "repetition": false,
+      "current_mismatches": 142,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 1,
+      "Zc": 8,
+      "rv": 1,
+      "qm": 2,
+      "E": 1058,
+      "repetition": true,
+      "current_mismatches": 546,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 1,
+      "Zc": 8,
+      "rv": 1,
+      "qm": 4,
+      "E": 268,
+      "repetition": false,
+      "current_mismatches": 131,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 1,
+      "Zc": 8,
+      "rv": 1,
+      "qm": 4,
+      "E": 1060,
+      "repetition": true,
+      "current_mismatches": 531,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 1,
+      "Zc": 8,
+      "rv": 1,
+      "qm": 6,
+      "E": 270,
+      "repetition": false,
+      "current_mismatches": 130,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 1,
+      "Zc": 8,
+      "rv": 1,
+      "qm": 6,
+      "E": 1062,
+      "repetition": true,
+      "current_mismatches": 521,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 1,
+      "Zc": 8,
+      "rv": 1,
+      "qm": 8,
+      "E": 272,
+      "repetition": false,
+      "current_mismatches": 138,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 1,
+      "Zc": 8,
+      "rv": 1,
+      "qm": 8,
+      "E": 1064,
+      "repetition": true,
+      "current_mismatches": 514,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 1,
+      "Zc": 8,
+      "rv": 2,
+      "qm": 2,
+      "E": 266,
+      "repetition": false,
+      "current_mismatches": 130,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 1,
+      "Zc": 8,
+      "rv": 2,
+      "qm": 2,
+      "E": 1058,
+      "repetition": true,
+      "current_mismatches": 538,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 1,
+      "Zc": 8,
+      "rv": 2,
+      "qm": 4,
+      "E": 268,
+      "repetition": false,
+      "current_mismatches": 134,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 1,
+      "Zc": 8,
+      "rv": 2,
+      "qm": 4,
+      "E": 1060,
+      "repetition": true,
+      "current_mismatches": 522,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 1,
+      "Zc": 8,
+      "rv": 2,
+      "qm": 6,
+      "E": 270,
+      "repetition": false,
+      "current_mismatches": 138,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 1,
+      "Zc": 8,
+      "rv": 2,
+      "qm": 6,
+      "E": 1062,
+      "repetition": true,
+      "current_mismatches": 520,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 1,
+      "Zc": 8,
+      "rv": 2,
+      "qm": 8,
+      "E": 272,
+      "repetition": false,
+      "current_mismatches": 118,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 1,
+      "Zc": 8,
+      "rv": 2,
+      "qm": 8,
+      "E": 1064,
+      "repetition": true,
+      "current_mismatches": 543,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 1,
+      "Zc": 8,
+      "rv": 3,
+      "qm": 2,
+      "E": 266,
+      "repetition": false,
+      "current_mismatches": 126,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 1,
+      "Zc": 8,
+      "rv": 3,
+      "qm": 2,
+      "E": 1058,
+      "repetition": true,
+      "current_mismatches": 540,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 1,
+      "Zc": 8,
+      "rv": 3,
+      "qm": 4,
+      "E": 268,
+      "repetition": false,
+      "current_mismatches": 111,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 1,
+      "Zc": 8,
+      "rv": 3,
+      "qm": 4,
+      "E": 1060,
+      "repetition": true,
+      "current_mismatches": 513,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 1,
+      "Zc": 8,
+      "rv": 3,
+      "qm": 6,
+      "E": 270,
+      "repetition": false,
+      "current_mismatches": 125,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 1,
+      "Zc": 8,
+      "rv": 3,
+      "qm": 6,
+      "E": 1062,
+      "repetition": true,
+      "current_mismatches": 499,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 1,
+      "Zc": 8,
+      "rv": 3,
+      "qm": 8,
+      "E": 272,
+      "repetition": false,
+      "current_mismatches": 133,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 1,
+      "Zc": 8,
+      "rv": 3,
+      "qm": 8,
+      "E": 1064,
+      "repetition": true,
+      "current_mismatches": 519,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 2,
+      "Zc": 72,
+      "rv": 0,
+      "qm": 2,
+      "E": 1802,
+      "repetition": false,
+      "current_mismatches": 877,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 2,
+      "Zc": 72,
+      "rv": 0,
+      "qm": 2,
+      "E": 7202,
+      "repetition": true,
+      "current_mismatches": 3641,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 2,
+      "Zc": 72,
+      "rv": 0,
+      "qm": 4,
+      "E": 1804,
+      "repetition": false,
+      "current_mismatches": 884,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 2,
+      "Zc": 72,
+      "rv": 0,
+      "qm": 4,
+      "E": 7204,
+      "repetition": true,
+      "current_mismatches": 3592,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 2,
+      "Zc": 72,
+      "rv": 0,
+      "qm": 6,
+      "E": 1806,
+      "repetition": false,
+      "current_mismatches": 885,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 2,
+      "Zc": 72,
+      "rv": 0,
+      "qm": 6,
+      "E": 7206,
+      "repetition": true,
+      "current_mismatches": 3578,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 2,
+      "Zc": 72,
+      "rv": 0,
+      "qm": 8,
+      "E": 1808,
+      "repetition": false,
+      "current_mismatches": 904,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 2,
+      "Zc": 72,
+      "rv": 0,
+      "qm": 8,
+      "E": 7208,
+      "repetition": true,
+      "current_mismatches": 3553,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 2,
+      "Zc": 72,
+      "rv": 1,
+      "qm": 2,
+      "E": 1802,
+      "repetition": false,
+      "current_mismatches": 913,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 2,
+      "Zc": 72,
+      "rv": 1,
+      "qm": 2,
+      "E": 7202,
+      "repetition": true,
+      "current_mismatches": 3548,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 2,
+      "Zc": 72,
+      "rv": 1,
+      "qm": 4,
+      "E": 1804,
+      "repetition": false,
+      "current_mismatches": 872,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 2,
+      "Zc": 72,
+      "rv": 1,
+      "qm": 4,
+      "E": 7204,
+      "repetition": true,
+      "current_mismatches": 3607,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 2,
+      "Zc": 72,
+      "rv": 1,
+      "qm": 6,
+      "E": 1806,
+      "repetition": false,
+      "current_mismatches": 868,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 2,
+      "Zc": 72,
+      "rv": 1,
+      "qm": 6,
+      "E": 7206,
+      "repetition": true,
+      "current_mismatches": 3652,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 2,
+      "Zc": 72,
+      "rv": 1,
+      "qm": 8,
+      "E": 1808,
+      "repetition": false,
+      "current_mismatches": 933,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 2,
+      "Zc": 72,
+      "rv": 1,
+      "qm": 8,
+      "E": 7208,
+      "repetition": true,
+      "current_mismatches": 3599,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 2,
+      "Zc": 72,
+      "rv": 2,
+      "qm": 2,
+      "E": 1802,
+      "repetition": false,
+      "current_mismatches": 853,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 2,
+      "Zc": 72,
+      "rv": 2,
+      "qm": 2,
+      "E": 7202,
+      "repetition": true,
+      "current_mismatches": 3520,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 2,
+      "Zc": 72,
+      "rv": 2,
+      "qm": 4,
+      "E": 1804,
+      "repetition": false,
+      "current_mismatches": 877,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 2,
+      "Zc": 72,
+      "rv": 2,
+      "qm": 4,
+      "E": 7204,
+      "repetition": true,
+      "current_mismatches": 3525,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 2,
+      "Zc": 72,
+      "rv": 2,
+      "qm": 6,
+      "E": 1806,
+      "repetition": false,
+      "current_mismatches": 926,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 2,
+      "Zc": 72,
+      "rv": 2,
+      "qm": 6,
+      "E": 7206,
+      "repetition": true,
+      "current_mismatches": 3666,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 2,
+      "Zc": 72,
+      "rv": 2,
+      "qm": 8,
+      "E": 1808,
+      "repetition": false,
+      "current_mismatches": 901,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 2,
+      "Zc": 72,
+      "rv": 2,
+      "qm": 8,
+      "E": 7208,
+      "repetition": true,
+      "current_mismatches": 3636,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 2,
+      "Zc": 72,
+      "rv": 3,
+      "qm": 2,
+      "E": 1802,
+      "repetition": false,
+      "current_mismatches": 905,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 2,
+      "Zc": 72,
+      "rv": 3,
+      "qm": 2,
+      "E": 7202,
+      "repetition": true,
+      "current_mismatches": 3629,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 2,
+      "Zc": 72,
+      "rv": 3,
+      "qm": 4,
+      "E": 1804,
+      "repetition": false,
+      "current_mismatches": 911,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 2,
+      "Zc": 72,
+      "rv": 3,
+      "qm": 4,
+      "E": 7204,
+      "repetition": true,
+      "current_mismatches": 3588,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 2,
+      "Zc": 72,
+      "rv": 3,
+      "qm": 6,
+      "E": 1806,
+      "repetition": false,
+      "current_mismatches": 912,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 2,
+      "Zc": 72,
+      "rv": 3,
+      "qm": 6,
+      "E": 7206,
+      "repetition": true,
+      "current_mismatches": 3568,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 2,
+      "Zc": 72,
+      "rv": 3,
+      "qm": 8,
+      "E": 1808,
+      "repetition": false,
+      "current_mismatches": 911,
+      "adapted_mismatches": 0
+    },
+    {
+      "bg": 2,
+      "Zc": 72,
+      "rv": 3,
+      "qm": 8,
+      "E": 7208,
+      "repetition": true,
+      "current_mismatches": 3621,
+      "adapted_mismatches": 0
+    }
+  ]
+}

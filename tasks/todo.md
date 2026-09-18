@@ -8,28 +8,22 @@
 
 ## 진행 중
 
-- [ ] AWGN 환경 전체 시뮬레이션 데이터 정리(Tx/Rx 모듈 검증용) —
-  사용자 요청(2026-09-02), "어느정도 시험되면"이라는 조건부 — 현재는
-  아직 시점이 아님. 착수 시 정확한 범위(어떤 채널/모드를 포함할지,
-  출력 형식)를 먼저 확인할 것.
-- [ ] `test_ldpc.c`/`test_polar.c`/`test_mumimo.c`의 UT-06(독립 참조
-  벡터) 미해결 — 2026-09-10 세션에서 한계를 주석으로만 명시, 실제
-  외부/독립 참조 벡터는 아직 추가 안 됨(위 "완료" PHY-03 항목 참조).
+- [ ] 독립 참조 벡터 후속 범위 — Polar puncturing/shortening/UCI PC,
+  TB CRC·segmentation의 외부 대조는 아직 미완료. LDPC rate matching과
+  변조 비트 interleaving의 C 교정/외부 대조는 2026-09-18 완료.
+  Nl>1 E_r 외부 대조, LBRM/CBGTI는 추가 범위. 상세: docs/analysis/ldpc_rate_matching_gap.md.
 - [ ] CSI 보고 확장 — Type I SP 4-port(2026-08-31)/8-port(2026-08-31)는
   완료, Type II 코드북은 아직 미구현(구 "다음 후보" 목록에 묻혀있던
   항목을 2026-09-11 문서 정리 세션에서 여기로 이동 — 착수된 적 없음).
-- [ ] TDL의 Doppler/시간상관 지원 — Phase 1(정확 프로파일, 아래 "완료"
-  참조)에서 의도적으로 미룬 항목. 지금은 매 트라이얼/HARQ attempt에서
-  채널이 block-flat으로 고정(재추첨만 attempt마다) — 진짜 시간축
-  변화(Doppler spectrum, Jakes 등)가 없다. 착수 전 설계 필요(TDL_MAX_TAPS
-  구조는 유지 가능하지만 "한 번 draw = 한 trial 내내 고정"이라는 현재
-  53개 호출부 전체의 기존 가정을 깨는 작업이라 Phase 1보다 훨씬 큼).
-- [ ] TDL의 MIMO 공간상관 — Phase 1에서 의도적으로 미룬 항목. 지금은
-  안테나쌍마다 `tdl_draw()`를 독립 호출한 뒤(예: 4×4는 16번) 별도
-  Kronecker 상관(`mimo_apply_tx_correlation_*`)을 사후에 곱하는 구조 —
-  진짜 3GPP 클러스터/레이 기반으로 결합된 MIMO 채널이 아니다. 이
-  프로젝트 MIMO+TDL 조합 함수 전체(다수)의 재설계 수준이라 착수 전
-  설계 필요, Phase 1/2보다 훨씬 큼.
+- [ ] TDL 시간상관 후속 — 독립 API와 UL_CB_4PORT TDL HARQ의
+  attempt 간 시간축은 완료(2026-09-18). 다른 채널의 시간 간격 정의와
+  적용은 미완료. 한 attempt 내부는 block channel이며 symbol-level
+  Doppler/ICI는 waveform 단계 과제. 설계: docs/analysis/tdl_time_correlation_design.md.
+- [ ] TDL MIMO 공간상관 후속 — UL 4×4 TDL-A/B/C의 Tx/Rx 지수상관
+  행렬 모델은 완료(2026-09-18). per-tap 행렬 입력·표준 preset·D/E LOS
+  steering·다른 MIMO 모드 적용은 미완료. TR 38.901 §7.7.5.2는
+  상관행렬 기반 TDL 확장을 허용하므로 "ray 기반만 올바른 TDL"이라는
+  이전 설명은 정정했다. CDL 물리 배열/레이 모델은 별도 확장.
 - [ ] 실제 waveform(시간영역 OFDM) 경로 — 현재 다수 PDSCH/PUSCH/TDL
   시뮬레이션은 RE/QAM 심볼 도메인 모델이라 CP 부족 ISI, 시간영역
   다중경로 convolution, CFO/phase noise/sampling offset, PA
@@ -41,6 +35,70 @@
 ---
 
 ## 완료
+
+- [x] LDPC SCH 전송 비트열 C 교정 — 2026-09-18.
+  첫 2Z puncturing·Qm interleaving·Rx 역매핑을 공통 C iterator로 구현,
+  PDSCH/PUSCH/HARQ/turbo/UL4 실제 호출 154곳 전환. 외부 위치 64조합과
+  불균등 CB 배분 4조합, 별도 C 대조 64조합, 관련 수치 3종·회귀 23/23,
+  ASan/UBSan 통과. turbo 첫 반복=기준 경로 일치 확인.
+
+- [x] AWGN 지원 채널 전체 기준 데이터 정리 — 2026-09-18.
+  사용자 확정 범위: CSV와 요약 Markdown. 69개 대표 설정, 두 seed,
+  SNR별 200회. 기본 -10~20 dB와 256QAM 25~35 dB 추가 측정을 합쳐
+  166회 실행·2,378개 지표. 원본 로그/설정/SHA-256 보존, 수집기 테스트
+  7/7, 6개 대표 실행 로그 재현 일치. 모든 MCS/RB 조합 전수시험은 아님.
+  결과: docs/analysis/data/awgn_2026-09-18/SUMMARY.md.
+  다음 독립 대조에서 LDPC 전송 경로 공백을 발견해 수정 전 기준임을 명시.
+
+- [x] TDL MIMO Tx/Rx 공간상관 단계 1 — 2026-09-18.
+  UL_CB_4PORT TDL-A/B/C의 tap별 실수 지수상관(구현 선택), 시간상관과 결합.
+  16×16 covariance 수치 검증 포함 관련 수치 3/3, UL 회귀 19/19.
+
+- [x] TDL 시간상관 API·UL 4포트 HARQ 연결 — 2026-09-18.
+  유한 Gaussian spectral sum, A~E power/covariance·D/E LOS 회전 검증.
+  opt-in 설정/지원 조합 검증, UL 회귀 15/15+인접 2/2, 관련 수치 2/2.
+  비활성 기본 모드의 전체 출력은 이전 바이너리와 동일 확인.
+
+- [x] Polar/LDPC 독립 참조 벡터(UT-06 기본 범위) — 2026-09-18.
+  py3gpp 0.6.0 Polar 4개/LDPC 16개 비트 정합·외부 코드워드 복호 통과.
+  버전/소스 해시·재생성 스크립트·외부 구현 제약과 경고를 기록.
+
+- [x] MU-MIMO 독립 참조 벡터(UT-06 일부) — 2026-09-18.
+  NumPy SVD 생성 복소 4×4 채널 3개, C Gramian 역산 결과와 1e-10 이내 일치.
+  고정 벡터와 독립 재생성 스크립트 저장, test_mumimo 통과.
+
+- [x] UL_CB_4PORT 설정·실행 불일치 수정 — 2026-09-18.
+  DFE/turbo enabled 출력 후 일반 코드북 경로로 실행되던 조합을 오류로 차단.
+  고정 LS 및 DL 전용 CHAN_EST_METHOD 범위 출력. UL 관련 8/8,
+  인접 PUSCH/PDSCH TDL 2/2 회귀 통과.
+
+- [x] 시뮬레이터 회귀 선택 실행 CLI — 2026-09-18.
+  `--list`/`--help`, 정확한 라벨 복수 선택, `--match` 부분문자열 지원.
+  기존 128케이스 이름·순서 보존, UL_CB_4PORT 5/5 및 별도 2케이스 통과.
+  바이너리 없는 목록 조회·잘못된 입력 거부·중복 선택 검증 완료.
+
+- [x] 수치 테스트 선택 실행 CLI — 2026-09-18.
+  `--list`/`--help` 및 정확한 테스트 이름으로 복수 선택 지원.
+  잘못된 이름은 실행 전 거부하고 중복 선택은 1회만 실행.
+  관련 PUSCH 3개 테스트와 입력 오류·중복 처리 검증 통과.
+
+- [x] 최근 PUSCH 4포트 코드 파일명·불필요 파일 정리 — 2026-09-18.
+  코드/헤더/테스트 6개를 `pusch_codebook_4port` 및 용도별 이름으로 통일.
+  PHY/src의 미참조 VS Code 테마 3개 삭제, 빌드/include/테스트 등록 갱신.
+  과거 이력의 파일명은 당시 기록으로 보존; 새 이름 대응은 월별 이력 참조.
+
+- [x] UL 파일럿 잡음·보간 MSE 수치 검증 — 2026-09-18.
+  rank 1~4/두 N0의 20조건 × 20,000 draws, 기대 MSE 대비 최대
+  상대오차 1.83%(허용 5%). 보간 가중치 임시 결함 검출 확인.
+
+- [x] UL 4포트 62 TPMI 수신 수치 검증 — 2026-09-18.
+  무잡음 파일럿/데이터 복원 및 검출기 반환 분산과 기저응답 기반
+  잔류에너지 대조 통과. 분산 배율·이득 보정 누락 임시 결함 검출.
+
+- [x] UL_CB_4PORT 연속 TB 상태 분리 검증 — 2026-09-18.
+  기존 32개 단일 TB 케이스 + 4개 연속 4-TB 시나리오 통과.
+  rank/CB 수 변경, 실패 후 다음 TB 성공, RV/버퍼 초기화를 검사.
+  상태 누출·RV 미초기화·후속 TB 건너뛰기 임시 결함 검출 확인.
 
 - [x] UL_CB_4PORT ACK 조기 종료·다중 CB HARQ 검증 — 2026-09-18.
   실제 복호/CRC를 사용하는 8개 조합을 추가하여 32개 통과.

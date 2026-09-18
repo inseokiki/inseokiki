@@ -1,0 +1,52 @@
+=== 5G PHY Link Level Simulator (C) ===
+=== L1 Configuration ===
+Bandwidth    : 20 MHz
+SCS          : 30 kHz
+Num RB       : 24
+Subcarriers  : 288
+NFFT         : 1024
+CP (sym 0,7) : 80
+CP (normal)  : 72
+Sample Rate  : 30.720 MHz
+Channel      : AWGN
+SNR Range    : -10.0 to 20.0 dB (step 5.0)
+Coding       : POLAR
+Modulation   : QPSK (Qm=2) [fixed by spec]
+Phys Channel : PDCCH
+Num Trials   : 200
+Seed         : 67890
+DCI Size     : 39
+RNTI         : 0x1234
+Search Space : CSS
+PDCCH AL     : 8
+========================
+
+=== PDCCH Simulation ===
+DCI size: 39 bits
+CRC: CRC-24C with RNTI masking (24 bits)
+RNTI: 0x1234
+TX Aggregation Level: 8
+Polar code: (512, 63)
+Rate matching: 512 -> 864 bits
+Search Space: CSS
+Blind decoding candidates: 7
+  Candidate 0: AL4 #0
+  Candidate 1: AL4 #1
+  Candidate 2: AL4 #2
+  Candidate 3: AL4 #3
+  Candidate 4: AL8 #0 (TX)
+  Candidate 5: AL8 #1
+  Candidate 6: AL16 #0
+Trials per SNR: 200
+
+    SNR (dB)    P_detect      P_miss  P_false_alarm            BER
+------------------------------------------------------------------
+       -10.0      0.1700      0.8300     0.0000e+00     0.0000e+00
+        -5.0      1.0000      0.0000     0.0000e+00     0.0000e+00
+         0.0      1.0000      0.0000     0.0000e+00     0.0000e+00
+         5.0      1.0000      0.0000     0.0000e+00     0.0000e+00
+        10.0      1.0000      0.0000     0.0000e+00     0.0000e+00
+        15.0      1.0000      0.0000     0.0000e+00     0.0000e+00
+        20.0      1.0000      0.0000     0.0000e+00     0.0000e+00
+
+PDCCH simulation complete.

@@ -43,6 +43,11 @@ typedef struct {
     int    harqMaxRetx;
     char   harqRvSeq[CFG_STR_MAX];
     double tdlDelaySpreadNs;
+    int    tdlTimeCorrelation;   /* opt-in attempt-to-attempt UL codebook fading */
+    double tdlMaxDopplerHz;
+    double tdlSpatialCorrTx;
+    double tdlSpatialCorrRx;
+    double tdlHarqIntervalMs;    /* simulation scheduling assumption, not NR timing */
     char   tdlProfile[CFG_STR_MAX];
     int    transformPrecoding;
     int    puschDfeEnable;

@@ -1,0 +1,36 @@
+=== 5G PHY Link Level Simulator (C) ===
+=== L1 Configuration ===
+Bandwidth    : 20 MHz
+SCS          : 30 kHz
+Num RB       : 24
+Subcarriers  : 288
+NFFT         : 1024
+CP (sym 0,7) : 80
+CP (normal)  : 72
+Sample Rate  : 30.720 MHz
+Channel      : AWGN
+SNR Range    : 25.0 to 35.0 dB (step 5.0)
+Coding       : NONE
+MCS Table    : TABLE1 (TS 38.214 Table 5.1.3.1-1)
+MCS Index    : 5
+Modulation   : QPSK (Qm=2)
+Code Rate    : 0.3701 (R*1024=379)
+Spectral Eff : 0.740 bits/RE
+Phys Channel : BER
+Num Trials   : 200
+Seed         : 12345
+========================
+
+=== BER Simulation (uncoded, no OFDM) ===
+Modulation   : QPSK
+Channel      : AWGN
+Block Size   : 1000 bits
+Trials/SNR   : 200
+
+    SNR (dB)            BER           BLER
+------------------------------------------
+     25.0000     0.0000e+00         0.0000
+     30.0000     0.0000e+00         0.0000
+     35.0000     0.0000e+00         0.0000
+
+Simulation complete.

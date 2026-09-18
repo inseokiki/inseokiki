@@ -1,0 +1,46 @@
+=== 5G PHY Link Level Simulator (C) ===
+=== L1 Configuration ===
+Bandwidth    : 20 MHz
+SCS          : 30 kHz
+Num RB       : 24
+Subcarriers  : 288
+NFFT         : 1024
+CP (sym 0,7) : 80
+CP (normal)  : 72
+Sample Rate  : 30.720 MHz
+Channel      : AWGN
+SNR Range    : -10.0 to 20.0 dB (step 5.0)
+Coding       : LDPC
+MCS Table    : TABLE1 (TS 38.214 Table 5.1.3.1-1)
+MCS Index    : 10
+Modulation   : 16QAM (Qm=4)
+Code Rate    : 0.3320 (R*1024=340)
+Spectral Eff : 1.328 bits/RE
+Phys Channel : PDSCH
+Num Trials   : 200
+Seed         : 12345
+TB Size      : 256
+========================
+
+=== PDSCH Simulation ===
+MCS Index: 10 (Table TABLE1)
+Modulation: 16QAM (Qm=4)
+Code Rate: 0.3320 (R x 1024 = 340)
+TB Size: 256 bits
+CRC: CRC-24A (24 bits)
+Code Blocks: C=1 (BG2, Zc=36, K'=280 bits/CB)
+LDPC Coded Size: 1872 bits/CB
+Spectral Efficiency: 1.328 bits/RE
+Trials per SNR: 200
+
+    SNR (dB)            BER           BLER
+------------------------------------------
+       -10.0     4.4090e-01         1.0000
+        -5.0     3.8779e-01         1.0000
+         0.0     2.7867e-01         1.0000
+         5.0     5.4492e-03         0.0700
+        10.0     0.0000e+00         0.0000
+        15.0     0.0000e+00         0.0000
+        20.0     0.0000e+00         0.0000
+
+PDSCH simulation complete.

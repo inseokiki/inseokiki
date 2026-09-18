@@ -128,9 +128,9 @@ void run_pdsch_simulation(const L1Config *cfg) {
             for (int r = 0; r < seg.C; r++) {
                 const int *info = cb_bits + (size_t)r * seg.Kprime;
                 ldpc_encode(&ldpc, info, coded);
-                nr_ldpc_rate_match_select(coded, acsz, ldpc.bg, ldpc.Zc,
+                nr_sch_rate_match_select(coded, acsz, ldpc.bg, ldpc.Zc,
                                            ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                           /*rv=*/0, Er[r], rm[r]);
+                                           /*rv=*/0, Er[r], bps, rm[r]);
             }
             nr_seg_concat(&seg, (const int *const *)rm, Er, selbits);
             qam_modulate(selbits, E, mcs.modulation, syms);
@@ -157,9 +157,9 @@ void run_pdsch_simulation(const L1Config *cfg) {
             int cb_crc_ok = 1;
             for (int r = 0; r < seg.C; r++) {
                 memset(soft_buf, 0, acsz * sizeof(double));
-                nr_ldpc_rate_match_combine(soft_buf, acsz, ldpc.bg, ldpc.Zc,
+                nr_sch_rate_match_combine(soft_buf, acsz, ldpc.bg, ldpc.Zc,
                                             ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                            /*rv=*/0, Er[r], allllr + roff);
+                                            /*rv=*/0, Er[r], bps, allllr + roff);
                 roff += Er[r];
                 ldpc_decode(&ldpc, soft_buf, 25, decoded_cb);
                 if (seg.C > 1 && !check_crc(decoded_cb, seg.Kprime, CRC24B))
@@ -287,9 +287,9 @@ void run_pdsch_dmrs_simulation(const L1Config *cfg) {
             for (int r = 0; r < seg.C; r++) {
                 const int *info = cb_bits + (size_t)r * seg.Kprime;
                 ldpc_encode(&ldpc, info, coded);
-                nr_ldpc_rate_match_select(coded, acsz, ldpc.bg, ldpc.Zc,
+                nr_sch_rate_match_select(coded, acsz, ldpc.bg, ldpc.Zc,
                                            ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                           /*rv=*/0, Er[r], rm[r]);
+                                           /*rv=*/0, Er[r], bps, rm[r]);
             }
             nr_seg_concat(&seg, (const int *const *)rm, Er, selbits);
             qam_modulate(selbits, E, mcs.modulation, data_syms);
@@ -332,9 +332,9 @@ void run_pdsch_dmrs_simulation(const L1Config *cfg) {
             int cb_crc_ok = 1;
             for (int r = 0; r < seg.C; r++) {
                 memset(soft_buf, 0, acsz * sizeof(double));
-                nr_ldpc_rate_match_combine(soft_buf, acsz, ldpc.bg, ldpc.Zc,
+                nr_sch_rate_match_combine(soft_buf, acsz, ldpc.bg, ldpc.Zc,
                                             ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                            /*rv=*/0, Er[r], allllr + roff);
+                                            /*rv=*/0, Er[r], bps, allllr + roff);
                 roff += Er[r];
                 ldpc_decode(&ldpc, soft_buf, 25, decoded_cb);
                 if (seg.C > 1 && !check_crc(decoded_cb, seg.Kprime, CRC24B))
@@ -457,9 +457,9 @@ void run_pdsch_simo_mrc_simulation(const L1Config *cfg) {
             for (int r = 0; r < seg.C; r++) {
                 const int *info = cb_bits + (size_t)r * seg.Kprime;
                 ldpc_encode(&ldpc, info, coded);
-                nr_ldpc_rate_match_select(coded, acsz, ldpc.bg, ldpc.Zc,
+                nr_sch_rate_match_select(coded, acsz, ldpc.bg, ldpc.Zc,
                                            ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                           /*rv=*/0, Er[r], rm[r]);
+                                           /*rv=*/0, Er[r], bps, rm[r]);
             }
             nr_seg_concat(&seg, (const int *const *)rm, Er, selbits);
             qam_modulate(selbits, E, mcs.modulation, data_syms);
@@ -503,9 +503,9 @@ void run_pdsch_simo_mrc_simulation(const L1Config *cfg) {
             int cb_crc_ok = 1;
             for (int r = 0; r < seg.C; r++) {
                 memset(soft_buf, 0, acsz * sizeof(double));
-                nr_ldpc_rate_match_combine(soft_buf, acsz, ldpc.bg, ldpc.Zc,
+                nr_sch_rate_match_combine(soft_buf, acsz, ldpc.bg, ldpc.Zc,
                                             ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                            /*rv=*/0, Er[r], allllr + roff);
+                                            /*rv=*/0, Er[r], bps, allllr + roff);
                 roff += Er[r];
                 ldpc_decode(&ldpc, soft_buf, 25, decoded_cb);
                 if (seg.C > 1 && !check_crc(decoded_cb, seg.Kprime, CRC24B))
@@ -640,9 +640,9 @@ void run_pdsch_simo_mrc_tdl_simulation(const L1Config *cfg) {
             for (int r = 0; r < seg.C; r++) {
                 const int *info = cb_bits + (size_t)r * seg.Kprime;
                 ldpc_encode(&ldpc, info, coded);
-                nr_ldpc_rate_match_select(coded, acsz, ldpc.bg, ldpc.Zc,
+                nr_sch_rate_match_select(coded, acsz, ldpc.bg, ldpc.Zc,
                                            ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                           /*rv=*/0, Er[r], rm[r]);
+                                           /*rv=*/0, Er[r], bps, rm[r]);
             }
             nr_seg_concat(&seg, (const int *const *)rm, Er, selbits);
             qam_modulate(selbits, E, mcs.modulation, data_syms);
@@ -689,9 +689,9 @@ void run_pdsch_simo_mrc_tdl_simulation(const L1Config *cfg) {
             int cb_crc_ok = 1;
             for (int r = 0; r < seg.C; r++) {
                 memset(soft_buf, 0, acsz * sizeof(double));
-                nr_ldpc_rate_match_combine(soft_buf, acsz, ldpc.bg, ldpc.Zc,
+                nr_sch_rate_match_combine(soft_buf, acsz, ldpc.bg, ldpc.Zc,
                                             ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                            /*rv=*/0, Er[r], allllr + roff);
+                                            /*rv=*/0, Er[r], bps, allllr + roff);
                 roff += Er[r];
                 ldpc_decode(&ldpc, soft_buf, 25, decoded_cb);
                 if (seg.C > 1 && !check_crc(decoded_cb, seg.Kprime, CRC24B))
@@ -859,9 +859,9 @@ void run_pdsch_simo_mrc_tdl_harq_simulation(const L1Config *cfg) {
             for (int attempt=0; attempt<max_retx; attempt++) {
                 int rv = rvseq[attempt % rvseq_len];
                 for (int r = 0; r < seg.C; r++)
-                    nr_ldpc_rate_match_select(coded_cw[r], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_select(coded_cw[r], acsz, ldpc.bg, ldpc.Zc,
                                                ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                               rv, Er[r], rm[r]);
+                                               rv, Er[r], bps, rm[r]);
                 nr_seg_concat(&seg, (const int *const *)rm, Er, selbits);
                 qam_modulate(selbits, E, mcs.modulation, data_syms);
 
@@ -900,9 +900,9 @@ void run_pdsch_simo_mrc_tdl_harq_simulation(const L1Config *cfg) {
                 int roff = 0;
                 int cb_crc_ok = 1;
                 for (int r = 0; r < seg.C; r++) {
-                    nr_ldpc_rate_match_combine(soft_buf[r], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_combine(soft_buf[r], acsz, ldpc.bg, ldpc.Zc,
                                                 ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                                rv, Er[r], allllr + roff);
+                                                rv, Er[r], bps, allllr + roff);
                     roff += Er[r];
                     ldpc_decode(&ldpc, soft_buf[r], 25, decoded_cb);
                     if (seg.C > 1 && !check_crc(decoded_cb, seg.Kprime, CRC24B))
@@ -1052,12 +1052,12 @@ void run_pdsch_sm2x2_simulation(const L1Config *cfg) {
                 const int *infoB = cb_bitsB + (size_t)r * seg.Kprime;
                 ldpc_encode(&ldpc, infoA, codedA);
                 ldpc_encode(&ldpc, infoB, codedB);
-                nr_ldpc_rate_match_select(codedA, acsz, ldpc.bg, ldpc.Zc,
+                nr_sch_rate_match_select(codedA, acsz, ldpc.bg, ldpc.Zc,
                                            ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                           /*rv=*/0, Er[r], rmA[r]);
-                nr_ldpc_rate_match_select(codedB, acsz, ldpc.bg, ldpc.Zc,
+                                           /*rv=*/0, Er[r], bps, rmA[r]);
+                nr_sch_rate_match_select(codedB, acsz, ldpc.bg, ldpc.Zc,
                                            ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                           /*rv=*/0, Er[r], rmB[r]);
+                                           /*rv=*/0, Er[r], bps, rmB[r]);
             }
             nr_seg_concat(&seg, (const int *const *)rmA, Er, selbitsA);
             nr_seg_concat(&seg, (const int *const *)rmB, Er, selbitsB);
@@ -1111,12 +1111,12 @@ void run_pdsch_sm2x2_simulation(const L1Config *cfg) {
             for (int r = 0; r < seg.C; r++) {
                 memset(soft_bufA, 0, acsz * sizeof(double));
                 memset(soft_bufB, 0, acsz * sizeof(double));
-                nr_ldpc_rate_match_combine(soft_bufA, acsz, ldpc.bg, ldpc.Zc,
+                nr_sch_rate_match_combine(soft_bufA, acsz, ldpc.bg, ldpc.Zc,
                                             ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                            /*rv=*/0, Er[r], allllrA + roffA);
-                nr_ldpc_rate_match_combine(soft_bufB, acsz, ldpc.bg, ldpc.Zc,
+                                            /*rv=*/0, Er[r], bps, allllrA + roffA);
+                nr_sch_rate_match_combine(soft_bufB, acsz, ldpc.bg, ldpc.Zc,
                                             ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                            /*rv=*/0, Er[r], allllrB + roffB);
+                                            /*rv=*/0, Er[r], bps, allllrB + roffB);
                 roffA += Er[r]; roffB += Er[r];
 
                 ldpc_decode(&ldpc, soft_bufA, 25, decodedA_cb);
@@ -1277,12 +1277,12 @@ void run_pdsch_sm2x2_tdl_simulation(const L1Config *cfg) {
                 const int *infoB = cb_bitsB + (size_t)r * seg.Kprime;
                 ldpc_encode(&ldpc, infoA, codedA);
                 ldpc_encode(&ldpc, infoB, codedB);
-                nr_ldpc_rate_match_select(codedA, acsz, ldpc.bg, ldpc.Zc,
+                nr_sch_rate_match_select(codedA, acsz, ldpc.bg, ldpc.Zc,
                                            ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                           /*rv=*/0, Er[r], rmA[r]);
-                nr_ldpc_rate_match_select(codedB, acsz, ldpc.bg, ldpc.Zc,
+                                           /*rv=*/0, Er[r], bps, rmA[r]);
+                nr_sch_rate_match_select(codedB, acsz, ldpc.bg, ldpc.Zc,
                                            ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                           /*rv=*/0, Er[r], rmB[r]);
+                                           /*rv=*/0, Er[r], bps, rmB[r]);
             }
             nr_seg_concat(&seg, (const int *const *)rmA, Er, selbitsA);
             nr_seg_concat(&seg, (const int *const *)rmB, Er, selbitsB);
@@ -1351,12 +1351,12 @@ void run_pdsch_sm2x2_tdl_simulation(const L1Config *cfg) {
             for (int r = 0; r < seg.C; r++) {
                 memset(soft_bufA, 0, acsz * sizeof(double));
                 memset(soft_bufB, 0, acsz * sizeof(double));
-                nr_ldpc_rate_match_combine(soft_bufA, acsz, ldpc.bg, ldpc.Zc,
+                nr_sch_rate_match_combine(soft_bufA, acsz, ldpc.bg, ldpc.Zc,
                                             ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                            /*rv=*/0, Er[r], allllrA + roffA);
-                nr_ldpc_rate_match_combine(soft_bufB, acsz, ldpc.bg, ldpc.Zc,
+                                            /*rv=*/0, Er[r], bps, allllrA + roffA);
+                nr_sch_rate_match_combine(soft_bufB, acsz, ldpc.bg, ldpc.Zc,
                                             ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                            /*rv=*/0, Er[r], allllrB + roffB);
+                                            /*rv=*/0, Er[r], bps, allllrB + roffB);
                 roffA += Er[r]; roffB += Er[r];
 
                 ldpc_decode(&ldpc, soft_bufA, 25, decodedA_cb);
@@ -1561,8 +1561,8 @@ void run_pdsch_sm2x2_tdl_harq_simulation(const L1Config *cfg) {
             for (int attempt=0; attempt<max_retx; attempt++) {
                 int rv = rvseq[attempt % rvseq_len];
                 for (int r=0;r<seg.C;r++) {
-                    nr_ldpc_rate_match_select(coded_cwA[r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], rmA[r]);
-                    nr_ldpc_rate_match_select(coded_cwB[r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], rmB[r]);
+                    nr_sch_rate_match_select(coded_cwA[r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], bps, rmA[r]);
+                    nr_sch_rate_match_select(coded_cwB[r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], bps, rmB[r]);
                 }
                 nr_seg_concat(&seg, (const int *const *)rmA, Er, selbitsA);
                 nr_seg_concat(&seg, (const int *const *)rmB, Er, selbitsB);
@@ -1625,8 +1625,8 @@ void run_pdsch_sm2x2_tdl_harq_simulation(const L1Config *cfg) {
                 int roffA = 0, roffB = 0;
                 int cbA_crc_ok = 1, cbB_crc_ok = 1;
                 for (int r=0;r<seg.C;r++) {
-                    nr_ldpc_rate_match_combine(soft_bufA[r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], allllrA + roffA);
-                    nr_ldpc_rate_match_combine(soft_bufB[r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], allllrB + roffB);
+                    nr_sch_rate_match_combine(soft_bufA[r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], bps, allllrA + roffA);
+                    nr_sch_rate_match_combine(soft_bufB[r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], bps, allllrB + roffB);
                     roffA += Er[r]; roffB += Er[r];
                     ldpc_decode(&ldpc, soft_bufA[r], 25, decoded_cbA);
                     ldpc_decode(&ldpc, soft_bufB[r], 25, decoded_cbB);
@@ -1691,12 +1691,12 @@ void run_pdsch_sm2x2_tdl_harq_simulation(const L1Config *cfg) {
 
 /* HARQ with circular-buffer rate matching (Chase / IR), SISO + DMRS.
    A single low-rate mother LDPC codeword is generated per trial; each
-   (re)transmission attempt selects E bits via nr_ldpc_rate_match_select()
+   (re)transmission attempt selects E bits via nr_sch_rate_match_select()
    (2026-09-02, TS 38.212 5.4.2.1 BG/Zc-aware k0 + filler-skip -- see
    nr_rate_matching.h) at the attempt's RV, sends them over a fresh
    channel realization (models time diversity across HARQ rounds), and
    soft-combines the resulting LLRs into a persistent Ncb-length buffer
-   via nr_ldpc_rate_match_combine() before decoding. Reports both the
+   via nr_sch_rate_match_combine() before decoding. Reports both the
    1st-transmission-only BLER (as if HARQ were disabled) and the final
    BLER after up to HARQ_MAX_RETX attempts, plus the average number of
    transmissions used. */
@@ -1820,9 +1820,9 @@ void run_pdsch_harq_simulation(const L1Config *cfg) {
             for (int attempt=0; attempt<max_retx; attempt++) {
                 int rv = rvseq[attempt % rvseq_len];
                 for (int r = 0; r < seg.C; r++)
-                    nr_ldpc_rate_match_select(coded_cw[r], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_select(coded_cw[r], acsz, ldpc.bg, ldpc.Zc,
                                                ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                               rv, Er[r], rm[r]);
+                                               rv, Er[r], bps, rm[r]);
                 nr_seg_concat(&seg, (const int *const *)rm, Er, selbits);
                 qam_modulate(selbits, E, mcs.modulation, data_syms);
 
@@ -1859,9 +1859,9 @@ void run_pdsch_harq_simulation(const L1Config *cfg) {
                 int roff = 0;
                 int cb_crc_ok = 1;
                 for (int r = 0; r < seg.C; r++) {
-                    nr_ldpc_rate_match_combine(soft_buf[r], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_combine(soft_buf[r], acsz, ldpc.bg, ldpc.Zc,
                                                 ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                                rv, Er[r], allllr + roff);
+                                                rv, Er[r], bps, allllr + roff);
                     roff += Er[r];
                     ldpc_decode(&ldpc, soft_buf[r], 25, decoded_cb);
                     if (seg.C > 1 && !check_crc(decoded_cb, seg.Kprime, CRC24B))
@@ -2011,9 +2011,9 @@ void run_pdsch_tdl_simulation(const L1Config *cfg) {
             for (int r = 0; r < seg.C; r++) {
                 const int *info = cb_bits + (size_t)r * seg.Kprime;
                 ldpc_encode(&ldpc, info, coded);
-                nr_ldpc_rate_match_select(coded, acsz, ldpc.bg, ldpc.Zc,
+                nr_sch_rate_match_select(coded, acsz, ldpc.bg, ldpc.Zc,
                                            ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                           /*rv=*/0, Er[r], rm[r]);
+                                           /*rv=*/0, Er[r], bps, rm[r]);
             }
             nr_seg_concat(&seg, (const int *const *)rm, Er, selbits);
             qam_modulate(selbits, E, mcs.modulation, data_syms);
@@ -2062,9 +2062,9 @@ void run_pdsch_tdl_simulation(const L1Config *cfg) {
             int cb_crc_ok = 1;
             for (int r = 0; r < seg.C; r++) {
                 memset(soft_buf, 0, acsz * sizeof(double));
-                nr_ldpc_rate_match_combine(soft_buf, acsz, ldpc.bg, ldpc.Zc,
+                nr_sch_rate_match_combine(soft_buf, acsz, ldpc.bg, ldpc.Zc,
                                             ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                            /*rv=*/0, Er[r], allllr + roff);
+                                            /*rv=*/0, Er[r], bps, allllr + roff);
                 roff += Er[r];
                 ldpc_decode(&ldpc, soft_buf, 25, decoded_cb);
                 if (seg.C > 1 && !check_crc(decoded_cb, seg.Kprime, CRC24B))
@@ -2226,9 +2226,9 @@ void run_pdsch_sm4x4_simulation(const L1Config *cfg) {
                 for (int r = 0; r < seg.C; r++) {
                     const int *info = cb_bits[l] + (size_t)r * seg.Kprime;
                     ldpc_encode(&ldpc, info, coded[l]);
-                    nr_ldpc_rate_match_select(coded[l], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_select(coded[l], acsz, ldpc.bg, ldpc.Zc,
                                                ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                               /*rv=*/0, Er[r], rm[l][r]);
+                                               /*rv=*/0, Er[r], bps, rm[l][r]);
                 }
                 nr_seg_concat(&seg, (const int *const *)rm[l], Er, selbits[l]);
                 qam_modulate(selbits[l], E, mcs.modulation, syms[l]);
@@ -2299,9 +2299,9 @@ void run_pdsch_sm4x4_simulation(const L1Config *cfg) {
                 int cb_crc_ok = 1;
                 for (int r = 0; r < seg.C; r++) {
                     memset(soft_buf[l], 0, acsz * sizeof(double));
-                    nr_ldpc_rate_match_combine(soft_buf[l], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_combine(soft_buf[l], acsz, ldpc.bg, ldpc.Zc,
                                                 ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                                /*rv=*/0, Er[r], allllr[l] + roff);
+                                                /*rv=*/0, Er[r], bps, allllr[l] + roff);
                     roff += Er[r];
                     ldpc_decode(&ldpc, soft_buf[l], 25, decoded_cb[l]);
                     if (seg.C > 1 && !check_crc(decoded_cb[l], seg.Kprime, CRC24B))
@@ -2443,9 +2443,9 @@ void run_pdsch_sm4x4_tdl_simulation(const L1Config *cfg) {
                 for (int r = 0; r < seg.C; r++) {
                     const int *info = cb_bits[l] + (size_t)r * seg.Kprime;
                     ldpc_encode(&ldpc, info, coded[l]);
-                    nr_ldpc_rate_match_select(coded[l], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_select(coded[l], acsz, ldpc.bg, ldpc.Zc,
                                                ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                               /*rv=*/0, Er[r], rm[l][r]);
+                                               /*rv=*/0, Er[r], bps, rm[l][r]);
                 }
                 nr_seg_concat(&seg, (const int *const *)rm[l], Er, selbits[l]);
                 qam_modulate(selbits[l], E, mcs.modulation, syms[l]);
@@ -2496,9 +2496,9 @@ void run_pdsch_sm4x4_tdl_simulation(const L1Config *cfg) {
                 int cb_crc_ok = 1;
                 for (int r = 0; r < seg.C; r++) {
                     memset(soft_buf[l], 0, acsz * sizeof(double));
-                    nr_ldpc_rate_match_combine(soft_buf[l], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_combine(soft_buf[l], acsz, ldpc.bg, ldpc.Zc,
                                                 ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                                /*rv=*/0, Er[r], allllr[l] + roff);
+                                                /*rv=*/0, Er[r], bps, allllr[l] + roff);
                     roff += Er[r];
                     ldpc_decode(&ldpc, soft_buf[l], 25, decoded_cb[l]);
                     if (seg.C > 1 && !check_crc(decoded_cb[l], seg.Kprime, CRC24B))
@@ -2540,7 +2540,7 @@ void run_pdsch_sm4x4_tdl_simulation(const L1Config *cfg) {
  * 지원 채널: FLAT_FADING (블록 flat, 시도마다 재추첨) / TDL (genie-aided, 16 tap-set)
  *
  * 채널 추정  : Genie-aided (완벽 CSI — SM_4X4 TDL과 동일, 파일럿 간격 8 SC 문제 회피)
- * HARQ      : nr_ldpc_rate_match_select / nr_ldpc_rate_match_combine (SM_2X2 TDL HARQ와 동일 구조, 2026-09-02 TS 38.212 5.4.2.1 표준 k0로 갱신)
+ * HARQ      : nr_sch_rate_match_select / nr_sch_rate_match_combine (SM_2X2 TDL HARQ와 동일 구조, 2026-09-02 TS 38.212 5.4.2.1 표준 k0로 갱신)
  * 레이어    : 4개 독립 CW / soft-buffer / LDPC
  * ─────────────────────────────────────────────────────────────────────────── */
 void run_pdsch_sm4x4_harq_simulation(const L1Config *cfg) {
@@ -2670,7 +2670,7 @@ void run_pdsch_sm4x4_harq_simulation(const L1Config *cfg) {
 
                 for (int l = 0; l < NL; l++) {
                     for (int r = 0; r < seg.C; r++)
-                        nr_ldpc_rate_match_select(coded_cw[l][r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], rm[l][r]);
+                        nr_sch_rate_match_select(coded_cw[l][r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], bps, rm[l][r]);
                     nr_seg_concat(&seg, (const int *const *)rm[l], Er, selbits[l]);
                     qam_modulate(selbits[l], E, mcs.modulation, data_syms[l]);
                 }
@@ -2725,7 +2725,7 @@ void run_pdsch_sm4x4_harq_simulation(const L1Config *cfg) {
                     int roff = 0;
                     int cb_crc_ok = 1;
                     for (int r = 0; r < seg.C; r++) {
-                        nr_ldpc_rate_match_combine(soft_buf[l][r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], allllr[l] + roff);
+                        nr_sch_rate_match_combine(soft_buf[l][r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], bps, allllr[l] + roff);
                         roff += Er[r];
                         ldpc_decode(&ldpc, soft_buf[l][r], 25, decoded_cb[l]);
                         if (seg.C > 1 && !check_crc(decoded_cb[l], seg.Kprime, CRC24B)) cb_crc_ok = 0;
@@ -2913,9 +2913,9 @@ void run_pdsch_cl_4port_simulation(const L1Config *cfg) {
                 for (int r = 0; r < seg.C; r++) {
                     const int *info = cb_bits[l] + (size_t)r * seg.Kprime;
                     ldpc_encode(&ldpc, info, coded[l]);
-                    nr_ldpc_rate_match_select(coded[l], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_select(coded[l], acsz, ldpc.bg, ldpc.Zc,
                                                ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                               /*rv=*/0, Er[r], rm[l][r]);
+                                               /*rv=*/0, Er[r], bps, rm[l][r]);
                 }
                 nr_seg_concat(&seg, (const int *const *)rm[l], Er, selbits[l]);
                 qam_modulate(selbits[l], E, mcs.modulation, sym[l]);
@@ -2961,9 +2961,9 @@ void run_pdsch_cl_4port_simulation(const L1Config *cfg) {
                 int cb0_crc_ok = 1;
                 for (int r = 0; r < seg.C; r++) {
                     memset(soft_buf[0], 0, acsz * sizeof(double));
-                    nr_ldpc_rate_match_combine(soft_buf[0], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_combine(soft_buf[0], acsz, ldpc.bg, ldpc.Zc,
                                                 ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                                /*rv=*/0, Er[r], allllr[0] + roff0);
+                                                /*rv=*/0, Er[r], bps, allllr[0] + roff0);
                     roff0 += Er[r];
                     ldpc_decode(&ldpc, soft_buf[0], 25, decoded_cb[0]);
                     if (seg.C > 1 && !check_crc(decoded_cb[0], seg.Kprime, CRC24B))
@@ -3011,9 +3011,9 @@ void run_pdsch_cl_4port_simulation(const L1Config *cfg) {
                     int cb_crc_ok = 1;
                     for (int r = 0; r < seg.C; r++) {
                         memset(soft_buf[l], 0, acsz * sizeof(double));
-                        nr_ldpc_rate_match_combine(soft_buf[l], acsz, ldpc.bg, ldpc.Zc,
+                        nr_sch_rate_match_combine(soft_buf[l], acsz, ldpc.bg, ldpc.Zc,
                                                     ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                                    /*rv=*/0, Er[r], allllr[l] + roff);
+                                                    /*rv=*/0, Er[r], bps, allllr[l] + roff);
                         roff += Er[r];
                         ldpc_decode(&ldpc, soft_buf[l], 25, decoded_cb[l]);
                         if (seg.C > 1 && !check_crc(decoded_cb[l], seg.Kprime, CRC24B))
@@ -3056,9 +3056,9 @@ void run_pdsch_cl_4port_simulation(const L1Config *cfg) {
                 int cb0_crc_ok = 1;
                 for (int r = 0; r < seg.C; r++) {
                     memset(soft_buf[0], 0, acsz * sizeof(double));
-                    nr_ldpc_rate_match_combine(soft_buf[0], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_combine(soft_buf[0], acsz, ldpc.bg, ldpc.Zc,
                                                 ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                                /*rv=*/0, Er[r], allllr[0] + roff0);
+                                                /*rv=*/0, Er[r], bps, allllr[0] + roff0);
                     roff0 += Er[r];
                     ldpc_decode(&ldpc, soft_buf[0], 25, decoded_cb[0]);
                     if (seg.C > 1 && !check_crc(decoded_cb[0], seg.Kprime, CRC24B))
@@ -3103,9 +3103,9 @@ void run_pdsch_cl_4port_simulation(const L1Config *cfg) {
                     int cb_crc_ok = 1;
                     for (int r = 0; r < seg.C; r++) {
                         memset(soft_buf[l], 0, acsz * sizeof(double));
-                        nr_ldpc_rate_match_combine(soft_buf[l], acsz, ldpc.bg, ldpc.Zc,
+                        nr_sch_rate_match_combine(soft_buf[l], acsz, ldpc.bg, ldpc.Zc,
                                                     ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                                    /*rv=*/0, Er[r], allllr[l] + roff);
+                                                    /*rv=*/0, Er[r], bps, allllr[l] + roff);
                         roff += Er[r];
                         ldpc_decode(&ldpc, soft_buf[l], 25, decoded_cb[l]);
                         if (seg.C > 1 && !check_crc(decoded_cb[l], seg.Kprime, CRC24B))
@@ -3276,9 +3276,9 @@ void run_pdsch_cl_8port_simulation(const L1Config *cfg) {
                 for (int r = 0; r < seg.C; r++) {
                     const int *info = cb_bits[l] + (size_t)r * seg.Kprime;
                     ldpc_encode(&ldpc, info, coded[l]);
-                    nr_ldpc_rate_match_select(coded[l], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_select(coded[l], acsz, ldpc.bg, ldpc.Zc,
                                                ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                               /*rv=*/0, Er[r], rm[l][r]);
+                                               /*rv=*/0, Er[r], bps, rm[l][r]);
                 }
                 nr_seg_concat(&seg, (const int *const *)rm[l], Er, selbits[l]);
                 qam_modulate(selbits[l], E, mcs.modulation, sym[l]);
@@ -3314,9 +3314,9 @@ void run_pdsch_cl_8port_simulation(const L1Config *cfg) {
                 int cb0_crc_ok = 1;
                 for (int r = 0; r < seg.C; r++) {
                     memset(soft_buf[0], 0, acsz * sizeof(double));
-                    nr_ldpc_rate_match_combine(soft_buf[0], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_combine(soft_buf[0], acsz, ldpc.bg, ldpc.Zc,
                                                 ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                                /*rv=*/0, Er[r], allllr[0] + roff0);
+                                                /*rv=*/0, Er[r], bps, allllr[0] + roff0);
                     roff0 += Er[r];
                     ldpc_decode(&ldpc, soft_buf[0], 25, decoded_cb[0]);
                     if (seg.C > 1 && !check_crc(decoded_cb[0], seg.Kprime, CRC24B))
@@ -3363,9 +3363,9 @@ void run_pdsch_cl_8port_simulation(const L1Config *cfg) {
                     int cb_crc_ok = 1;
                     for (int r = 0; r < seg.C; r++) {
                         memset(soft_buf[l], 0, acsz * sizeof(double));
-                        nr_ldpc_rate_match_combine(soft_buf[l], acsz, ldpc.bg, ldpc.Zc,
+                        nr_sch_rate_match_combine(soft_buf[l], acsz, ldpc.bg, ldpc.Zc,
                                                     ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                                    /*rv=*/0, Er[r], allllr[l] + roff);
+                                                    /*rv=*/0, Er[r], bps, allllr[l] + roff);
                         roff += Er[r];
                         ldpc_decode(&ldpc, soft_buf[l], 25, decoded_cb[l]);
                         if (seg.C > 1 && !check_crc(decoded_cb[l], seg.Kprime, CRC24B))
@@ -3408,9 +3408,9 @@ void run_pdsch_cl_8port_simulation(const L1Config *cfg) {
                 int cb0_crc_ok = 1;
                 for (int r = 0; r < seg.C; r++) {
                     memset(soft_buf[0], 0, acsz * sizeof(double));
-                    nr_ldpc_rate_match_combine(soft_buf[0], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_combine(soft_buf[0], acsz, ldpc.bg, ldpc.Zc,
                                                 ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                                /*rv=*/0, Er[r], allllr[0] + roff0);
+                                                /*rv=*/0, Er[r], bps, allllr[0] + roff0);
                     roff0 += Er[r];
                     ldpc_decode(&ldpc, soft_buf[0], 25, decoded_cb[0]);
                     if (seg.C > 1 && !check_crc(decoded_cb[0], seg.Kprime, CRC24B))
@@ -3455,9 +3455,9 @@ void run_pdsch_cl_8port_simulation(const L1Config *cfg) {
                     int cb_crc_ok = 1;
                     for (int r = 0; r < seg.C; r++) {
                         memset(soft_buf[l], 0, acsz * sizeof(double));
-                        nr_ldpc_rate_match_combine(soft_buf[l], acsz, ldpc.bg, ldpc.Zc,
+                        nr_sch_rate_match_combine(soft_buf[l], acsz, ldpc.bg, ldpc.Zc,
                                                     ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                                    /*rv=*/0, Er[r], allllr[l] + roff);
+                                                    /*rv=*/0, Er[r], bps, allllr[l] + roff);
                         roff += Er[r];
                         ldpc_decode(&ldpc, soft_buf[l], 25, decoded_cb[l]);
                         if (seg.C > 1 && !check_crc(decoded_cb[l], seg.Kprime, CRC24B))
@@ -3748,9 +3748,9 @@ void run_pdsch_cl_4port_tdl_simulation(const L1Config *cfg) {
                 for (int r = 0; r < seg.C; r++) {
                     const int *info = cb_bits[l] + (size_t)r * seg.Kprime;
                     ldpc_encode(&ldpc, info, coded[l]);
-                    nr_ldpc_rate_match_select(coded[l], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_select(coded[l], acsz, ldpc.bg, ldpc.Zc,
                                                ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                               /*rv=*/0, Er[r], rm[l][r]);
+                                               /*rv=*/0, Er[r], bps, rm[l][r]);
                 }
                 nr_seg_concat(&seg, (const int *const *)rm[l], Er, selbits[l]);
                 qam_modulate(selbits[l], E, mcs.modulation, sym[l]);
@@ -3781,9 +3781,9 @@ void run_pdsch_cl_4port_tdl_simulation(const L1Config *cfg) {
                 int cb0_crc_ok = 1;
                 for (int r = 0; r < seg.C; r++) {
                     memset(soft_buf[0], 0, acsz * sizeof(double));
-                    nr_ldpc_rate_match_combine(soft_buf[0], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_combine(soft_buf[0], acsz, ldpc.bg, ldpc.Zc,
                                                 ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                                /*rv=*/0, Er[r], allllr[0] + roff0);
+                                                /*rv=*/0, Er[r], bps, allllr[0] + roff0);
                     roff0 += Er[r];
                     ldpc_decode(&ldpc, soft_buf[0], 25, decoded_cb[0]);
                     if (seg.C > 1 && !check_crc(decoded_cb[0], seg.Kprime, CRC24B))
@@ -3828,9 +3828,9 @@ void run_pdsch_cl_4port_tdl_simulation(const L1Config *cfg) {
                     int cb_crc_ok = 1;
                     for (int r = 0; r < seg.C; r++) {
                         memset(soft_buf[l], 0, acsz * sizeof(double));
-                        nr_ldpc_rate_match_combine(soft_buf[l], acsz, ldpc.bg, ldpc.Zc,
+                        nr_sch_rate_match_combine(soft_buf[l], acsz, ldpc.bg, ldpc.Zc,
                                                     ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                                    /*rv=*/0, Er[r], allllr[l] + roff);
+                                                    /*rv=*/0, Er[r], bps, allllr[l] + roff);
                         roff += Er[r];
                         ldpc_decode(&ldpc, soft_buf[l], 25, decoded_cb[l]);
                         if (seg.C > 1 && !check_crc(decoded_cb[l], seg.Kprime, CRC24B))
@@ -3868,9 +3868,9 @@ void run_pdsch_cl_4port_tdl_simulation(const L1Config *cfg) {
                 int cb0_crc_ok = 1;
                 for (int r = 0; r < seg.C; r++) {
                     memset(soft_buf[0], 0, acsz * sizeof(double));
-                    nr_ldpc_rate_match_combine(soft_buf[0], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_combine(soft_buf[0], acsz, ldpc.bg, ldpc.Zc,
                                                 ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                                /*rv=*/0, Er[r], allllr[0] + roff0);
+                                                /*rv=*/0, Er[r], bps, allllr[0] + roff0);
                     roff0 += Er[r];
                     ldpc_decode(&ldpc, soft_buf[0], 25, decoded_cb[0]);
                     if (seg.C > 1 && !check_crc(decoded_cb[0], seg.Kprime, CRC24B))
@@ -3912,9 +3912,9 @@ void run_pdsch_cl_4port_tdl_simulation(const L1Config *cfg) {
                     int cb_crc_ok = 1;
                     for (int r = 0; r < seg.C; r++) {
                         memset(soft_buf[l], 0, acsz * sizeof(double));
-                        nr_ldpc_rate_match_combine(soft_buf[l], acsz, ldpc.bg, ldpc.Zc,
+                        nr_sch_rate_match_combine(soft_buf[l], acsz, ldpc.bg, ldpc.Zc,
                                                     ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                                    /*rv=*/0, Er[r], allllr[l] + roff);
+                                                    /*rv=*/0, Er[r], bps, allllr[l] + roff);
                         roff += Er[r];
                         ldpc_decode(&ldpc, soft_buf[l], 25, decoded_cb[l]);
                         if (seg.C > 1 && !check_crc(decoded_cb[l], seg.Kprime, CRC24B))
@@ -4161,7 +4161,7 @@ void run_pdsch_cl_4port_harq_simulation(const L1Config *cfg) {
 
                 for (int l = 0; l < nCW; l++) {
                     for (int r = 0; r < seg.C; r++)
-                        nr_ldpc_rate_match_select(coded_cw[l][r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], rm[l][r]);
+                        nr_sch_rate_match_select(coded_cw[l][r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], bps, rm[l][r]);
                     nr_seg_concat(&seg, (const int *const *)rm[l], Er, selbits[l]);
                     qam_modulate(selbits[l], E, mcs.modulation, sym[l]);
                 }
@@ -4238,7 +4238,7 @@ void run_pdsch_cl_4port_harq_simulation(const L1Config *cfg) {
                     int roff = 0;
                     int cb_crc_ok = 1;
                     for (int r = 0; r < seg.C; r++) {
-                        nr_ldpc_rate_match_combine(soft_buf[l][r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], allllr[l] + roff);
+                        nr_sch_rate_match_combine(soft_buf[l][r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], bps, allllr[l] + roff);
                         roff += Er[r];
                         ldpc_decode(&ldpc, soft_buf[l][r], 25, decoded_cb[l]);
                         if (seg.C > 1 && !check_crc(decoded_cb[l], seg.Kprime, CRC24B)) cb_crc_ok = 0;
@@ -4532,9 +4532,9 @@ void run_pdsch_cl_8port_tdl_simulation(const L1Config *cfg) {
                 for (int r = 0; r < seg.C; r++) {
                     const int *info = cb_bits[l] + (size_t)r * seg.Kprime;
                     ldpc_encode(&ldpc, info, coded[l]);
-                    nr_ldpc_rate_match_select(coded[l], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_select(coded[l], acsz, ldpc.bg, ldpc.Zc,
                                                ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                               /*rv=*/0, Er[r], rm[l][r]);
+                                               /*rv=*/0, Er[r], bps, rm[l][r]);
                 }
                 nr_seg_concat(&seg, (const int *const *)rm[l], Er, selbits[l]);
                 qam_modulate(selbits[l], E, mcs.modulation, sym[l]);
@@ -4565,9 +4565,9 @@ void run_pdsch_cl_8port_tdl_simulation(const L1Config *cfg) {
                 int cb0_crc_ok = 1;
                 for (int r = 0; r < seg.C; r++) {
                     memset(soft_buf[0], 0, acsz * sizeof(double));
-                    nr_ldpc_rate_match_combine(soft_buf[0], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_combine(soft_buf[0], acsz, ldpc.bg, ldpc.Zc,
                                                 ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                                /*rv=*/0, Er[r], allllr[0] + roff0);
+                                                /*rv=*/0, Er[r], bps, allllr[0] + roff0);
                     roff0 += Er[r];
                     ldpc_decode(&ldpc, soft_buf[0], 25, decoded_cb[0]);
                     if (seg.C > 1 && !check_crc(decoded_cb[0], seg.Kprime, CRC24B))
@@ -4612,9 +4612,9 @@ void run_pdsch_cl_8port_tdl_simulation(const L1Config *cfg) {
                     int cb_crc_ok = 1;
                     for (int r = 0; r < seg.C; r++) {
                         memset(soft_buf[l], 0, acsz * sizeof(double));
-                        nr_ldpc_rate_match_combine(soft_buf[l], acsz, ldpc.bg, ldpc.Zc,
+                        nr_sch_rate_match_combine(soft_buf[l], acsz, ldpc.bg, ldpc.Zc,
                                                     ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                                    /*rv=*/0, Er[r], allllr[l] + roff);
+                                                    /*rv=*/0, Er[r], bps, allllr[l] + roff);
                         roff += Er[r];
                         ldpc_decode(&ldpc, soft_buf[l], 25, decoded_cb[l]);
                         if (seg.C > 1 && !check_crc(decoded_cb[l], seg.Kprime, CRC24B))
@@ -4652,9 +4652,9 @@ void run_pdsch_cl_8port_tdl_simulation(const L1Config *cfg) {
                 int cb0_crc_ok = 1;
                 for (int r = 0; r < seg.C; r++) {
                     memset(soft_buf[0], 0, acsz * sizeof(double));
-                    nr_ldpc_rate_match_combine(soft_buf[0], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_combine(soft_buf[0], acsz, ldpc.bg, ldpc.Zc,
                                                 ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                                /*rv=*/0, Er[r], allllr[0] + roff0);
+                                                /*rv=*/0, Er[r], bps, allllr[0] + roff0);
                     roff0 += Er[r];
                     ldpc_decode(&ldpc, soft_buf[0], 25, decoded_cb[0]);
                     if (seg.C > 1 && !check_crc(decoded_cb[0], seg.Kprime, CRC24B))
@@ -4696,9 +4696,9 @@ void run_pdsch_cl_8port_tdl_simulation(const L1Config *cfg) {
                     int cb_crc_ok = 1;
                     for (int r = 0; r < seg.C; r++) {
                         memset(soft_buf[l], 0, acsz * sizeof(double));
-                        nr_ldpc_rate_match_combine(soft_buf[l], acsz, ldpc.bg, ldpc.Zc,
+                        nr_sch_rate_match_combine(soft_buf[l], acsz, ldpc.bg, ldpc.Zc,
                                                     ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                                    /*rv=*/0, Er[r], allllr[l] + roff);
+                                                    /*rv=*/0, Er[r], bps, allllr[l] + roff);
                         roff += Er[r];
                         ldpc_decode(&ldpc, soft_buf[l], 25, decoded_cb[l]);
                         if (seg.C > 1 && !check_crc(decoded_cb[l], seg.Kprime, CRC24B))
@@ -4949,7 +4949,7 @@ void run_pdsch_cl_8port_harq_simulation(const L1Config *cfg) {
 
                 for (int l = 0; l < nCW; l++) {
                     for (int r = 0; r < seg.C; r++)
-                        nr_ldpc_rate_match_select(coded_cw[l][r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], rm[l][r]);
+                        nr_sch_rate_match_select(coded_cw[l][r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], bps, rm[l][r]);
                     nr_seg_concat(&seg, (const int *const *)rm[l], Er, selbits[l]);
                     qam_modulate(selbits[l], E, mcs.modulation, sym[l]);
                 }
@@ -5026,7 +5026,7 @@ void run_pdsch_cl_8port_harq_simulation(const L1Config *cfg) {
                     int roff = 0;
                     int cb_crc_ok = 1;
                     for (int r = 0; r < seg.C; r++) {
-                        nr_ldpc_rate_match_combine(soft_buf[l][r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], allllr[l] + roff);
+                        nr_sch_rate_match_combine(soft_buf[l][r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], bps, allllr[l] + roff);
                         roff += Er[r];
                         ldpc_decode(&ldpc, soft_buf[l][r], 25, decoded_cb[l]);
                         if (seg.C > 1 && !check_crc(decoded_cb[l], seg.Kprime, CRC24B)) cb_crc_ok = 0;
@@ -5208,9 +5208,9 @@ void run_pdsch_cl_32port_simulation(const L1Config *cfg) {
                 for (int r = 0; r < seg.C; r++) {
                     const int *info = cb_bits[c] + (size_t)r * seg.Kprime;
                     ldpc_encode(&ldpc, info, coded[c]);
-                    nr_ldpc_rate_match_select(coded[c], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_select(coded[c], acsz, ldpc.bg, ldpc.Zc,
                                                ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                               /*rv=*/0, Er[r], rm[c][r]);
+                                               /*rv=*/0, Er[r], bps, rm[c][r]);
                 }
                 nr_seg_concat(&seg, (const int *const *)rm[c], Er, selbits[c]);
                 qam_modulate(selbits[c], E, mcs.modulation, sym[c]);
@@ -5308,9 +5308,9 @@ void run_pdsch_cl_32port_simulation(const L1Config *cfg) {
                 int cb_crc_ok = 1;
                 for (int r = 0; r < seg.C; r++) {
                     memset(soft_buf[c], 0, acsz * sizeof(double));
-                    nr_ldpc_rate_match_combine(soft_buf[c], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_combine(soft_buf[c], acsz, ldpc.bg, ldpc.Zc,
                                                 ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                                /*rv=*/0, Er[r], allllr[c] + roff);
+                                                /*rv=*/0, Er[r], bps, allllr[c] + roff);
                     roff += Er[r];
                     ldpc_decode(&ldpc, soft_buf[c], 25, decoded_cb[c]);
                     if (seg.C > 1 && !check_crc(decoded_cb[c], seg.Kprime, CRC24B))
@@ -5467,9 +5467,9 @@ void run_pdsch_eigen_16port_simulation(const L1Config *cfg) {
                 for (int r = 0; r < seg.C; r++) {
                     const int *info = cb_bits[c] + (size_t)r * seg.Kprime;
                     ldpc_encode(&ldpc, info, coded[c]);
-                    nr_ldpc_rate_match_select(coded[c], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_select(coded[c], acsz, ldpc.bg, ldpc.Zc,
                                                ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                               /*rv=*/0, Er[r], rm[c][r]);
+                                               /*rv=*/0, Er[r], bps, rm[c][r]);
                 }
                 nr_seg_concat(&seg, (const int *const *)rm[c], Er, selbits[c]);
                 qam_modulate(selbits[c], E, mcs.modulation, sym[c]);
@@ -5548,9 +5548,9 @@ void run_pdsch_eigen_16port_simulation(const L1Config *cfg) {
                 int cb_crc_ok = 1;
                 for (int r = 0; r < seg.C; r++) {
                     memset(soft_buf[c], 0, acsz * sizeof(double));
-                    nr_ldpc_rate_match_combine(soft_buf[c], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_combine(soft_buf[c], acsz, ldpc.bg, ldpc.Zc,
                                                 ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                                /*rv=*/0, Er[r], allllr[c] + roff);
+                                                /*rv=*/0, Er[r], bps, allllr[c] + roff);
                     roff += Er[r];
                     ldpc_decode(&ldpc, soft_buf[c], 25, decoded_cb[c]);
                     if (seg.C > 1 && !check_crc(decoded_cb[c], seg.Kprime, CRC24B))
@@ -5852,9 +5852,9 @@ void run_pdsch_eigen_16port_tdl_simulation(const L1Config *cfg) {
                 for (int r = 0; r < seg.C; r++) {
                     const int *info = cb_bits[c] + (size_t)r * seg.Kprime;
                     ldpc_encode(&ldpc, info, coded[c]);
-                    nr_ldpc_rate_match_select(coded[c], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_select(coded[c], acsz, ldpc.bg, ldpc.Zc,
                                                ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                               /*rv=*/0, Er[r], rm[c][r]);
+                                               /*rv=*/0, Er[r], bps, rm[c][r]);
                 }
                 nr_seg_concat(&seg, (const int *const *)rm[c], Er, selbits[c]);
                 qam_modulate(selbits[c], E, mcs.modulation, sym[c]);
@@ -5940,9 +5940,9 @@ void run_pdsch_eigen_16port_tdl_simulation(const L1Config *cfg) {
                 int cb_crc_ok = 1;
                 for (int r = 0; r < seg.C; r++) {
                     memset(soft_buf[c], 0, acsz * sizeof(double));
-                    nr_ldpc_rate_match_combine(soft_buf[c], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_combine(soft_buf[c], acsz, ldpc.bg, ldpc.Zc,
                                                 ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                                /*rv=*/0, Er[r], allllr[c] + roff);
+                                                /*rv=*/0, Er[r], bps, allllr[c] + roff);
                     roff += Er[r];
                     ldpc_decode(&ldpc, soft_buf[c], 25, decoded_cb[c]);
                     if (seg.C > 1 && !check_crc(decoded_cb[c], seg.Kprime, CRC24B))
@@ -6346,9 +6346,9 @@ void run_pdsch_eigen_16port_subband_simulation(const L1Config *cfg) {
                 for (int r = 0; r < seg.C; r++) {
                     const int *info = cb_bits[c] + (size_t)r * seg.Kprime;
                     ldpc_encode(&ldpc, info, coded[c]);
-                    nr_ldpc_rate_match_select(coded[c], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_select(coded[c], acsz, ldpc.bg, ldpc.Zc,
                                                ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                               /*rv=*/0, Er[r], rm[c][r]);
+                                               /*rv=*/0, Er[r], bps, rm[c][r]);
                 }
                 nr_seg_concat(&seg, (const int *const *)rm[c], Er, selbits[c]);
                 qam_modulate(selbits[c], E, mcs.modulation, sym[c]);
@@ -6438,9 +6438,9 @@ void run_pdsch_eigen_16port_subband_simulation(const L1Config *cfg) {
                 int cb_crc_ok = 1;
                 for (int r = 0; r < seg.C; r++) {
                     memset(soft_buf[c], 0, acsz * sizeof(double));
-                    nr_ldpc_rate_match_combine(soft_buf[c], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_combine(soft_buf[c], acsz, ldpc.bg, ldpc.Zc,
                                                 ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                                /*rv=*/0, Er[r], allllr[c] + roff);
+                                                /*rv=*/0, Er[r], bps, allllr[c] + roff);
                     roff += Er[r];
                     ldpc_decode(&ldpc, soft_buf[c], 25, decoded_cb[c]);
                     if (seg.C > 1 && !check_crc(decoded_cb[c], seg.Kprime, CRC24B))
@@ -6729,9 +6729,9 @@ void run_pdsch_cl_32port_tdl_simulation(const L1Config *cfg) {
                 for (int r = 0; r < seg.C; r++) {
                     const int *info = cb_bits[c] + (size_t)r * seg.Kprime;
                     ldpc_encode(&ldpc, info, coded[c]);
-                    nr_ldpc_rate_match_select(coded[c], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_select(coded[c], acsz, ldpc.bg, ldpc.Zc,
                                                ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                               /*rv=*/0, Er[r], rm[c][r]);
+                                               /*rv=*/0, Er[r], bps, rm[c][r]);
                 }
                 nr_seg_concat(&seg, (const int *const *)rm[c], Er, selbits[c]);
                 qam_modulate(selbits[c], E, mcs.modulation, sym[c]);
@@ -6826,9 +6826,9 @@ void run_pdsch_cl_32port_tdl_simulation(const L1Config *cfg) {
                 int cb_crc_ok = 1;
                 for (int r = 0; r < seg.C; r++) {
                     memset(soft_buf[c], 0, acsz * sizeof(double));
-                    nr_ldpc_rate_match_combine(soft_buf[c], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_combine(soft_buf[c], acsz, ldpc.bg, ldpc.Zc,
                                                 ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                                /*rv=*/0, Er[r], allllr[c] + roff);
+                                                /*rv=*/0, Er[r], bps, allllr[c] + roff);
                     roff += Er[r];
                     ldpc_decode(&ldpc, soft_buf[c], 25, decoded_cb[c]);
                     if (seg.C > 1 && !check_crc(decoded_cb[c], seg.Kprime, CRC24B))
@@ -7069,7 +7069,7 @@ void run_pdsch_cl_32port_harq_simulation(const L1Config *cfg) {
 
                 for (int l = 0; l < nCW; l++) {
                     for (int r = 0; r < seg.C; r++)
-                        nr_ldpc_rate_match_select(coded_cw[l][r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], rm[l][r]);
+                        nr_sch_rate_match_select(coded_cw[l][r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], bps, rm[l][r]);
                     nr_seg_concat(&seg, (const int *const *)rm[l], Er, selbits[l]);
                     qam_modulate(selbits[l], E, mcs.modulation, sym[l]);
                 }
@@ -7167,7 +7167,7 @@ void run_pdsch_cl_32port_harq_simulation(const L1Config *cfg) {
                     int roff = 0;
                     int cb_crc_ok = 1;
                     for (int r = 0; r < seg.C; r++) {
-                        nr_ldpc_rate_match_combine(soft_buf[l][r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], allllr[l] + roff);
+                        nr_sch_rate_match_combine(soft_buf[l][r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], bps, allllr[l] + roff);
                         roff += Er[r];
                         ldpc_decode(&ldpc, soft_buf[l][r], 25, decoded_cb[l]);
                         if (seg.C > 1 && !check_crc(decoded_cb[l], seg.Kprime, CRC24B)) cb_crc_ok = 0;
@@ -7330,9 +7330,9 @@ void run_pdsch_olla_simulation(const L1Config *cfg) {
             for (int r = 0; r < seg.C; r++) {
                 const int *info = cb_bits + (size_t)r * seg.Kprime;
                 ldpc_encode(&ldpc, info, coded);
-                nr_ldpc_rate_match_select(coded, acsz, ldpc.bg, ldpc.Zc,
+                nr_sch_rate_match_select(coded, acsz, ldpc.bg, ldpc.Zc,
                                            ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                           /*rv=*/0, Er[r], rm[r]);
+                                           /*rv=*/0, Er[r], bps, rm[r]);
             }
             nr_seg_concat(&seg, (const int *const *)rm, Er, selbits);
             qam_modulate(selbits, E, mcs.modulation, sym);
@@ -7346,9 +7346,9 @@ void run_pdsch_olla_simulation(const L1Config *cfg) {
             int cb_crc_ok = 1;
             for (int r = 0; r < seg.C; r++) {
                 memset(soft_buf, 0, acsz * sizeof(double));
-                nr_ldpc_rate_match_combine(soft_buf, acsz, ldpc.bg, ldpc.Zc,
+                nr_sch_rate_match_combine(soft_buf, acsz, ldpc.bg, ldpc.Zc,
                                             ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                            /*rv=*/0, Er[r], allllr + roff);
+                                            /*rv=*/0, Er[r], bps, allllr + roff);
                 roff += Er[r];
                 ldpc_decode(&ldpc, soft_buf, 25, decoded_cb);
                 if (seg.C > 1 && !check_crc(decoded_cb, seg.Kprime, CRC24B))
@@ -7495,9 +7495,9 @@ void run_pdsch_olla_simo_mrc_simulation(const L1Config *cfg) {
             for (int r = 0; r < seg.C; r++) {
                 const int *info = cb_bits + (size_t)r * seg.Kprime;
                 ldpc_encode(&ldpc, info, coded);
-                nr_ldpc_rate_match_select(coded, acsz, ldpc.bg, ldpc.Zc,
+                nr_sch_rate_match_select(coded, acsz, ldpc.bg, ldpc.Zc,
                                            ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                           /*rv=*/0, Er[r], rm[r]);
+                                           /*rv=*/0, Er[r], bps, rm[r]);
             }
             nr_seg_concat(&seg, (const int *const *)rm, Er, selbits);
             qam_modulate(selbits, E, mcs.modulation, sym);
@@ -7524,9 +7524,9 @@ void run_pdsch_olla_simo_mrc_simulation(const L1Config *cfg) {
             int cb_crc_ok = 1;
             for (int r = 0; r < seg.C; r++) {
                 memset(soft_buf, 0, acsz * sizeof(double));
-                nr_ldpc_rate_match_combine(soft_buf, acsz, ldpc.bg, ldpc.Zc,
+                nr_sch_rate_match_combine(soft_buf, acsz, ldpc.bg, ldpc.Zc,
                                             ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                            /*rv=*/0, Er[r], allllr + roff);
+                                            /*rv=*/0, Er[r], bps, allllr + roff);
                 roff += Er[r];
                 ldpc_decode(&ldpc, soft_buf, 25, decoded_cb);
                 if (seg.C > 1 && !check_crc(decoded_cb, seg.Kprime, CRC24B))
@@ -7676,12 +7676,12 @@ void run_pdsch_olla_sm2x2_simulation(const L1Config *cfg) {
                 const int *infoB = cb_bitsB + (size_t)r * seg.Kprime;
                 ldpc_encode(&ldpc, infoA, codedA);
                 ldpc_encode(&ldpc, infoB, codedB);
-                nr_ldpc_rate_match_select(codedA, acsz, ldpc.bg, ldpc.Zc,
+                nr_sch_rate_match_select(codedA, acsz, ldpc.bg, ldpc.Zc,
                                            ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                           /*rv=*/0, Er[r], rmA[r]);
-                nr_ldpc_rate_match_select(codedB, acsz, ldpc.bg, ldpc.Zc,
+                                           /*rv=*/0, Er[r], bps, rmA[r]);
+                nr_sch_rate_match_select(codedB, acsz, ldpc.bg, ldpc.Zc,
                                            ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                           /*rv=*/0, Er[r], rmB[r]);
+                                           /*rv=*/0, Er[r], bps, rmB[r]);
             }
             nr_seg_concat(&seg, (const int *const *)rmA, Er, selbitsA);
             nr_seg_concat(&seg, (const int *const *)rmB, Er, selbitsB);
@@ -7714,12 +7714,12 @@ void run_pdsch_olla_sm2x2_simulation(const L1Config *cfg) {
             for (int r = 0; r < seg.C; r++) {
                 memset(soft_bufA, 0, acsz*sizeof(double));
                 memset(soft_bufB, 0, acsz*sizeof(double));
-                nr_ldpc_rate_match_combine(soft_bufA, acsz, ldpc.bg, ldpc.Zc,
+                nr_sch_rate_match_combine(soft_bufA, acsz, ldpc.bg, ldpc.Zc,
                                             ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                            /*rv=*/0, Er[r], allllrA + roffA);
-                nr_ldpc_rate_match_combine(soft_bufB, acsz, ldpc.bg, ldpc.Zc,
+                                            /*rv=*/0, Er[r], bps, allllrA + roffA);
+                nr_sch_rate_match_combine(soft_bufB, acsz, ldpc.bg, ldpc.Zc,
                                             ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                            /*rv=*/0, Er[r], allllrB + roffB);
+                                            /*rv=*/0, Er[r], bps, allllrB + roffB);
                 roffA += Er[r]; roffB += Er[r];
 
                 ldpc_decode(&ldpc, soft_bufA, 25, decodedA_cb);
@@ -7876,9 +7876,9 @@ void run_pdsch_olla_sm4x4_simulation(const L1Config *cfg) {
                 for (int r = 0; r < seg.C; r++) {
                     const int *info = cb_bits[l] + (size_t)r * seg.Kprime;
                     ldpc_encode(&ldpc, info, coded[l]);
-                    nr_ldpc_rate_match_select(coded[l], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_select(coded[l], acsz, ldpc.bg, ldpc.Zc,
                                                ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                               /*rv=*/0, Er[r], rm[l][r]);
+                                               /*rv=*/0, Er[r], bps, rm[l][r]);
                 }
                 nr_seg_concat(&seg, (const int *const *)rm[l], Er, selbits[l]);
                 qam_modulate(selbits[l], E, mcs.modulation, syms[l]);
@@ -7916,9 +7916,9 @@ void run_pdsch_olla_sm4x4_simulation(const L1Config *cfg) {
                 int cb_crc_ok = 1;
                 for (int r = 0; r < seg.C; r++) {
                     memset(soft_buf[l], 0, acsz*sizeof(double));
-                    nr_ldpc_rate_match_combine(soft_buf[l], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_combine(soft_buf[l], acsz, ldpc.bg, ldpc.Zc,
                                                 ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                                /*rv=*/0, Er[r], allllr[l] + roff);
+                                                /*rv=*/0, Er[r], bps, allllr[l] + roff);
                     roff += Er[r];
                     ldpc_decode(&ldpc, soft_buf[l], 25, decoded_cb[l]);
                     if (seg.C > 1 && !check_crc(decoded_cb[l], seg.Kprime, CRC24B)) cb_crc_ok = 0;
@@ -8104,9 +8104,9 @@ void run_pdsch_olla_cl_4port_simulation(const L1Config *cfg) {
                 for (int r = 0; r < seg.C; r++) {
                     const int *info = cb_bits[l] + (size_t)r * seg.Kprime;
                     ldpc_encode(&ldpc, info, coded[l]);
-                    nr_ldpc_rate_match_select(coded[l], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_select(coded[l], acsz, ldpc.bg, ldpc.Zc,
                                                ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                               /*rv=*/0, Er[r], rm[l][r]);
+                                               /*rv=*/0, Er[r], bps, rm[l][r]);
                 }
                 nr_seg_concat(&seg, (const int *const *)rm[l], Er, selbits[l]);
                 qam_modulate(selbits[l], E, mcs.modulation, sym[l]);
@@ -8170,9 +8170,9 @@ void run_pdsch_olla_cl_4port_simulation(const L1Config *cfg) {
                 int cb_crc_ok = 1;
                 for (int r = 0; r < seg.C; r++) {
                     memset(soft_buf[l], 0, acsz*sizeof(double));
-                    nr_ldpc_rate_match_combine(soft_buf[l], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_combine(soft_buf[l], acsz, ldpc.bg, ldpc.Zc,
                                                 ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                                /*rv=*/0, Er[r], allllr[l] + roff);
+                                                /*rv=*/0, Er[r], bps, allllr[l] + roff);
                     roff += Er[r];
                     ldpc_decode(&ldpc, soft_buf[l], 25, decoded_cb[l]);
                     if (seg.C > 1 && !check_crc(decoded_cb[l], seg.Kprime, CRC24B)) cb_crc_ok = 0;
@@ -8332,9 +8332,9 @@ void run_pdsch_olla_cl_8port_simulation(const L1Config *cfg) {
                 for (int r = 0; r < seg.C; r++) {
                     const int *info = cb_bits[l] + (size_t)r * seg.Kprime;
                     ldpc_encode(&ldpc, info, coded[l]);
-                    nr_ldpc_rate_match_select(coded[l], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_select(coded[l], acsz, ldpc.bg, ldpc.Zc,
                                                ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                               /*rv=*/0, Er[r], rm[l][r]);
+                                               /*rv=*/0, Er[r], bps, rm[l][r]);
                 }
                 nr_seg_concat(&seg, (const int *const *)rm[l], Er, selbits[l]);
                 qam_modulate(selbits[l], E, mcs.modulation, sym[l]);
@@ -8398,9 +8398,9 @@ void run_pdsch_olla_cl_8port_simulation(const L1Config *cfg) {
                 int cb_crc_ok = 1;
                 for (int r = 0; r < seg.C; r++) {
                     memset(soft_buf[l], 0, acsz*sizeof(double));
-                    nr_ldpc_rate_match_combine(soft_buf[l], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_combine(soft_buf[l], acsz, ldpc.bg, ldpc.Zc,
                                                 ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                                /*rv=*/0, Er[r], allllr[l] + roff);
+                                                /*rv=*/0, Er[r], bps, allllr[l] + roff);
                     roff += Er[r];
                     ldpc_decode(&ldpc, soft_buf[l], 25, decoded_cb[l]);
                     if (seg.C > 1 && !check_crc(decoded_cb[l], seg.Kprime, CRC24B)) cb_crc_ok = 0;
@@ -8557,9 +8557,9 @@ void run_pdsch_olla_cl_32port_simulation(const L1Config *cfg) {
                 for (int r = 0; r < seg.C; r++) {
                     const int *info = cb_bits[l] + (size_t)r * seg.Kprime;
                     ldpc_encode(&ldpc, info, coded[l]);
-                    nr_ldpc_rate_match_select(coded[l], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_select(coded[l], acsz, ldpc.bg, ldpc.Zc,
                                                ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                               /*rv=*/0, Er[r], rm[l][r]);
+                                               /*rv=*/0, Er[r], bps, rm[l][r]);
                 }
                 nr_seg_concat(&seg, (const int *const *)rm[l], Er, selbits[l]);
                 qam_modulate(selbits[l], E, mcs.modulation, sym[l]);
@@ -8659,9 +8659,9 @@ void run_pdsch_olla_cl_32port_simulation(const L1Config *cfg) {
                 int cb_crc_ok = 1;
                 for (int r = 0; r < seg.C; r++) {
                     memset(soft_buf[l], 0, acsz*sizeof(double));
-                    nr_ldpc_rate_match_combine(soft_buf[l], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_combine(soft_buf[l], acsz, ldpc.bg, ldpc.Zc,
                                                 ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                                /*rv=*/0, Er[r], allllr[l] + roff);
+                                                /*rv=*/0, Er[r], bps, allllr[l] + roff);
                     roff += Er[r];
                     ldpc_decode(&ldpc, soft_buf[l], 25, decoded_cb[l]);
                     if (seg.C > 1 && !check_crc(decoded_cb[l], seg.Kprime, CRC24B)) cb_crc_ok = 0;
@@ -8829,9 +8829,9 @@ void run_pdsch_mumimo_simulation(const L1Config *cfg) {
                 for (int r = 0; r < seg.C; r++) {
                     const int *info = cb_bits[u] + (size_t)r * seg.Kprime;
                     ldpc_encode(&ldpc, info, coded[u]);
-                    nr_ldpc_rate_match_select(coded[u], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_select(coded[u], acsz, ldpc.bg, ldpc.Zc,
                                                ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                               /*rv=*/0, Er[r], rm[u][r]);
+                                               /*rv=*/0, Er[r], bps, rm[u][r]);
                 }
                 nr_seg_concat(&seg, (const int *const *)rm[u], Er, selbits[u]);
                 qam_modulate(selbits[u], E, mcs.modulation, sym[u]);
@@ -8857,9 +8857,9 @@ void run_pdsch_mumimo_simulation(const L1Config *cfg) {
                 cb_crc_ok[u] = 1;
                 for (int r = 0; r < seg.C; r++) {
                     memset(soft_buf[u], 0, acsz * sizeof(double));
-                    nr_ldpc_rate_match_combine(soft_buf[u], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_combine(soft_buf[u], acsz, ldpc.bg, ldpc.Zc,
                                                 ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                                /*rv=*/0, Er[r], allllr[u] + roff);
+                                                /*rv=*/0, Er[r], bps, allllr[u] + roff);
                     roff += Er[r];
                     ldpc_decode(&ldpc, soft_buf[u], 25, decoded_cb[u]);
                     if (seg.C > 1 && !check_crc(decoded_cb[u], seg.Kprime, CRC24B))
@@ -9022,9 +9022,9 @@ void run_pdsch_mumimo_tdl_simulation(const L1Config *cfg) {
                 for (int r = 0; r < seg.C; r++) {
                     const int *info = cb_bits[u] + (size_t)r * seg.Kprime;
                     ldpc_encode(&ldpc, info, coded[u]);
-                    nr_ldpc_rate_match_select(coded[u], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_select(coded[u], acsz, ldpc.bg, ldpc.Zc,
                                                ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                               /*rv=*/0, Er[r], rm[u][r]);
+                                               /*rv=*/0, Er[r], bps, rm[u][r]);
                 }
                 nr_seg_concat(&seg, (const int *const *)rm[u], Er, selbits[u]);
                 qam_modulate(selbits[u], E, mcs.modulation, sym[u]);
@@ -9060,9 +9060,9 @@ void run_pdsch_mumimo_tdl_simulation(const L1Config *cfg) {
                 cb_crc_ok[u] = 1;
                 for (int r = 0; r < seg.C; r++) {
                     memset(soft_buf[u], 0, acsz * sizeof(double));
-                    nr_ldpc_rate_match_combine(soft_buf[u], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_combine(soft_buf[u], acsz, ldpc.bg, ldpc.Zc,
                                                 ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                                /*rv=*/0, Er[r], allllr[u] + roff);
+                                                /*rv=*/0, Er[r], bps, allllr[u] + roff);
                     roff += Er[r];
                     ldpc_decode(&ldpc, soft_buf[u], 25, decoded_cb[u]);
                     if (seg.C > 1 && !check_crc(decoded_cb[u], seg.Kprime, CRC24B))
@@ -9118,8 +9118,8 @@ void run_pdsch_mumimo_tdl_simulation(const L1Config *cfg) {
  * "같은 재전송 occasion을 공유"단순화 — 매 attempt마다 K명 모두
  * 재전송, 전부 CRC 통과해야 종료), ZF-BF 프리코더는 매 attempt(채널
  * 재드로우 시점)마다, TDL이면 매 RE마다 다시 설계한다. `nr_rate_matching.c`의
- * TS 38.212 5.4.2.1 표준 BG/Zc 인지 circular buffer(`nr_ldpc_rate_match_select`/
- * `nr_ldpc_rate_match_combine`, 2026-09-02)를 그대로 재사용 — CL_32PORT HARQ와
+ * TS 38.212 5.4.2.1 표준 BG/Zc 인지 circular buffer(`nr_sch_rate_match_select`/
+ * `nr_sch_rate_match_combine`, 2026-09-02)를 그대로 재사용 — CL_32PORT HARQ와
  * 동일한 mother-code/RV 순환 패턴.
  * ─────────────────────────────────────────────────────────────────────────── */
 void run_pdsch_mumimo_harq_simulation(const L1Config *cfg) {
@@ -9245,7 +9245,7 @@ void run_pdsch_mumimo_harq_simulation(const L1Config *cfg) {
 
                 for (int u = 0; u < MUMIMO_K; u++) {
                     for (int r = 0; r < seg.C; r++)
-                        nr_ldpc_rate_match_select(coded_cw[u][r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], rm[u][r]);
+                        nr_sch_rate_match_select(coded_cw[u][r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], bps, rm[u][r]);
                     nr_seg_concat(&seg, (const int *const *)rm[u], Er, selbits[u]);
                     qam_modulate(selbits[u], E, mcs.modulation, sym[u]);
                 }
@@ -9292,7 +9292,7 @@ void run_pdsch_mumimo_harq_simulation(const L1Config *cfg) {
                     int roff = 0;
                     int cb_crc_ok = 1;
                     for (int r = 0; r < seg.C; r++) {
-                        nr_ldpc_rate_match_combine(soft_buf[u][r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], allllr[u] + roff);
+                        nr_sch_rate_match_combine(soft_buf[u][r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], bps, allllr[u] + roff);
                         roff += Er[r];
                         ldpc_decode(&ldpc, soft_buf[u][r], 25, decoded_cb[u]);
                         if (seg.C > 1 && !check_crc(decoded_cb[u], seg.Kprime, CRC24B)) cb_crc_ok = 0;
@@ -9469,9 +9469,9 @@ void run_pdsch_beam_mgmt_simulation(const L1Config *cfg) {
                 for (int r = 0; r < seg.C; r++) {
                     const int *info = cb_bits[s] + (size_t)r * seg.Kprime;
                     ldpc_encode(&ldpc, info, coded[s]);
-                    nr_ldpc_rate_match_select(coded[s], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_select(coded[s], acsz, ldpc.bg, ldpc.Zc,
                                                ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                               /*rv=*/0, Er[r], rm[s][r]);
+                                               /*rv=*/0, Er[r], bps, rm[s][r]);
                 }
                 nr_seg_concat(&seg, (const int *const *)rm[s], Er, selbits[s]);
                 qam_modulate(selbits[s], E, mcs.modulation, sym[s]);
@@ -9489,9 +9489,9 @@ void run_pdsch_beam_mgmt_simulation(const L1Config *cfg) {
                 int cb_crc_ok = 1;
                 for (int r = 0; r < seg.C; r++) {
                     memset(soft_buf[s], 0, acsz * sizeof(double));
-                    nr_ldpc_rate_match_combine(soft_buf[s], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_combine(soft_buf[s], acsz, ldpc.bg, ldpc.Zc,
                                                 ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                                /*rv=*/0, Er[r], allllr[s] + roff);
+                                                /*rv=*/0, Er[r], bps, allllr[s] + roff);
                     roff += Er[r];
                     ldpc_decode(&ldpc, soft_buf[s], 25, decoded_cb[s]);
                     if (seg.C > 1 && !check_crc(decoded_cb[s], seg.Kprime, CRC24B))
@@ -9699,9 +9699,9 @@ void run_pdsch_beam_mgmt_p123_simulation(const L1Config *cfg) {
                 for (int r = 0; r < seg.C; r++) {
                     const int *info = cb_bits[s] + (size_t)r * seg.Kprime;
                     ldpc_encode(&ldpc, info, coded[s]);
-                    nr_ldpc_rate_match_select(coded[s], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_select(coded[s], acsz, ldpc.bg, ldpc.Zc,
                                                ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                               /*rv=*/0, Er[r], rm[s][r]);
+                                               /*rv=*/0, Er[r], bps, rm[s][r]);
                 }
                 nr_seg_concat(&seg, (const int *const *)rm[s], Er, selbits[s]);
                 qam_modulate(selbits[s], E, mcs.modulation, sym[s]);
@@ -9719,9 +9719,9 @@ void run_pdsch_beam_mgmt_p123_simulation(const L1Config *cfg) {
                 int cb_crc_ok = 1;
                 for (int r = 0; r < seg.C; r++) {
                     memset(soft_buf[s], 0, acsz * sizeof(double));
-                    nr_ldpc_rate_match_combine(soft_buf[s], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_combine(soft_buf[s], acsz, ldpc.bg, ldpc.Zc,
                                                 ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                                /*rv=*/0, Er[r], allllr[s] + roff);
+                                                /*rv=*/0, Er[r], bps, allllr[s] + roff);
                     roff += Er[r];
                     ldpc_decode(&ldpc, soft_buf[s], 25, decoded_cb[s]);
                     if (seg.C > 1 && !check_crc(decoded_cb[s], seg.Kprime, CRC24B))
@@ -9905,9 +9905,9 @@ void run_pdsch_beam_mgmt_tdl_simulation(const L1Config *cfg) {
                 for (int r = 0; r < seg.C; r++) {
                     const int *info = cb_bits[s] + (size_t)r * seg.Kprime;
                     ldpc_encode(&ldpc, info, coded[s]);
-                    nr_ldpc_rate_match_select(coded[s], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_select(coded[s], acsz, ldpc.bg, ldpc.Zc,
                                                ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                               /*rv=*/0, Er[r], rm[s][r]);
+                                               /*rv=*/0, Er[r], bps, rm[s][r]);
                 }
                 nr_seg_concat(&seg, (const int *const *)rm[s], Er, selbits[s]);
                 qam_modulate(selbits[s], E, mcs.modulation, sym[s]);
@@ -9927,9 +9927,9 @@ void run_pdsch_beam_mgmt_tdl_simulation(const L1Config *cfg) {
                 int cb_crc_ok = 1;
                 for (int r = 0; r < seg.C; r++) {
                     memset(soft_buf[s], 0, acsz * sizeof(double));
-                    nr_ldpc_rate_match_combine(soft_buf[s], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_combine(soft_buf[s], acsz, ldpc.bg, ldpc.Zc,
                                                 ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                                /*rv=*/0, Er[r], allllr[s] + roff);
+                                                /*rv=*/0, Er[r], bps, allllr[s] + roff);
                     roff += Er[r];
                     ldpc_decode(&ldpc, soft_buf[s], 25, decoded_cb[s]);
                     if (seg.C > 1 && !check_crc(decoded_cb[s], seg.Kprime, CRC24B))
@@ -10133,7 +10133,7 @@ void run_pdsch_beam_mgmt_harq_simulation(const L1Config *cfg) {
 
                 for (int s = 0; s < 2; s++) {
                     for (int r = 0; r < seg.C; r++)
-                        nr_ldpc_rate_match_select(coded_cw[s][r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], rm[s][r]);
+                        nr_sch_rate_match_select(coded_cw[s][r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], bps, rm[s][r]);
                     nr_seg_concat(&seg, (const int *const *)rm[s], Er, selbits[s]);
                     qam_modulate(selbits[s], E, mcs.modulation, sym[s]);
                 }
@@ -10160,7 +10160,7 @@ void run_pdsch_beam_mgmt_harq_simulation(const L1Config *cfg) {
                     int roff = 0;
                     int cb_crc_ok = 1;
                     for (int r = 0; r < seg.C; r++) {
-                        nr_ldpc_rate_match_combine(soft_buf[s][r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], allllr[s] + roff);
+                        nr_sch_rate_match_combine(soft_buf[s][r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], bps, allllr[s] + roff);
                         roff += Er[r];
                         ldpc_decode(&ldpc, soft_buf[s][r], 25, decoded_cb[s]);
                         if (seg.C > 1 && !check_crc(decoded_cb[s], seg.Kprime, CRC24B)) cb_crc_ok = 0;
@@ -10390,9 +10390,9 @@ void run_pdsch_beam_mgmt_p123_tdl_simulation(const L1Config *cfg) {
                 for (int r = 0; r < seg.C; r++) {
                     const int *info = cb_bits[s] + (size_t)r * seg.Kprime;
                     ldpc_encode(&ldpc, info, coded[s]);
-                    nr_ldpc_rate_match_select(coded[s], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_select(coded[s], acsz, ldpc.bg, ldpc.Zc,
                                                ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                               /*rv=*/0, Er[r], rm[s][r]);
+                                               /*rv=*/0, Er[r], bps, rm[s][r]);
                 }
                 nr_seg_concat(&seg, (const int *const *)rm[s], Er, selbits[s]);
                 qam_modulate(selbits[s], E, mcs.modulation, sym[s]);
@@ -10412,9 +10412,9 @@ void run_pdsch_beam_mgmt_p123_tdl_simulation(const L1Config *cfg) {
                 int cb_crc_ok = 1;
                 for (int r = 0; r < seg.C; r++) {
                     memset(soft_buf[s], 0, acsz * sizeof(double));
-                    nr_ldpc_rate_match_combine(soft_buf[s], acsz, ldpc.bg, ldpc.Zc,
+                    nr_sch_rate_match_combine(soft_buf[s], acsz, ldpc.bg, ldpc.Zc,
                                                 ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                                /*rv=*/0, Er[r], allllr[s] + roff);
+                                                /*rv=*/0, Er[r], bps, allllr[s] + roff);
                     roff += Er[r];
                     ldpc_decode(&ldpc, soft_buf[s], 25, decoded_cb[s]);
                     if (seg.C > 1 && !check_crc(decoded_cb[s], seg.Kprime, CRC24B))
@@ -10633,7 +10633,7 @@ void run_pdsch_beam_mgmt_p123_harq_simulation(const L1Config *cfg) {
 
                 for (int s = 0; s < 2; s++) {
                     for (int r = 0; r < seg.C; r++)
-                        nr_ldpc_rate_match_select(coded_cw[s][r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], rm[s][r]);
+                        nr_sch_rate_match_select(coded_cw[s][r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], bps, rm[s][r]);
                     nr_seg_concat(&seg, (const int *const *)rm[s], Er, selbits[s]);
                     qam_modulate(selbits[s], E, mcs.modulation, sym[s]);
                 }
@@ -10660,7 +10660,7 @@ void run_pdsch_beam_mgmt_p123_harq_simulation(const L1Config *cfg) {
                     int roff = 0;
                     int cb_crc_ok = 1;
                     for (int r = 0; r < seg.C; r++) {
-                        nr_ldpc_rate_match_combine(soft_buf[s][r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], allllr[s] + roff);
+                        nr_sch_rate_match_combine(soft_buf[s][r], acsz, ldpc.bg, ldpc.Zc, ldpc.info_size, ldpc.base_info_cols * ldpc.Zc, rv, Er[r], bps, allllr[s] + roff);
                         roff += Er[r];
                         ldpc_decode(&ldpc, soft_buf[s][r], 25, decoded_cb[s]);
                         if (seg.C > 1 && !check_crc(decoded_cb[s], seg.Kprime, CRC24B)) cb_crc_ok = 0;

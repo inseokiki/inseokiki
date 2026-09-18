@@ -8,7 +8,7 @@
  *  untouched (Polar has no BG/Zc/filler concept). This module is used
  *  only by PDSCH/PUSCH LDPC paths (ldpc_nr.h).
  *
- *  Scope: Ncb=N (mother codeword length, no limited-buffer-rate-
+ *  Scope: Ncb=N (66Z/50Z after first-2Z puncture, no limited-buffer-rate-
  *  matching/LBRM -- this project does not model the higher-layer
  *  parameters LBRM depends on). nr_ldpc_er_alloc() (2026-09-03, P0-2c
  *  follow-up) adds TS 38.212 5.4.2.1's per-code-block output length E_r
@@ -53,8 +53,8 @@ void nr_ldpc_er_alloc(int G, int Nl, int Qm, int C, int *E);
 
 /* TS 38.212 5.4.2.1 bit-selection procedure: walks the length-Ncb
  * circular buffer starting at k0(rv), SKIPPING filler-bit positions
- * (indices in [filler_start, filler_end) -- see ldpc_nr.h, these are
- * the caller's LDPCCodec.info_size and .base_info_cols*.Zc), until e
+ * (indices in [filler_start, filler_end), in the supplied buffer's
+ * coordinates), until e
  * bits have been selected into out[e] (wraps around / repeats if
  * e exceeds Ncb minus the filler count). rv=0 with a fresh (non-
  * persistent) buffer covers the non-HARQ single-shot case; rv=0..3
@@ -81,5 +81,27 @@ void nr_ldpc_rate_match_select_soft(const double *buf, int Ncb, int bg, int Zc,
 void nr_ldpc_rate_match_combine(double *soft_buf, int Ncb, int bg, int Zc,
                                  int filler_start, int filler_end,
                                  int rv, int e, const double *llr_in);
+
+/* SCH integration API, TS 38.212 5.3.2 and 5.4.2 (V18.8.0).
+ * Input/decoder buffers retain the full 68Z/52Z mother-code layout.
+ * Internally exclude its first 2Z bits, use Ncb=66Z/50Z, skip fillers
+ * in FULL buffer coordinates, and apply the Qm bit permutation per CB:
+ * out[j*Qm+i] = selected[i*(e/Qm)+j]. No allocation and no aliasing.
+ * Qm is 1/2/4/6/8, e is nonnegative and divisible by Qm, rv is 0..3.
+ * combine accepts interleaved channel LLRs and accumulates in the full
+ * decoder buffer; first-2Z and filler entries are untouched. Initialize
+ * punctured LLRs to zero at each NEW TB, retain the buffer across HARQ.
+ * select_soft applies the SAME mapping to decoder extrinsic feedback.
+ * Low-level nr_ldpc_* APIs above remain explicit buffer-coordinate tools.
+ */
+void nr_sch_rate_match_select(const int *coded, int full_n, int bg, int Zc,
+                             int filler_start, int filler_end,
+                             int rv, int e, int Qm, int *out);
+void nr_sch_rate_match_select_soft(const double *buf, int full_n, int bg, int Zc,
+                                  int filler_start, int filler_end,
+                                  int rv, int e, int Qm, double *out);
+void nr_sch_rate_match_combine(double *soft_buf, int full_n, int bg, int Zc,
+                              int filler_start, int filler_end,
+                              int rv, int e, int Qm, const double *llr_in);
 
 #endif

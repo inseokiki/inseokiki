@@ -1,0 +1,13 @@
+{
+  "reference": "https://github.com/catkira/py3gpp/tree/v0.6.0",
+  "packages": {
+    "py3gpp": "0.6.0",
+    "numpy": "2.0.2"
+  },
+  "cases": 64,
+  "sha256": {
+    "sch_rate_matching_reference_vectors.h": "511505cc675617aa13985aa225e5540a963e0b2a6b8b289fd33597ed4c1bae69",
+    "nrRateMatchLDPC.py": "c45dee2fa53445434855f8f257a544056166564fb2b05aa9b53bdb82dcab48ed",
+    "generate_rate_matching.py": "5179843df6199e4190210e2b511923b85ec4894fe465c0538136f52b9f4759d5"
+  }
+}

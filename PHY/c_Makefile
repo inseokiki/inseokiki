@@ -6,11 +6,11 @@ OBJDIR  = build
 
 COMMON_SRCS = utils.c config_parser.c mcs_table.c crc.c \
               polar_rate_match.c modulation.c ofdm.c \
-              channel.c channel_estimation.c dmrs.c mimo.c rate_matching.c nr_rate_matching.c tdl.c tdl_tables.c \
+              channel.c channel_estimation.c dmrs.c mimo.c rate_matching.c nr_rate_matching.c tdl.c tdl_tables.c tdl_time.c tdl_mimo.c \
               dft_precode.c pucch_seq.c \
               ldpc.c ldpc_tables.c ldpc_nr.c nr_sch.c tbs.c polar.c polar_tables.c csi_rs.c srs.c prach.c codebook.c codebook_8port.c codebook_32port.c \
-              eigen_16port.c olla.c mumimo.c beam_mgmt.c ul_eigen_bf.c ul_codebook_4port.c \
-              pbch.c pdcch.c pdsch.c pusch.c pusch_ul_cb_4port.c pucch.c ul_power_ctrl.c
+              eigen_16port.c olla.c mumimo.c beam_mgmt.c ul_eigen_bf.c pusch_codebook_4port.c \
+              pbch.c pdcch.c pdsch.c pusch.c pusch_codebook_4port_sim.c pucch.c ul_power_ctrl.c
 
 COMMON_OBJS = $(patsubst %.c,$(OBJDIR)/%.o,$(COMMON_SRCS))
 

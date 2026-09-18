@@ -5,14 +5,10 @@
  * Migrated from ad-hoc scratch harnesses used during the Polar Phase
  * 1-4 standardization session (2026-09-04).
  *
- * UT-06 (lab/PHY_UNIT_VALIDATION_PLAN.md, 2026-09-10): the round-trip
- * checks here are self-consistent (this project's own polar_encode()
- * validated by its own polar_decode()/polar_decode_scl()) -- the
- * reliability sequence and interleaver TABLES themselves (polar_tables.c)
- * were separately cross-checked against known reference values and an
- * independent extraction method when first written (see polar_tables.h's
- * provenance comment), but the encode/decode round-trip logic in this
- * file has no independently-sourced test vector to compare against.
+ * UT-06: external py3gpp 0.6.0 vectors cover n_PC=0, E>=N, input
+ * interleaving on/off, mother coding, repetition and decoding external bits.
+ * Puncturing/shortening and UCI PC bits still have internal-only checks;
+ * see reference_vectors/README.md for external coverage and provenance.
  *
  * Build/run: see PHY/tests/README.md (run_numeric_tests.sh drives this).
  */
@@ -421,7 +417,36 @@ static void test_scl_return_value_contract(void) {
     polar_free(&pc);
 }
 
+/* External py3gpp vectors use independent reliability/interleaver tables
+ * and a Kronecker-product encoder. Scope: n_PC=0, E>=N only. */
+#include "reference_vectors/polar_reference_vectors.h"
+static void external_polar_vectors(void) {
+    for (size_t v = 0; v < sizeof(polar_refs)/sizeof(polar_refs[0]); v++) {
+        int N=polar_refs[v].N, K=polar_refs[v].K, E=polar_refs[v].E;
+        int info[1024], coded[1024], matched[2048], decoded[1024];
+        double llr[1024];
+        for (int i=0;i<K;i++) info[i]=polar_refs[v].info[i]-'0';
+        PolarCodec pc;
+        polar_init(&pc,N,K,E,polar_refs[v].iil,0,0);
+        polar_encode(&pc,info,coded);
+        polar_rate_match(coded,N,E,K,matched);
+        int enc_ok=1, rm_ok=1, dec_ok=1;
+        for (int i=0;i<N;i++) {
+            if (coded[i]!=polar_refs[v].coded[i]-'0') enc_ok=0;
+            llr[i]=polar_refs[v].coded[i]=='0' ? 30.0 : -30.0;
+        }
+        for (int i=0;i<E;i++) if (matched[i]!=polar_refs[v].matched[i]-'0') rm_ok=0;
+        polar_decode(&pc,llr,decoded);
+        for (int i=0;i<K;i++) if (decoded[i]!=info[i]) dec_ok=0;
+        CHECK(enc_ok, "external py3gpp Polar mother code matches bit-exactly");
+        CHECK(rm_ok, "external py3gpp Polar repetition/interleaving matches bit-exactly");
+        CHECK(dec_ok, "SC decoder recovers independently encoded Polar vector");
+        polar_free(&pc);
+    }
+}
+
 int main(void) {
+    external_polar_vectors();
     roundtrip("PBCH-like", 512, 56, 864, 1, 0, 0);
     roundtrip("PDCCH-like", 128, 51, 216, 1, 0, 0);
 

@@ -1,4 +1,29 @@
-# PHY/tests — numeric unit tests
+# PHY/tests — numeric tests and measurement campaigns
+
+## AWGN measurement campaign
+
+From the repository root:
+
+```bash
+python3 PHY/tests/run_awgn_campaign.py --list
+python3 PHY/tests/run_awgn_campaign.py --output /tmp/awgn-measurements --trials 200
+python3 -m unittest discover -s PHY/tests -p test_awgn_campaign.py -v
+```
+
+The standard-library runner builds the simulator, then runs 69 representative
+settings across all actual AWGN channel families, supported PUCCH/PRACH formats,
+CSI-RS/SRS, and supplementary BER/legacy OFDM benchmarks. It saves long-form CSV,
+a Markdown summary, original configs/logs and a SHA-256 manifest in a **new**
+directory. It never modifies `config/sim_config.txt`. Use repeatable `--case ID`
+options for targeted measurements and `--seeds`, `--snr-start/end/step` to set
+the sampling protocol. It fails on nonzero exit, incomplete grids, malformed or
+nonfinite metrics, invalid probabilities, or inconsistent HARQ/PDCCH results.
+These are measurements of the current research implementation, not conformance
+tests or a full Cartesian product of every parameter. See each generated
+`SUMMARY.md` for scope, denominators and model limitations.
+
+The parser tests deliberately inject incomplete/corrupted simulator output;
+they do not replace the C numeric tests below.
 
 `regression_test.sh` is a black-box CLI smoke suite (config in, exit code +
 output pattern out) — it confirms dispatch/connectivity but cannot check
@@ -13,8 +38,14 @@ deterministic seeds.
 ```bash
 cd PHY
 make -f c_Makefile            # build/*.o must exist first
-bash tests/run_numeric_tests.sh
+bash tests/run_numeric_tests.sh --list  # names only; no build required
+bash tests/run_numeric_tests.sh test_pusch_codebook_4port test_pusch_codebook_4port_integration
+bash tests/run_numeric_tests.sh        # all tests, when full validation is intended
 ```
+
+Test names are exact matches. Multiple names run once each in registry order;
+unknown names or invalid option combinations exit with code 2 before any test
+runs. `--help` prints usage. No arguments preserves the full-suite behavior.
 
 Each test is a standalone `.c` file with its own `main()`, compiled once
 per run (not cached) and executed immediately; a non-zero exit from any
@@ -23,6 +54,11 @@ first, then run" convention rather than introducing a second build
 system.
 
 ## What's covered
+
+- `test_nr_rate_matching.c` — independent py3gpp position vectors for the
+  C SCH puncture/filler/RV/Qm mapping. Checks Tx bits, turbo feedback, inverse
+  LLR scatter, Chase/IR accumulation and unequal three-CB output allocation.
+  The committed header avoids any Python dependency when running C tests.
 
 - `test_rng.c` — `utils.c`'s RNG (PHY-05): same seed reproduces the exact
   same `gen_random_bits()`/`randn()` sequence, different seed diverges,
@@ -117,6 +153,14 @@ system.
   no-op, entirely-out-of-window support zeroes everything); `zf_equalize()`/
   `mmse_equalize()` against independently-recomputed formulas, including
   the N0→0 MMSE→ZF limit.
+- `test_pusch_channel_estimation_noise.c` — noisy component fixture using the UL driver's
+  one-RB per-layer FDM pilot layout, ranks 1–4 and N0=0.02/0.5.
+  Each of 20 cases uses 20,000 seeded independent pilot-noise draws.
+  Checks flat pilot averaging and LS/interpolation MSE against elementary
+  independent-noise variance plus known affine-channel edge-hold bias;
+  all 12 REs are checked with 5% relative tolerance. This tests component
+  composition, not the driver's inline LS code, standard DMRS allocation,
+  or calibration of final LLRs with channel-estimation uncertainty.
 - `test_mimo_detection.c` — `mimo.c`'s SU-MIMO detectors: `mrc_combine()`/
   `mrc_combine_4rx()` noise-free exact recovery; `mimo_zf_detect()` (2x2)
   noise-free round-trip plus a hand-computed example; `mimo_mmse_detect()`/
@@ -160,11 +204,11 @@ system.
 - `test_codebook_32port_olla.c` — ranks 1–4 use precoders with orthogonal
   columns; matched channels have a closed-form per-layer SNR of
   `gain²/(rank²·N0)`, independently checking the MCS input in every rank.
-- `test_ul_codebook_4port.c` — checks all 62 UL four-port TPMI matrices have
+- `test_pusch_codebook_4port.c` — checks all 62 UL four-port TPMI matrices have
   orthogonal columns and unit total power after normalization, anchors
   selected entries to TS 38.211 Tables 6.3.1.5-3/-5/-6/-7, and checks
   low/high SNR rank selection.
-- `test_ul_cb4_pipeline.c` — executes the production extended UL driver for
+- `test_pusch_codebook_4port_integration.c` — executes the production extended UL driver for
   all 24 combinations of rank 1–4, flat/TDL, and non-HARQ/IR/Chase.
   Test-only observers require positive finite per-RE variances, frequency
   variation in TDL and constant variance in flat channels, RV order, zero
@@ -176,10 +220,22 @@ system.
   Rank is fixed; CRC rejection is controlled, while acceptance requires the
   real CRC check. Channel generation, estimation, detection and coding stay
   real. This is a wiring/state test, not an independent PHY reference or
-  BLER performance test. Each case runs one TB; reset between TBs within a
-  single driver invocation is not covered.
+  BLER performance test. Six further sequences each run four TBs in one
+  driver invocation (flat/independent TDL/correlated TDL × IR/Chase), changing rank 4→1→4→2. Flat
+  sequences alternate single/multiple CBs and forced failure/real ACK at
+  attempts 1/2/1; TDL sequences force all four attempts. Initial zero buffers,
+  RV restart and per-TB call counts check state isolation between TBs.
+  A separate receiver fixture covers all 62 TPMIs with a known complex
+  diagonal physical channel: noiseless one-RB FDM pilot recovery (including
+  unequal per-layer pilot counts), near-zero-noise symbol recovery, and
+  detector residual energy at N0=0.001/0.1/10. Receiver basis inputs measure
+  its linear response; interference plus noise energy is compared with the
+  reported variance without reusing the production inverse/alpha formula.
+  This fixture tests component composition with perfect channel recovery,
+  not noisy-estimation uncertainty, extreme singular channels or standard
+  DMRS allocation conformance.
   The driver source is included with local observer macros (do not also
-  link `pusch_ul_cb_4port.o`).
+  link `pusch_codebook_4port_sim.o`).
 - `test_link_adaptation.c` — `olla.c` (§5 3단계 "OLLA 결정론적 상태
   천이") and `ul_power_ctrl.c`'s TPC decision ("ULPC 결정론적 상태
   천이"): `olla_init()`'s `step_up_db` formula exactly; `olla_update()`'s
@@ -238,9 +294,47 @@ for a test-only session). It remains covered only at the integration
 level, by `regression_test.sh`'s existing HARQ-enabled cases (which do
 exercise `HARQ_MAX_RETX` end-to-end).
 
+## CLI simulation regression selection
+
+From `PHY/`, after building the simulator:
+
+```bash
+bash regression_test.sh --list
+bash regression_test.sh --match UL_CB_4PORT
+bash regression_test.sh "PUSCH UL_CB_4PORT flat" "PUSCH UL_CB_4PORT HARQ TDL"
+```
+
+`--match` is a literal, case-sensitive substring (not a regular expression).
+Exact labels can be combined and duplicate selections run once. Unknown names,
+empty filters and filters matching no cases exit with code 2 before any case
+runs. Listing/help need no simulator binary. No arguments preserves full-suite
+execution; select affected cases for routine development.
+
+## File naming
+
+Use `snake_case` and identify the physical channel or module before the
+purpose: `test_pusch_codebook_4port.c` for codebook numeric checks,
+`test_pusch_codebook_4port_integration.c` for driver integration, and
+`test_pusch_channel_estimation_noise.c` for estimation-noise statistics.
+Use established PHY terms such as PUSCH and DMRS; avoid ad hoc abbreviations
+such as `cb4` when `codebook_4port` identifies the module more clearly.
+
 ## Adding a new test
 
 Add `tests/test_<module>.c` with its own `main()` returning 0/1, then add
-one `run_test test_<module> <obj1.o> <obj2.o> ...` line to
+one `register_test test_<module> <obj1.o> <obj2.o> ...` line to
 `run_numeric_tests.sh` naming the project `.o` files it needs from
 `../build/`.
+
+- `test_tdl_time.c` checks seeded reproducibility, query-order independence,
+  sampling without RNG consumption, invalid inputs, zero Doppler in A–E,
+  pure LOS quarter-turn, and ensemble powers/covariance (4,000 realizations
+  per profile, fD=100 Hz, lags 1/5 ms, power tolerance 8%, covariance 0.07).
+  The PUSCH integration test additionally observes 16 pair states per TB and
+  sampling times 0/1/2/3 ms across four forced attempts, resetting per TB.
+
+- `test_tdl_mimo.c` checks zero-correlation identity, a known complex impulse,
+  invalid arguments and all entries of the 16x16 Tx/Rx covariance with
+  12,000 seeded draws for Tx-only, Rx-only and joint correlation (absolute
+  covariance tolerance 0.05). This validates the research exponential model,
+  not standardized correlation presets or polarized arrays.

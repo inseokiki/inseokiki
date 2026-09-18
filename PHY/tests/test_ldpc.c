@@ -4,14 +4,10 @@
  * 2026-09-10.md PHY-03, new coverage -- no prior scratch harness existed
  * for this).
  *
- * UT-06 (lab/PHY_UNIT_VALIDATION_PLAN.md, 2026-09-10): every round-trip
- * here is self-consistent (this project's own encoder validated by its
- * own decoder) -- there is no independently-sourced reference vector
- * (e.g. a published TS 38.212 test vector) cross-checked against. A
- * self-consistent round-trip can't catch a bug that's symmetric between
- * encode and decode (e.g. both sides agreeing on a wrong bit-selection
- * order); treat this file as "internal consistency confirmed", not
- * "standards conformance confirmed against an external source".
+ * UT-06: external py3gpp 0.6.0 encoder vectors were added for BG1/BG2,
+ * all lifting sets, filler handling and decode of external punctured bits.
+ * Other round trips below remain internal consistency checks. External
+ * coverage limits and reproducibility: reference_vectors/README.md.
  *
  * Build/run: see PHY/tests/README.md (run_numeric_tests.sh drives this).
  */
@@ -92,9 +88,9 @@ static void segmentation_roundtrip(const char *label, int A, int mcs_index,
         for (int r = 0; r < seg.C; r++) {
             const int *info = cb_bits + (size_t)r * seg.Kprime;
             ldpc_encode(&ldpc, info, coded);
-            nr_ldpc_rate_match_select(coded, acsz, ldpc.bg, ldpc.Zc,
+            nr_sch_rate_match_select(coded, acsz, ldpc.bg, ldpc.Zc,
                                        ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                       0, Er[r], rm[r]);
+                                       0, Er[r], bps, rm[r]);
             roff += Er[r];
         }
         (void)roff;
@@ -106,9 +102,9 @@ static void segmentation_roundtrip(const char *label, int A, int mcs_index,
         int off = 0;
         for (int r = 0; r < seg.C; r++) {
             memset(soft_buf, 0, acsz * sizeof(double));
-            nr_ldpc_rate_match_combine(soft_buf, acsz, ldpc.bg, ldpc.Zc,
+            nr_sch_rate_match_combine(soft_buf, acsz, ldpc.bg, ldpc.Zc,
                                         ldpc.info_size, ldpc.base_info_cols * ldpc.Zc,
-                                        0, Er[r], llr + off);
+                                        0, Er[r], bps, llr + off);
             off += Er[r];
             ldpc_decode(&ldpc, soft_buf, 25, decoded_cb);
             if (seg.C > 1 && !check_crc(decoded_cb, seg.Kprime, CRC24B)) cb_crc_ok = 0;
@@ -517,7 +513,37 @@ static void test_ldpc_encode_syndrome(int block_size, double code_rate, const ch
     ldpc_free(&ldpc);
 }
 
+/* Independent external BG1/BG2 vectors cover all eight lifting sets.
+ * Compare after the external API's mandatory first-2Z puncture. */
+#include "reference_vectors/ldpc_reference_vectors.h"
+static void external_ldpc_vectors(void) {
+    for (size_t v=0; v<sizeof(ldpc_refs)/sizeof(ldpc_refs[0]); v++) {
+        int bg=ldpc_refs[v].bg, z=ldpc_refs[v].Zc, K=ldpc_refs[v].K;
+        int cols=bg==1 ? 22 : 10, rows=bg==1 ? 46 : 42;
+        LDPCCodec codec;
+        ldpc_init_resolved(&codec,K,0.5,bg,z,cols,rows,cols,cols+rows,7);
+        int *info=malloc(K*sizeof(int)), *coded=malloc(codec.coded_size*sizeof(int));
+        int *decoded=malloc(K*sizeof(int));
+        double *llr=calloc(codec.coded_size,sizeof(double));
+        for (int i=0;i<K;i++) info[i]=ldpc_refs[v].info[i]-'0';
+        ldpc_encode(&codec,info,coded);
+        int enc_ok=1,dec_ok=1;
+        for (int i=2*z;i<codec.coded_size;i++) {
+            int expected=ldpc_refs[v].coded[i-2*z]-'0';
+            if (coded[i]!=expected) enc_ok=0;
+            llr[i]=expected ? -30.0 : 30.0;
+        }
+        for (int i=K;i<cols*z;i++) llr[i]=1e4;
+        ldpc_decode(&codec,llr,50,decoded);
+        for (int i=0;i<K;i++) if(decoded[i]!=info[i]) dec_ok=0;
+        CHECK(enc_ok, "external py3gpp LDPC encoded bits match after first-2Z puncture");
+        CHECK(dec_ok, "LDPC decoder recovers independently encoded punctured vector");
+        free(info); free(coded); free(decoded); free(llr); ldpc_free(&codec);
+    }
+}
+
 int main(void) {
+    external_ldpc_vectors();
     /* Small TB -- expect C=1 (no segmentation needed). */
     segmentation_roundtrip("small TB", 1000, 10, MCS_TABLE1, 1);
     /* Reuses the exact (A=8426, MCS10/TABLE1) combination already known
